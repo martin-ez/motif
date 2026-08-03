@@ -30,4 +30,8 @@ flamegraph.svg
 /scratch
 /recordings
 
+# Editor state. Project settings that are genuinely shared belong in a file
+# that is not one person's window layout.
+/.idea/
+
 .DS_Store
