@@ -1,9 +1,9 @@
 //! Ground truth for a fixture: where the beats fall, and which of them begin a
 //! bar.
 //!
-//! One annotation file sits beside each fixture. A wrong annotation is a silent
-//! source of wrong accuracy numbers, so the format is line-oriented text meant
-//! to be read and corrected in a pull request rather than taken on trust.
+//! A wrong annotation is a silent source of wrong accuracy numbers, so the
+//! format is line-oriented text meant to be read and corrected in a pull
+//! request rather than taken on trust.
 
 use std::fmt;
 use std::str::FromStr;
@@ -26,9 +26,14 @@ pub struct Beat {
 /// One beat per line, a timestamp and a kind separated by any run of
 /// whitespace. The timestamp is decimal seconds from the start of the audio,
 /// and the kind is `beat` or `downbeat` — a downbeat being a beat that begins a
-/// bar, so it is counted as both. Timestamps strictly increase. A line whose
-/// first non-blank character is `#` is a comment, and blank lines are ignored;
-/// both still count towards the line number an [`AnnotationError`] reports.
+/// bar, so it is counted as both. Timestamps strictly increase and none is
+/// negative. A line whose first non-blank character is `#` is a comment, and
+/// blank lines are ignored; both still count towards the line number an
+/// [`AnnotationError`] reports.
+///
+/// At least one beat is annotated, and at least one of them is a downbeat: an
+/// annotation that identifies neither scores against nothing, which raises an
+/// aggregate rather than failing.
 ///
 /// Positions are stored, never a tempo. A tempo with a start offset cannot
 /// express a fixture whose timing drifts, which is the case an analyser most
@@ -105,6 +110,9 @@ impl FromStr for Annotation {
         if beats.is_empty() {
             return Err(AnnotationError::Empty);
         }
+        if !beats.iter().any(|beat| beat.is_downbeat) {
+            return Err(AnnotationError::NoDownbeats);
+        }
 
         Ok(Self { beats })
     }
@@ -119,6 +127,7 @@ fn parse_beat(content: &str, line: usize) -> Result<Beat, AnnotationError> {
     let at = timestamp
         .parse::<f64>()
         .ok()
+        .filter(|seconds| seconds.is_sign_positive())
         .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
         .ok_or(AnnotationError::Timestamp { line })?;
 
@@ -161,6 +170,13 @@ pub enum AnnotationError {
     /// one, because a fixture that scores against nothing raises an aggregate
     /// without failing anything.
     Empty,
+    /// Beats were annotated but none of them begins a bar.
+    ///
+    /// Rejected for the same reason as [`AnnotationError::Empty`], and it is
+    /// the likelier slip of the two: the kinds differ by one word, so a file
+    /// whose `downbeat` lines were all written `beat` is well formed on every
+    /// other count while scoring downbeats against nothing.
+    NoDownbeats,
 }
 
 impl AnnotationError {
@@ -172,7 +188,7 @@ impl AnnotationError {
             | Self::Timestamp { line }
             | Self::BeatKind { line }
             | Self::OutOfOrder { line } => Some(*line),
-            Self::Empty => None,
+            Self::Empty | Self::NoDownbeats => None,
         }
     }
 }
@@ -187,6 +203,7 @@ impl fmt::Display for AnnotationError {
                 (line, "the timestamp does not come after the one before it")
             }
             Self::Empty => return f.write_str("the annotation has no beats"),
+            Self::NoDownbeats => return f.write_str("the annotation has no downbeats"),
         };
         write!(f, "line {line}: {described}")
     }

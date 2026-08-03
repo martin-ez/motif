@@ -158,8 +158,47 @@ fn a_repeated_timestamp_is_an_error() {
 }
 
 #[test]
+fn a_negatively_signed_zero_is_an_error() {
+    assert_eq!(
+        rejected("-0.0 downbeat\n"),
+        AnnotationError::Timestamp { line: 1 }
+    );
+}
+
+#[test]
 fn an_annotation_with_no_beats_is_an_error() {
     assert_eq!(rejected("# nothing here\n\n"), AnnotationError::Empty);
+}
+
+#[test]
+fn an_annotation_with_no_downbeats_is_an_error() {
+    assert_eq!(
+        rejected("0.0 beat\n0.5 beat\n1.0 beat\n"),
+        AnnotationError::NoDownbeats
+    );
+}
+
+#[test]
+fn an_annotation_need_not_begin_on_a_downbeat() {
+    let annotation = parsed("0.0 beat\n0.5 beat\n1.0 downbeat\n");
+
+    assert_eq!(
+        annotation.downbeats().collect::<Vec<_>>(),
+        [Duration::from_secs(1)]
+    );
+}
+
+#[test]
+fn an_annotation_with_no_downbeats_reports_no_line() {
+    assert_eq!(AnnotationError::NoDownbeats.line(), None);
+}
+
+#[test]
+fn an_annotation_with_no_downbeats_describes_itself() {
+    assert_eq!(
+        AnnotationError::NoDownbeats.to_string(),
+        "the annotation has no downbeats"
+    );
 }
 
 #[test]
