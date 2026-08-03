@@ -60,6 +60,7 @@ Before opening a pull request:
 cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
+scripts/check-style.sh
 cargo check --target aarch64-unknown-linux-gnu
 ```
 
@@ -72,6 +73,34 @@ and timing measurements become noise.
 ```
 src/            the crate
 tests/          every test lives here, so that tests reach only the public API
+scripts/        house-style checks that rustc and clippy cannot express
+AGENTS.md       how this project is built; read before contributing
+```
+
+## Development
+
+This project is built agentically. [`AGENTS.md`](AGENTS.md) holds the working
+agreement: documentation rules, test-first development, and trunk-based
+branching. It applies to humans too.
+
+Four consequences worth knowing before reading the code, because they look like
+omissions otherwise:
+
+- **There are no inline comments.** Doc comments on public items carry the
+  explanation; anything else is expressed by naming things properly.
+- **There are no `#[cfg(test)]` modules.** Every test lives in `tests/`, where it
+  compiles as an external consumer of the crate. The compiler then guarantees
+  that tests can only reach the public API, so implementation details stay free
+  to change.
+- **There is no roadmap in this repository.** Planned work is in the issue
+  tracker, where it can block and be blocked by other work.
+- **Incomplete work sits behind Cargo features**, off by default, so branches
+  stay short-lived and `main` stays green.
+
+Work that is ready to pick up — open, with nothing open blocking it:
+
+```sh
+gh issue list --search "is:open -is:blocked"
 ```
 
 ## Licence

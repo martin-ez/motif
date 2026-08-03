@@ -1,0 +1,48 @@
+name: PR hygiene
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+jobs:
+  hygiene:
+    name: pull request hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The title and body are attacker-controlled on a fork, so they are read
+      # from the environment rather than interpolated into the script.
+      - name: title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          echo "title: $TITLE"
+          if [ "${#TITLE}" -gt 50 ]; then
+            echo "::error::Title is ${#TITLE} characters; the limit is 50 (AGENTS.md 4.4)."
+            exit 1
+          fi
+          if ! printf '%s' "$TITLE" |
+            grep -qE '^(feat|fix|docs|test|refactor|perf|build|ci|chore|revert)(\([a-z0-9-]+\))?: .+'; then
+            echo "::error::Title must read 'type(scope): summary' (AGENTS.md 4.2)."
+            exit 1
+          fi
+
+      - name: no co-authors
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if git log --format='%B' "$BASE..$HEAD" | grep -inE '^co-authored-by:'; then
+            echo "::error::A commit carries a Co-authored-by trailer (AGENTS.md 4.5)."
+            exit 1
+          fi
+          if printf '%s' "$BODY" | grep -inE 'co-authored-by:|generated with \[?claude'; then
+            echo "::error::The body carries a co-author or tool attribution (AGENTS.md 4.5)."
+            exit 1
+          fi
