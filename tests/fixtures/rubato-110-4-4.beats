@@ -1,0 +1,10 @@
+# rubato-110-4-4: 4/4 around 110 BPM, pushing and pulling against the pulse
+# rendered by `cargo run --example generate-fixtures`
+0.000000 downbeat
+0.637375 beat
+1.220875 beat
+1.728250 beat
+2.181875 downbeat
+2.635375 beat
+3.142750 beat
+3.726250 beat

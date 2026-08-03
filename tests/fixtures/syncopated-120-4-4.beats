@@ -1,0 +1,10 @@
+# syncopated-120-4-4: 4/4 at 120 BPM with the sounds mostly between the beats
+# rendered by `cargo run --example generate-fixtures`
+0.000000 downbeat
+0.500000 beat
+1.000000 beat
+1.500000 beat
+2.000000 downbeat
+2.500000 beat
+3.000000 beat
+3.500000 beat

@@ -5,6 +5,8 @@
 //! format is line-oriented text meant to be read and corrected in a pull
 //! request rather than taken on trust.
 
+pub mod synth;
+
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
