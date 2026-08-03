@@ -23,6 +23,7 @@ ISSUE_FIELDS='number,title,state,url,labels,blockedBy,blocking,parent,subIssues,
 LIST_LIMIT="${TRACK_LIMIT:-200}"
 TITLE_MAX="${TRACK_TITLE_MAX:-70}"
 MIN_WRITE_GAP="${TRACK_MIN_WRITE_GAP:-1}"
+STALE_HOURS="${TRACK_STALE_HOURS:-24}"
 
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
@@ -33,8 +34,11 @@ scripts/track.sh <command> [args] [--json]
 
   ready                       work that can be started right now
   blocked                     open work with open blockers, and what blocks it
+  find <term>                 match issue titles, open and closed
   show <n>                    one issue in full, including claim state
+  start <n>                   branch from main, then claim (see: claim needs a branch)
   claim <n> [--force]         take an issue (adds wip + a claim marker)
+  mine                        issues this agent currently holds
   release <n> [--force]       give it back
   done <n> [-m MSG] [--force] close it, report what it unblocked
   add -t TITLE --area A --kind K --size S [-b BODY|-F FILE]
@@ -249,9 +253,34 @@ def holder:
 '
 
 # ------------------------------------------------------------ read paths ----
-# The only two places this script reads issue data. No search query anywhere.
+# The only three places this script reads issue data. No search query anywhere:
+# `find` matches locally over fetch_all for the same reason readiness is derived
+# locally — the legacy index answers `is:blocked` wrongly with a 200, and there is
+# no reason to trust its title matching any further than that.
 fetch_open()  { gh issue list --state open --limit "$LIST_LIMIT" --json "$ISSUE_FIELDS"; }
+fetch_all()   { gh issue list --state all  --limit "$LIST_LIMIT" --json "$ISSUE_FIELDS"; }
 fetch_issue() { gh issue view "$1" --json "$ISSUE_FIELDS,body,comments"; }
+
+# Claim markers live on comments, which `fetch_open` does not carry. Fetching
+# every open issue to find them would cost one call per issue; the wip label is
+# already in the list payload, so the walk is bounded by the number of live
+# claims instead of the size of the backlog.
+claimed_issues() {
+  local nums n
+  nums="$(fetch_open | jq -r '.[] | select((.labels // []) | map(.name) | index("wip")) | .number')"
+  for n in $nums; do
+    fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder}'
+  done
+  return 0
+}
+
+# GNU date takes -d, BSD date takes -j -f. A timestamp that parses under neither
+# yields 0, which every caller reads as "unknown age" and skips.
+iso_epoch() {
+  date -u -d "$1" +%s 2>/dev/null \
+    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null \
+    || echo 0
+}
 
 # --------------------------------------------------------------- commands ---
 cmd_ready() {
@@ -329,6 +358,101 @@ cmd_blocked() {
   tb="$(printf '%s' "$shaped" | jq -r "$JQ_LIB"'
         top_blockers[0:5] | map("#\(.num) (\(.n))") | join("  ")')"
   [ -n "$tb" ] && printf 'top blockers: %s\n' "$tb"
+  return 0
+}
+
+cmd_find() {
+  [ $# -ge 1 ] || die "usage: track.sh find <term>"
+  local term="$1" payload n total
+  payload="$(fetch_all | jq "$JQ_LIB"' [.[] | shape]')"
+  total="$(printf '%s' "$payload" | jq 'length')"
+  payload="$(printf '%s' "$payload" | jq --arg t "$term" '
+    [.[] | select(.title | ascii_downcase | contains($t | ascii_downcase))]
+    | sort_by(.num) | reverse')"
+
+  if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
+
+  n="$(printf '%s' "$payload" | jq 'length')"
+  printf 'find %s match(es) for "%s"\n' "$n" "$term"
+  printf '%s' "$payload" | jq -r --argjson m "$TITLE_MAX" '
+    .[] | [ .num, .state, (.size // ""), (.area // ""),
+            (if (.title | length) > $m then (.title[0:$m] + "…") else .title end) ]
+        | @tsv' \
+  | awk -F'\t' '{ printf "  #%-4s %-6s %-1s  %-7s %s\n",
+                  $1, tolower($2), ($3 == "" ? "-" : $3), ($4 == "" ? "-" : $4), $5 }'
+  [ "$total" -ge "$LIST_LIMIT" ] && printf '  LIMIT: %s issues fetched; raise TRACK_LIMIT, matches may be hidden.\n' "$total"
+  return 0
+}
+
+cmd_mine() {
+  local me held n
+  me="$(agent_id)"
+  held="$(claimed_issues | jq -sc --arg me "$me" '[.[] | select(.claim.agent == $me)]')"
+
+  if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$held"; return 0; fi
+
+  n="$(printf '%s' "$held" | jq 'length')"
+  printf 'mine %s held by %s\n' "$n" "$me"
+  printf '%s' "$held" | jq -r --argjson m "$TITLE_MAX" '
+    .[] | [ .num, (.size // ""), (.area // ""), .claim.since,
+            (if (.title | length) > $m then (.title[0:$m] + "…") else .title end) ]
+        | @tsv' \
+  | awk -F'\t' '{ printf "  #%-4s %-1s  %-7s %s  since %s\n",
+                  $1, ($2 == "" ? "-" : $2), ($3 == "" ? "-" : $3), $5, $4 }'
+  return 0
+}
+
+# The branch name doubles as the agent id, so it is built from the character set
+# the claim marker parses with: anything else would produce a claim that can
+# never be matched back.
+slugify() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
+    | sed -e 's/[^a-z0-9]\{1,\}/-/g' -e 's/^-//' -e 's/-$//' | cut -c1-40 | sed -e 's/-$//'
+}
+
+branch_for() {   # branch_for <kind> <num> <title>
+  local kind="$1" num="$2" title="$3"
+  printf '%s/%s-%s' "${kind:-task}" "$num" "$(slugify "$title")"
+}
+
+cmd_start() {
+  [ $# -ge 1 ] || die "usage: track.sh start <n>"
+  local n="${1#\#}" info kind title branch orig created=0 rc=0
+
+  git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
+  git diff --quiet && git diff --cached --quiet \
+    || die "working tree has uncommitted changes. Finish or stash them first."
+  git show-ref --verify --quiet refs/heads/main || die "no local 'main' to branch from."
+
+  info="$(fetch_issue "$n" | jq -c "$JQ_LIB"' shape')"
+  kind="$( printf '%s' "$info" | jq -r '.kind  // ""')"
+  title="$(printf '%s' "$info" | jq -r '.title // ""')"
+  [ -n "$title" ] || die "#$n has no title — is it a real issue?"
+  branch="$(branch_for "$kind" "$n" "$title")"
+  orig="$(git rev-parse --abbrev-ref HEAD)"
+
+  if git show-ref --verify --quiet "refs/heads/$branch"; then
+    git switch "$branch" >/dev/null 2>&1 || die "could not switch to existing branch $branch."
+  else
+    git switch -c "$branch" main >/dev/null 2>&1 || die "could not create branch $branch from main."
+    created=1
+  fi
+
+  # cmd_claim exits on a fatal error, so it runs in a subshell: the branch has to
+  # be rolled back here, and an exit would take that with it.
+  rc=0
+  ( cmd_claim "$n" ) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if [ "$created" = 1 ]; then
+      git switch "$orig" >/dev/null 2>&1 || true
+      git branch -D "$branch" >/dev/null 2>&1 || true
+      note "rolled back branch $branch — the claim did not succeed."
+    else
+      note "left existing branch $branch in place — the claim did not succeed."
+    fi
+    exit "$rc"
+  fi
+  printf 'started #%s on %s\n' "$n" "$branch"
   return 0
 }
 
@@ -709,6 +833,7 @@ ver_ge() {   # ver_ge 2.97.0 2.94.0  — `sort -V` is not reliable on BSD
 
 cmd_doctor() {
   local ghv st who scopes repo nwo issues have missing L me cyc total
+  local stale c num who2 since at age
   [ "$AS_JSON" = 1 ] || printf 'doctor\n'
 
   if command -v jq >/dev/null 2>&1; then chk ok jq "$(jq --version)"
@@ -764,6 +889,25 @@ cmd_doctor() {
   cyc="$(fetch_open | jq "$JQ_LIB"'[.[] | shape] | has_cycle' 2>/dev/null || echo false)"
   if [ "$cyc" = "true" ]; then chk FAIL graph "dependency cycle — run: scripts/track.sh graph"
   else chk ok graph "no dependency cycle"; fi
+
+  # Branches here live hours, so a claim older than a day is a strong signal.
+  # It is a warning and never a failure: a slow task and a dead one look
+  # identical from here, and only a human can tell them apart.
+  stale=""
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    num="$(  printf '%s' "$c" | jq -r '.num')"
+    who2="$( printf '%s' "$c" | jq -r '.claim.agent // ""')"
+    since="$(printf '%s' "$c" | jq -r '.claim.since // ""')"
+    [ -n "$since" ] || continue
+    at="$(iso_epoch "$since")"
+    [ "$at" -gt 0 ] || continue
+    age=$(( ( $(date -u +%s) - at ) / 3600 ))
+    [ "$age" -ge "$STALE_HOURS" ] && stale="$stale #$num($who2, ${age}h)"
+  done <<< "$(claimed_issues 2>/dev/null || true)"
+  if [ -n "$stale" ]; then
+    chk warn claims "stale:$stale — release with: scripts/track.sh release <n> --force"
+  else chk ok claims "no claim older than ${STALE_HOURS}h"; fi
 
   if [ "$AS_JSON" = 1 ]; then
     printf '%s' "$DOC_JSON" | jq -c --argjson f "$DOC_FAIL" '{checks: ., failed: $f}'
@@ -966,8 +1110,11 @@ CMD="$1"; shift
 case "$CMD" in
   ready)        cmd_ready "$@" ;;
   blocked)      cmd_blocked "$@" ;;
+  find)         cmd_find "$@" ;;
   show)         cmd_show "$@" ;;
+  start)        cmd_start "$@" ;;
   claim)        cmd_claim "$@" ;;
+  mine)         cmd_mine "$@" ;;
   release)      cmd_release "$@" ;;
   done)         cmd_done "$@" ;;
   add)          cmd_add "$@" ;;
