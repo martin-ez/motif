@@ -89,6 +89,11 @@ Exempt, being the project's contract rather than documentation of it: `README.md
 `AGENTS.md`, `CONTRIBUTING.md`, and templates under `.github/`. `CLAUDE.md` is a
 symlink to this file.
 
+Also exempt, being configuration rather than prose about the code: `.claude/`.
+A skill there is an executable procedure an agent follows, closer to
+`scripts/track.sh` than to a document — it goes stale the way a script does,
+by failing, rather than the way a document does, by being believed.
+
 **1.7 Never document a feature that does not exist.** No "coming soon", no
 roadmap, no doc comment on a stub describing what it will become. Unbuilt work
 belongs in a GitHub issue, where it is queryable, can block other work, and gets
@@ -172,14 +177,18 @@ itself.
 ```sh
 scripts/track.sh ready            # what can be started right now
 scripts/track.sh show 7           # one issue in full, before you write any code
-scripts/track.sh claim 7          # exit 2: someone else has it, take the next row
+scripts/track.sh start 7          # claims it, then branches onto it; exit 2 = taken
+scripts/track.sh mine             # what this agent already holds
+scripts/track.sh find spsc        # match titles, open and closed, before filing
 scripts/track.sh done 7 -m "..."  # closes it, prints what that unblocked
-scripts/track.sh --help           # add, dep, note, release, blocked, graph, doctor
+scripts/track.sh --help           # add, dep, note, claim, release, blocked, graph, doctor
 ```
 
 Take the top row of `ready`; it sorts by how much each item unblocks, so the top
-row is the one that frees the most work. Any non-zero exit other than 2 is fatal
-— surface stderr and stop. Release anything you will not finish.
+row is the one that frees the most work. **Claim it before you write any code** —
+`start <n>` claims and branches in one step, and an issue nobody has claimed is
+an issue another agent will take. Any non-zero exit other than 2 is fatal —
+surface stderr and stop. Release anything you will not finish.
 
 > This is a correctness rule, not a preference. The legacy search index — raw
 > GraphQL `search(type: ISSUE)`, or REST without `advanced_search=true` —
@@ -197,11 +206,22 @@ Issue types and fields are organisation-only, so metadata is labels: `area:`,
 `claim` will accept — a `size:l` issue is listed under `SPLIT:` instead, and is
 split with `add --parent <n>`.
 
+**Filing new work.** `find` first: a duplicate check that cannot see closed
+issues is the one that lets a closed issue be filed again. Then `add`, with all
+three labels **and its dependency edges** — `ready` sorts by how much each issue
+unblocks, so one filed with no `--blocked-by` or `--blocking` sorts last and
+stays invisible. Filing is also what to do instead of a `TODO` marker (3.4): file
+it, wire it, and go back to the task in hand.
+
+The `next`, `refine` and `file` skills in `.claude/skills/` carry the full
+procedure for taking, grooming and filing work.
+
 ## Working agreement
 
 - **One task per session, one pull request per task.** Scope creep is the most
   expensive thing an agent can do here.
-- **Branch from `main`** and open pull requests as drafts.
+- **Start work with `start <n>`**, which claims the issue and branches from
+  `main` onto it. Open pull requests as drafts.
 - **New dependencies need a reason**: what it does, why not hand-rolled, its
   licence, and that it cross-compiles.
 - **No `unwrap()` or `expect()` where failure is possible at runtime.** Setup and

@@ -79,10 +79,12 @@ fi
 #
 # Four root files are exempt because they are the project's contract rather
 # than documentation of it, and GitHub looks for them by name. Templates under
-# .github/ are configuration.
+# .github/ are configuration, and so are agent skills under .claude/ — a skill
+# is a procedure that fails when it goes stale, not prose that is believed.
 found=$(git ls-files '*.md' '*.markdown' |
 	grep -vE '^(README|AGENTS|CLAUDE|CONTRIBUTING)\.md$' |
 	grep -vE '^\.github/' |
+	grep -vE '^\.claude/' |
 	grep -vE '(^|/)README\.md$' || true)
 if [ -n "$found" ]; then
 	report "documentation outside the code that is not a folder README (AGENTS.md 1.6)" "$found
