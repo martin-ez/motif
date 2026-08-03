@@ -2,7 +2,8 @@
 //! behind it so that it runs where no audio device exists.
 
 use motif::audio::{
-    AudioBackend, DeviceError, DuplexStream, NullBackend, StreamConfig, StreamRequest, StreamState,
+    AudioBackend, DeviceError, DuplexStream, Levels, NullBackend, StreamConfig, StreamRequest,
+    StreamState,
 };
 
 fn config() -> StreamConfig {
@@ -60,6 +61,14 @@ fn a_stream_can_be_started_again_after_being_stopped() {
     stream.start().expect("null backend restarts");
 
     assert_eq!(stream.state(), StreamState::Running);
+}
+
+#[test]
+fn a_stream_that_moves_no_samples_reports_silence() {
+    let backend = NullBackend::rounding(config());
+    let stream = backend.open(request()).expect("null backend opens");
+
+    assert_eq!(stream.levels(), Levels::SILENT);
 }
 
 #[test]
