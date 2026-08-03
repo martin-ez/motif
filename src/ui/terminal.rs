@@ -44,11 +44,39 @@ impl<W: Write> FrameWriter<W> {
     }
 }
 
+struct Run {
+    starts_at: usize,
+    ends_at: usize,
+    glyphs: String,
+}
+
 fn differs(previous: Option<&Frame>, frame: &Frame, column: usize, row: usize) -> bool {
     match previous {
         None => true,
         Some(previous) => previous.get(column, row) != frame.get(column, row),
     }
+}
+
+fn changed_runs(previous: Option<&Frame>, frame: &Frame, row: usize) -> Vec<Run> {
+    let screen = DeviceProfile::TARGET.screen;
+
+    (0..screen.columns)
+        .filter(|column| differs(previous, frame, *column, row))
+        .fold(Vec::new(), |mut runs, column| {
+            let glyph = frame.get(column, row).unwrap_or(Cell::BLANK).glyph();
+            match runs.last_mut() {
+                Some(run) if run.ends_at == column => {
+                    run.glyphs.push(glyph);
+                    run.ends_at = column + 1;
+                }
+                _ => runs.push(Run {
+                    starts_at: column,
+                    ends_at: column + 1,
+                    glyphs: String::from(glyph),
+                }),
+            }
+            runs
+        })
 }
 
 impl<W: Write> Renderer for FrameWriter<W> {
@@ -57,22 +85,15 @@ impl<W: Write> Renderer for FrameWriter<W> {
         let previous = self.previous.take();
 
         for row in 0..screen.rows {
-            let mut column = 0;
-            while column < screen.columns {
-                if !differs(previous.as_ref(), frame, column, row) {
-                    column += 1;
-                    continue;
-                }
-
-                let run_starts_at = column;
-                let mut run = String::new();
-                while column < screen.columns && differs(previous.as_ref(), frame, column, row) {
-                    run.push(frame.get(column, row).unwrap_or(Cell::BLANK).glyph());
-                    column += 1;
-                }
-
-                write!(self.sink, "\u{1b}[{};{}H{run}", row + 1, run_starts_at + 1)
-                    .map_err(|_| RenderError::WriteFailed)?;
+            for run in changed_runs(previous.as_ref(), frame, row) {
+                write!(
+                    self.sink,
+                    "\u{1b}[{};{}H{}",
+                    row + 1,
+                    run.starts_at + 1,
+                    run.glyphs
+                )
+                .map_err(|_| RenderError::WriteFailed)?;
             }
         }
 
