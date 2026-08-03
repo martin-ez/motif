@@ -89,6 +89,11 @@ Exempt, being the project's contract rather than documentation of it: `README.md
 `AGENTS.md`, `CONTRIBUTING.md`, and templates under `.github/`. `CLAUDE.md` is a
 symlink to this file.
 
+Also exempt, being configuration rather than prose about the code: `.claude/`.
+A skill there is an executable procedure an agent follows, closer to
+`scripts/track.sh` than to a document — it goes stale the way a script does,
+by failing, rather than the way a document does, by being believed.
+
 **1.7 Never document a feature that does not exist.** No "coming soon", no
 roadmap, no doc comment on a stub describing what it will become. Unbuilt work
 belongs in a GitHub issue, where it is queryable, can block other work, and gets
