@@ -9,4 +9,14 @@
 # nothing could ever catch. The behaviour that is not cpal's — the lifecycle,
 # the granted configuration, the errors — lives behind AudioBackend and is
 # tested through NullBackend, which is mutated normally.
-exclude_globs = ["src/main.rs", "src/audio/cpal_backend.rs"]
+# The terminal screen is excluded on the same grounds, one layer further out:
+# it is a shell over libc's termios calls, and a runner has no terminal, so the
+# only test that could constrain it would have to seize a real one — worse than
+# no test. Which cells get written is not libc's decision and not excluded: that
+# lives in FrameWriter, which is mutated normally and tested against a sink that
+# is not a terminal at all.
+exclude_globs = [
+  "src/main.rs",
+  "src/audio/cpal_backend.rs",
+  "src/ui/terminal/screen.rs",
+]
