@@ -55,13 +55,6 @@ pub struct ControlProfile {
     pub buttons: usize,
 }
 
-impl ControlProfile {
-    /// Controls of every kind together.
-    pub const fn total(self) -> usize {
-        self.encoders + self.buttons
-    }
-}
-
 /// The audio device the engine is built against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioProfile {

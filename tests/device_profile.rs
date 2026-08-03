@@ -1,7 +1,7 @@
 //! The device profile: the frozen shape of the machine `motif` is built for,
 //! and the arithmetic the rest of the crate sizes itself with.
 
-use motif::device::{AudioProfile, ControlProfile, DeviceProfile, ScreenProfile};
+use motif::device::{AudioProfile, DeviceProfile, ScreenProfile};
 
 fn target() -> DeviceProfile {
     DeviceProfile::TARGET
@@ -29,16 +29,6 @@ fn a_screen_is_counted_in_cells_at_compile_time() {
     const CELLS: usize = DeviceProfile::TARGET.screen.cells();
 
     assert_eq!(CELLS, target().screen.columns * target().screen.rows);
-}
-
-#[test]
-fn controls_are_counted_across_every_type() {
-    let controls = ControlProfile {
-        encoders: 2,
-        buttons: 3,
-    };
-
-    assert_eq!(controls.total(), 5);
 }
 
 #[test]
