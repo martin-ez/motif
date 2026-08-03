@@ -12,10 +12,15 @@ pull request open and the issue still claimed — not with a merge.
 
 ```sh
 git status --short && git switch main && git pull --ff-only
+scripts/track.sh mine
 scripts/track.sh doctor
 ```
 
 A dirty tree means an unfinished task. Finish or release that one first.
+
+`mine` answers "was I already working on something?" — the question to ask after
+a crash, a restart, or a compacted context, when the branch name is the only
+other clue. If it lists an issue, finish or release that before taking new work.
 
 ## 2. Read the queue
 
@@ -39,31 +44,27 @@ If the user named an issue, use theirs — but run `ready` anyway and confirm it
 appears. If it does not, say why (blocked, claimed, or a container) rather than
 forcing it.
 
-## 3. Branch before claiming
-
-**Order matters.** `claim` derives the agent id from the current branch and
-refuses to run on `main`, so the branch has to exist first.
+## 3. Take it
 
 ```sh
-git switch -c feat/74-spsc-ring
+scripts/track.sh start 74
 ```
 
-The branch name becomes the claim marker, so it must be `[A-Za-z0-9._/-]` with no
-whitespace. Use `<kind>/<issue>-<slug>`.
+`start` claims the issue and then puts you on a branch named for it —
+`feat/74-…`, derived from the issue's kind and title. That order matters and is
+why the command exists: the claim is the part that can fail, so a contended issue
+never leaves a stray branch behind.
 
-## 4. Claim it
-
-```sh
-scripts/track.sh claim 74
-```
-
-- **exit 0** — it is yours.
+- **exit 0** — it is yours, and you are on the branch.
 - **exit 2** — `busy #74 holder=…`. Someone else has it. Do not wait, do not
-  `--force`. Go back to the ready list, take the next row, and rename the branch.
+  `--force`. Go back to the ready list and take the next row.
 - **exit 1** — fatal. Surface stderr and stop.
 
-`claim` also refuses a `size:l` issue and refuses a container with open
-sub-issues. Both mean the same thing: claim a child instead.
+It refuses a dirty working tree, and `claim` beneath it refuses a `size:l` issue
+or a container with open sub-issues. Both of those mean the same thing: take a
+child instead.
+
+The branch is cut from `main`, which is why step 1 pulls first.
 
 ## 5. Read the whole issue before writing any code
 

@@ -947,7 +947,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J out rc loc adv dt
+  local t0 A B C D E F G H I J out rc loc adv dt bn
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -976,6 +976,10 @@ Re-run with:  scripts/track.sh selftest --yes"
       'any(.num == $n and (.blockers | index($a) != null))' >/dev/null || rc=1
   st_assert "$rc" "blocked lists #$B <- #$A"
 
+  out="$(AS_JSON=1 cmd_find "selftest child of")"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "find matches #$C by title"
+
   rc=0; MOTIF_AGENT=selftest-1 cmd_claim "$C" >/dev/null || rc=$?
   st_assert "$rc" "claim #$C as selftest-1"
 
@@ -984,6 +988,14 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   rc=0; MOTIF_AGENT=selftest-1 cmd_claim "$C" >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 0 ] && echo 0 || echo 1)" "re-claim by owner is idempotent"
+
+  out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "mine lists #$C for the agent holding it"
+
+  out="$(MOTIF_AGENT=selftest-2 AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "mine excludes #$C for a different agent"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes claimed #$C"
@@ -996,6 +1008,13 @@ Re-run with:  scripts/track.sh selftest --yes"
   MOTIF_AGENT=selftest-1 cmd_done  "$C" >/dev/null
   rc=0; AS_JSON=1 cmd_show "$C" | jq -e '.state == "CLOSED" and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "done closes #$C and clears wip"
+
+  # The reason find exists: a duplicate check that cannot see closed issues is
+  # exactly the check that lets a closed issue be filed again.
+  out="$(AS_JSON=1 cmd_find "selftest child of")"
+  rc=0; printf '%s' "$out" \
+    | jq -e --argjson n "$C" 'any(.num == $n and .state == "CLOSED")' >/dev/null || rc=1
+  st_assert "$rc" "find still matches #$C once it is closed"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$A" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "#$A leaves container state once #$C closes"
@@ -1034,6 +1053,16 @@ Re-run with:  scripts/track.sh selftest --yes"
   # A whitespace agent id would produce an unmatchable claim marker.
   rc=0; ( MOTIF_AGENT="bad id" cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "claim rejects a whitespace agent id (got $rc)"
+
+  # start derives the agent id from the title, so the slug has to survive
+  # whatever punctuation a title carries.
+  bn="$(branch_for feat 74 'Lock-free SPSC ring: for the "audio" boundary!')"
+  rc=0
+  case "$bn" in feat/74-*) ;; *) rc=1 ;; esac
+  case "$bn" in *[!A-Za-z0-9._/-]*) rc=1 ;; esac
+  st_assert "$rc" "branch_for builds a claimable agent id ($bn)"
+  rc=0; ( validate_agent "$bn" ) >/dev/null 2>&1 || rc=1
+  st_assert "$rc" "branch_for output passes validate_agent"
 
   # GitHub rejects a direct 2-cycle server-side but does NOT check transitively,
   # so a 3-cycle is reachable and is what we must detect. Verified 2026-08-03.

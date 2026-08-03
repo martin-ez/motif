@@ -21,18 +21,17 @@ block other work.
 ## 1. Check it is not already filed
 
 ```sh
-scripts/track.sh graph --json | jq -r '.[] | "#\(.num) \(.title)"' | grep -i ring
+scripts/track.sh find ring
 ```
 
-Two limits worth knowing rather than working around:
+This matches titles across **open and closed** issues, locally, without touching
+the search index. Closed matches are the ones that matter: something filed,
+rejected and closed last week is exactly what gets filed again.
 
-- This sees **open issues only**. Something filed, rejected and closed last week
-  is invisible to the wrapper.
-- There is no `search` subcommand, and reaching for `gh` directly is not the
-  workaround — the legacy index is why `track.sh` exists.
-
-So a clean grep is not proof of absence. If you suspect a duplicate you cannot
-find, say so in the body and let a human close it.
+It matches titles only, so a duplicate worded differently still slips through.
+Try the two or three words someone else would have reached for, not just your
+own. If you suspect a duplicate you cannot find, say so in the body and let a
+human close it.
 
 ## 2. Set the three required labels
 

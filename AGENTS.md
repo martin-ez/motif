@@ -177,9 +177,11 @@ itself.
 ```sh
 scripts/track.sh ready            # what can be started right now
 scripts/track.sh show 7           # one issue in full, before you write any code
-scripts/track.sh claim 7          # exit 2: someone else has it, take the next row
+scripts/track.sh start 7          # claims it, then branches onto it; exit 2 = taken
+scripts/track.sh mine             # what this agent already holds
+scripts/track.sh find spsc        # match titles, open and closed, before filing
 scripts/track.sh done 7 -m "..."  # closes it, prints what that unblocked
-scripts/track.sh --help           # add, dep, note, release, blocked, graph, doctor
+scripts/track.sh --help           # add, dep, note, claim, release, blocked, graph, doctor
 ```
 
 Take the top row of `ready`; it sorts by how much each item unblocks, so the top
