@@ -29,10 +29,6 @@ model is needed at all — there is a *deadline*, not a latency budget. At four
 bars that is several seconds of thinking time, and once the loop closes, tempo
 becomes exactly derivable (duration ÷ beat count) rather than estimated.
 
-[`docs/README.md`](docs/README.md) is the founding brief: the full argument, the
-simplifying decisions, and the known risks. Read it as intent, not as a
-description of working software.
-
 ## Design invariants
 
 Four decisions constrain nearly everything else. They are stated here because
@@ -77,7 +73,6 @@ and timing measurements become noise.
 ```
 src/            the crate
 tests/          every test lives here, so that tests reach only the public API
-docs/README.md  the founding brief
 scripts/        house-style checks that rustc and clippy cannot express
 AGENTS.md       how this project is built; read before contributing
 ```

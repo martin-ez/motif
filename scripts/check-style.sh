@@ -93,6 +93,25 @@ else
 	pass "prose outside the code is folder READMEs only (1.6)"
 fi
 
+# A folder README describes the folder it sits in. A folder holding nothing but
+# prose is a documentation tree wearing a README's name, which is the thing 1.6
+# exists to prevent.
+found=$(git ls-files '*/README.md' | while read -r readme; do
+	siblings=$(git ls-files "${readme%/README.md}" |
+		grep -vE '\.(md|markdown)$' | head -1)
+	if [ -z "$siblings" ]; then
+		printf '%s\n' "$readme"
+	fi
+done)
+if [ -n "$found" ]; then
+	report "a folder containing only documentation (AGENTS.md 1.6)" "$found
+This folder holds no code, so its README describes something other than itself —
+which makes it a document, not a folder README. Move what is still true into the
+code or the top-level README, and the rest into issues."
+else
+	pass "every folder README sits beside code (1.6)"
+fi
+
 # --- AGENTS.md 1.7 — documentation describes what exists ---------------------
 #
 # AGENTS.md and the pull request template state this rule and so must be able

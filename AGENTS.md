@@ -9,10 +9,8 @@ too — it is the short version of how this project is built.
 to bar one, infers the musical structure of what you played, and uses that
 structure to help build a song sketch.
 
-**Read `docs/README.md` before your first change.** It is the founding brief:
-short, and it explains *why* the architecture is shaped the way it is. Most bad
-changes to this codebase come from not knowing the reasoning in it. Read it as
-history and intent, not as a description of what exists — see 1.7.
+**Read the design invariants below before your first change.** Most bad changes
+to this codebase come from not knowing the reasoning behind them.
 
 Status: the crate is a skeleton and nothing works yet. What is ready to pick up
 is in the issue tracker, not here.
@@ -123,15 +121,13 @@ be blocked by other work, and gets closed when it lands. Aspirational prose in a
 repository does none of that: no test contradicts it, no compiler checks it, and
 it silently becomes a lie the moment the plan changes.
 
-A `README.md` may state what the project is *for* — its purpose is not a feature
-claim. It may not describe behaviour a user cannot get today.
+A `README.md` may state what the project is *for*, and the constraints the code
+is built under — purpose and invariants are not feature claims. It may not
+describe behaviour a user cannot get today.
 
-There is exactly one exemption, and it does not generalise: **`docs/README.md` is
-the founding brief.** A brief is an input to the project rather than a
-description of it, and it is the only file in this repository where
-forward-looking statements are allowed. It is dated, it is not updated to track
-what gets built, and nothing should cite it as evidence that a feature exists.
-Everything in its scope section is destined to become issues.
+There are no exemptions. A founding brief, a design document, a plan — none of
+them earn a place in the repository by being important. Import what is still
+true into the code or the `README.md`, and put the rest in issues.
 
 ## 2. Development
 
