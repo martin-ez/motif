@@ -8,16 +8,19 @@
 //! cargo run --example duplex
 //! ```
 //!
-//! Wear headphones. This is a microphone routed to a speaker, and a laptop's
-//! own two are close enough together to feed back.
+//! Nothing is audible until you ask for it. A stream opens stopped, and this
+//! leaves it that way until Enter is pressed, because a microphone routed to a
+//! speaker on the same machine feeds back and a laptop's own two are close
+//! enough together to do it. Put headphones on first. Enter again stops it.
+//!
+//! Reaching the end of the input rather than a keypress — a piped or redirected
+//! stdin, which is how anything automated runs this — is taken as the answer
+//! no, so an unattended run passes no audio at all.
 
-use std::thread::sleep;
-use std::time::Duration;
+use std::io::{self, Write};
 
 use motif::audio::{AudioBackend, CpalBackend, DeviceError, DuplexStream, StreamRequest};
 use motif::device::DeviceProfile;
-
-const TIME_SPENT_RUNNING: Duration = Duration::from_secs(10);
 
 fn main() -> Result<(), DeviceError> {
     let profile = DeviceProfile::TARGET.audio;
@@ -39,11 +42,25 @@ fn main() -> Result<(), DeviceError> {
     );
 
     println!("{:?}", stream.state());
+    if !enter_pressed("headphones on? Enter passes audio through, Ctrl-C quits") {
+        return Ok(());
+    }
+
     stream.start()?;
-    println!("{:?} for {:?}", stream.state(), TIME_SPENT_RUNNING);
-    sleep(TIME_SPENT_RUNNING);
+    println!("{:?}", stream.state());
+    enter_pressed("Enter stops");
     stream.stop()?;
     println!("{:?}", stream.state());
 
     Ok(())
+}
+
+fn enter_pressed(prompt: &str) -> bool {
+    print!("{prompt} ");
+    let shown = io::stdout().flush().is_ok();
+
+    let mut line = String::new();
+    let read = io::stdin().read_line(&mut line).unwrap_or(0);
+
+    shown && read > 0
 }
