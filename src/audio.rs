@@ -28,6 +28,11 @@ pub struct StreamConfig {
     /// Frames per second.
     pub sample_rate: u32,
     /// Frames per callback.
+    ///
+    /// Where the input and output streams negotiate separately, this is the
+    /// output stream's, and the input's may differ. It is also not a bound a
+    /// caller may rely on: size buffers from it, but bound writes by the length
+    /// of the slice actually handed to the callback.
     pub block_size: u32,
     /// Channels the input stream delivers.
     pub input_channels: u16,
@@ -38,9 +43,13 @@ pub struct StreamConfig {
 /// Whether a stream is currently calling back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamState {
-    /// The callback is not running.
+    /// No callback is running.
     Stopped,
-    /// The callback is running.
+    /// A callback may be running.
+    ///
+    /// The weaker reading is the useful one: a caller may not touch a buffer
+    /// the callback owns while a stream reports this, and a stream that failed
+    /// partway through stopping reports it too.
     Running,
 }
 
