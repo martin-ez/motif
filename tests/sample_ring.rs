@@ -143,6 +143,20 @@ fn samples_survive_wrapping_around_the_end_of_the_ring() {
 }
 
 #[test]
+fn samples_keep_their_order_when_the_wrap_falls_unevenly() {
+    let (mut producer, mut consumer) = sample_ring(8);
+    let mut discarded = [0.0; 2];
+    let mut taken = [0.0; 7];
+    producer.write(&[0.0, 0.0]);
+    consumer.read(&mut discarded);
+
+    producer.write(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    consumer.read(&mut taken);
+
+    assert_eq!(taken, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+}
+
+#[test]
 fn a_ring_reports_the_capacity_it_was_built_with() {
     let (producer, consumer) = sample_ring(64);
 
