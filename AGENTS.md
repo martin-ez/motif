@@ -144,6 +144,14 @@ merges safely because it is unreachable. `TODO` and `FIXME` markers are rejected
 — incomplete work goes behind a flag and into an issue, where it is visible and
 can block other work.
 
+**3.5 Sweep up after a merge with `scripts/sweep.sh`.** It removes the local
+branches and `.claude/worktrees/` entries whose work is in `main`, and refuses
+anything it cannot show has landed. Run it bare to see the plan, `--yes` to
+apply it. A squash merge leaves the branch with commits that are not ancestors
+of `main`, so `git branch --merged` is not the check to reach for — and an
+upstream marked `gone` says the remote branch was deleted, not that the work
+was merged.
+
 ## 4. Pull requests
 
 **4.1 Be concise and descriptive.** Give the reader what they need to trust the
