@@ -3,9 +3,9 @@
 //!
 //! Devices are reached through [`AudioBackend`] rather than directly, so that
 //! the rest of the crate compiles against the abstraction and a backend with no
-//! hardware behind it can stand in where no audio device exists. Samples cross
-//! between the callback and the application thread through [`sample_ring`],
-//! which neither locks nor allocates.
+//! hardware behind it can stand in where no audio device exists. [`sample_ring`]
+//! carries samples between two threads without locking or allocating, which is
+//! what a real-time callback needs of anything it touches.
 
 use std::fmt;
 

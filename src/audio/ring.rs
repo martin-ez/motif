@@ -11,6 +11,13 @@
 //! genuinely do touch the same slots without synchronising on them, and only an
 //! atomic makes that defined. Reads and writes of the slots themselves are
 //! relaxed; the index publication either side of them is what orders the data.
+//!
+//! Each end counts the samples it has moved since the ring was built, and the
+//! difference between the two counts is what the ring is holding. The counts
+//! only ever grow, which is what tells a full ring from an empty one where the
+//! slot indices alone cannot. Neither end handles a count that wraps, because
+//! a 64-bit count advanced at an audio sample rate takes longer to exhaust than
+//! the hardware will exist.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -20,6 +27,12 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 ///
 /// The storage is allocated here and never again, so this belongs in setup,
 /// before the stream starts.
+///
+/// # Panics
+///
+/// Panics when `capacity` is zero. Such a ring would drop every sample handed
+/// to it, which is a mistake in setup rather than a condition worth reporting
+/// on every block from the real-time thread.
 ///
 /// ```
 /// let (mut producer, mut consumer) = motif::audio::sample_ring(64);
@@ -31,6 +44,8 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 /// assert_eq!(taken, [1.0, 2.0]);
 /// ```
 pub fn sample_ring(capacity: usize) -> (SampleProducer, SampleConsumer) {
+    assert!(capacity > 0, "a sample ring holds nothing without capacity");
+
     let slots = (0..capacity).map(|_| AtomicU32::new(0)).collect();
     let ring = Arc::new(Ring {
         slots,
@@ -59,7 +74,7 @@ impl SampleProducer {
     ///
     /// A result below `samples.len()` means the ring was full and the rest were
     /// dropped: the consumer is not keeping up, and the caller decides what
-    /// that means. A ring with no capacity takes nothing.
+    /// that means.
     pub fn write(&mut self, samples: &[f32]) -> usize {
         let taken = samples.len().min(self.vacant());
         if taken == 0 {
@@ -71,9 +86,7 @@ impl SampleProducer {
         for (slot, sample) in front.iter().chain(back).zip(samples) {
             slot.store(sample.to_bits(), Ordering::Relaxed);
         }
-        self.ring
-            .written
-            .store(written.wrapping_add(taken), Ordering::Release);
+        self.ring.written.store(written + taken, Ordering::Release);
 
         taken
     }
@@ -117,9 +130,7 @@ impl SampleConsumer {
         for (slot, sample) in front.iter().chain(back).zip(out.iter_mut()) {
             *sample = f32::from_bits(slot.load(Ordering::Relaxed));
         }
-        self.ring
-            .read
-            .store(read.wrapping_add(taken), Ordering::Release);
+        self.ring.read.store(read + taken, Ordering::Release);
 
         taken
     }
@@ -152,7 +163,7 @@ impl Ring {
     fn occupied(&self) -> usize {
         let read = self.read.load(Ordering::Acquire);
         let written = self.written.load(Ordering::Acquire);
-        written.wrapping_sub(read)
+        written - read
     }
 
     fn split_at_offset(&self, position: usize, length: usize) -> (&[AtomicU32], &[AtomicU32]) {

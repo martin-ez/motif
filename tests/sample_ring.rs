@@ -14,9 +14,10 @@ use std::time::{Duration, Instant};
 
 use motif::audio::sample_ring;
 
-/// How long a concurrent test waits for the other end before deciding the ring
-/// has stopped moving samples. Generous against the milliseconds a round trip
-/// takes, and short enough that a stalled ring fails rather than hangs.
+/// How long a concurrent test goes without moving a single sample before it
+/// decides the ring has stalled. It bounds a run of fruitless attempts rather
+/// than the test as a whole, so a slow machine only makes the test slow, while
+/// a ring that has stopped moving samples fails rather than hangs.
 const PATIENCE: Duration = Duration::from_secs(5);
 
 thread_local! {
@@ -179,6 +180,23 @@ fn samples_keep_their_order_when_the_wrap_falls_unevenly() {
 }
 
 #[test]
+fn a_capacity_that_is_not_a_power_of_two_wraps_cleanly() {
+    let (mut producer, mut consumer) = sample_ring(3);
+    let mut taken = [0.0; 2];
+    let mut received = Vec::new();
+
+    for pair in 0..64 {
+        let first = (pair * 2) as f32;
+        producer.write(&[first, first + 1.0]);
+        let count = consumer.read(&mut taken);
+        received.extend_from_slice(&taken[..count]);
+    }
+
+    let expected: Vec<f32> = (0..128).map(|index| index as f32).collect();
+    assert_eq!(received, expected);
+}
+
+#[test]
 fn a_ring_reports_the_capacity_it_was_built_with() {
     let (producer, consumer) = sample_ring(64);
 
@@ -202,11 +220,22 @@ fn available_samples_rise_as_the_ring_fills() {
 }
 
 #[test]
-fn a_ring_with_no_capacity_takes_nothing() {
-    let (mut producer, mut consumer) = sample_ring(0);
-    let mut taken = [0.0; 2];
+#[should_panic(expected = "capacity")]
+fn a_ring_with_no_capacity_is_refused_at_setup() {
+    sample_ring(0);
+}
 
-    assert_eq!((producer.write(&[1.0]), consumer.read(&mut taken)), (0, 0));
+#[test]
+fn a_ring_of_one_sample_still_carries_them_one_at_a_time() {
+    let (mut producer, mut consumer) = sample_ring(1);
+    let mut taken = [0.0; 1];
+
+    producer.write(&[1.0]);
+    consumer.read(&mut taken);
+    producer.write(&[2.0]);
+    consumer.read(&mut taken);
+
+    assert_eq!(taken, [2.0]);
 }
 
 #[test]
@@ -220,7 +249,7 @@ fn every_sample_survives_a_concurrent_round_trip() {
 
     thread::scope(|scope| {
         scope.spawn(move || {
-            let deadline = Instant::now() + PATIENCE;
+            let mut deadline = Instant::now() + PATIENCE;
             let mut offset = 0;
             while offset < SAMPLES {
                 let block = &sent[offset..(offset + BLOCK).min(SAMPLES)];
@@ -228,18 +257,22 @@ fn every_sample_survives_a_concurrent_round_trip() {
                 if written == 0 {
                     assert!(Instant::now() < deadline, "the ring never made room");
                     spin_loop();
+                } else {
+                    deadline = Instant::now() + PATIENCE;
                 }
                 offset += written;
             }
         });
 
-        let deadline = Instant::now() + PATIENCE;
+        let mut deadline = Instant::now() + PATIENCE;
         let mut block = [0.0; BLOCK];
         while received.len() < SAMPLES {
             let read = consumer.read(&mut block);
             if read == 0 {
                 assert!(Instant::now() < deadline, "the ring never delivered");
                 spin_loop();
+            } else {
+                deadline = Instant::now() + PATIENCE;
             }
             received.extend_from_slice(&block[..read]);
         }
