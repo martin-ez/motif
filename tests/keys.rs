@@ -49,17 +49,29 @@ impl Read for BrokenSource {
     }
 }
 
+/// More events than any test here types keys. A reader that hands the same key
+/// back for ever is a failure to read, so it is worth taking a few too many and
+/// failing the comparison rather than collecting until the suite hangs.
+const MORE_THAN_ANY_TEST_TYPES: usize = 8;
+
 fn events_from(source: impl Read) -> Vec<ControlEvent> {
     let mut reader = KeyReader::new(source);
-    std::iter::from_fn(|| reader.poll()).collect()
+    std::iter::from_fn(|| reader.poll())
+        .take(MORE_THAN_ANY_TEST_TYPES)
+        .collect()
 }
 
 fn events(bytes: &[u8]) -> Vec<ControlEvent> {
     events_from(bytes)
 }
 
-fn first(bytes: &[u8]) -> Option<ControlEvent> {
-    events(bytes).into_iter().next()
+fn only(bytes: &[u8]) -> Option<ControlEvent> {
+    let events = events(bytes);
+    assert!(
+        events.len() <= 1,
+        "one key was typed but {events:?} came back"
+    );
+    events.into_iter().next()
 }
 
 fn pressed(button: Button) -> Option<ControlEvent> {
@@ -79,48 +91,48 @@ fn turned(encoder: Encoder, turn: Turn) -> Option<ControlEvent> {
 
 #[test]
 fn the_right_key_of_a_pair_turns_its_encoder_clockwise() {
-    assert_eq!(first(b"w"), turned(Encoder::First, Turn::Clockwise));
+    assert_eq!(only(b"w"), turned(Encoder::First, Turn::Clockwise));
 }
 
 #[test]
 fn the_left_key_of_a_pair_turns_it_the_other_way() {
-    assert_eq!(first(b"q"), turned(Encoder::First, Turn::Anticlockwise));
+    assert_eq!(only(b"q"), turned(Encoder::First, Turn::Anticlockwise));
 }
 
 #[test]
 fn every_encoder_has_a_pair_of_its_own() {
-    assert_eq!(first(b"e"), turned(Encoder::Second, Turn::Anticlockwise));
-    assert_eq!(first(b"r"), turned(Encoder::Second, Turn::Clockwise));
-    assert_eq!(first(b"t"), turned(Encoder::Third, Turn::Anticlockwise));
-    assert_eq!(first(b"y"), turned(Encoder::Third, Turn::Clockwise));
-    assert_eq!(first(b"u"), turned(Encoder::Fourth, Turn::Anticlockwise));
-    assert_eq!(first(b"i"), turned(Encoder::Fourth, Turn::Clockwise));
+    assert_eq!(only(b"e"), turned(Encoder::Second, Turn::Anticlockwise));
+    assert_eq!(only(b"r"), turned(Encoder::Second, Turn::Clockwise));
+    assert_eq!(only(b"t"), turned(Encoder::Third, Turn::Anticlockwise));
+    assert_eq!(only(b"y"), turned(Encoder::Third, Turn::Clockwise));
+    assert_eq!(only(b"u"), turned(Encoder::Fourth, Turn::Anticlockwise));
+    assert_eq!(only(b"i"), turned(Encoder::Fourth, Turn::Clockwise));
 }
 
 #[test]
 fn an_arrow_key_presses_the_button_it_points_at() {
-    assert_eq!(first(b"\x1b[A"), pressed(Button::Up));
-    assert_eq!(first(b"\x1b[B"), pressed(Button::Down));
-    assert_eq!(first(b"\x1b[C"), pressed(Button::Right));
-    assert_eq!(first(b"\x1b[D"), pressed(Button::Left));
+    assert_eq!(only(b"\x1b[A"), pressed(Button::Up));
+    assert_eq!(only(b"\x1b[B"), pressed(Button::Down));
+    assert_eq!(only(b"\x1b[C"), pressed(Button::Right));
+    assert_eq!(only(b"\x1b[D"), pressed(Button::Left));
 }
 
 #[test]
 fn an_arrow_in_application_mode_presses_the_same_button() {
-    assert_eq!(first(b"\x1bOA"), pressed(Button::Up));
+    assert_eq!(only(b"\x1bOA"), pressed(Button::Up));
 }
 
 #[test]
 fn a_transport_key_presses_its_button() {
-    assert_eq!(first(b"z"), pressed(Button::Play));
-    assert_eq!(first(b"x"), pressed(Button::Stop));
-    assert_eq!(first(b"c"), pressed(Button::Record));
+    assert_eq!(only(b"z"), pressed(Button::Play));
+    assert_eq!(only(b"x"), pressed(Button::Stop));
+    assert_eq!(only(b"c"), pressed(Button::Record));
 }
 
 #[test]
 fn an_upper_case_key_is_the_same_control_shifted() {
     assert_eq!(
-        first(b"W"),
+        only(b"W"),
         Some(ControlEvent::Turned {
             encoder: Encoder::First,
             turn: Turn::Clockwise,
@@ -128,7 +140,7 @@ fn an_upper_case_key_is_the_same_control_shifted() {
         })
     );
     assert_eq!(
-        first(b"Z"),
+        only(b"Z"),
         Some(ControlEvent::Pressed {
             button: Button::Play,
             shifted: true,
@@ -139,7 +151,7 @@ fn an_upper_case_key_is_the_same_control_shifted() {
 #[test]
 fn an_arrow_held_with_shift_is_the_same_button_shifted() {
     assert_eq!(
-        first(b"\x1b[1;2A"),
+        only(b"\x1b[1;2A"),
         Some(ControlEvent::Pressed {
             button: Button::Up,
             shifted: true,
@@ -149,7 +161,7 @@ fn an_arrow_held_with_shift_is_the_same_button_shifted() {
 
 #[test]
 fn an_arrow_with_another_modifier_is_not_shifted() {
-    assert_eq!(first(b"\x1b[1;3A"), pressed(Button::Up));
+    assert_eq!(only(b"\x1b[1;3A"), pressed(Button::Up));
 }
 
 #[test]
@@ -177,7 +189,7 @@ fn keys_that_arrive_together_are_separate_events() {
 
 #[test]
 fn a_key_after_an_unmapped_one_is_still_read() {
-    assert_eq!(first(b".z"), pressed(Button::Play));
+    assert_eq!(only(b".z"), pressed(Button::Play));
 }
 
 #[test]
@@ -208,7 +220,7 @@ fn an_escape_still_begins_a_sequence_that_arrives_a_poll_later() {
 
 #[test]
 fn an_escape_that_starts_nothing_does_not_swallow_the_next_key() {
-    assert_eq!(first(b"\x1bz"), pressed(Button::Play));
+    assert_eq!(only(b"\x1bz"), pressed(Button::Play));
 }
 
 #[test]

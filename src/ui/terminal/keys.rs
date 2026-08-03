@@ -10,7 +10,9 @@ use crate::device::{Button, Encoder};
 use crate::ui::{ControlEvent, Controls, Turn};
 
 const ESCAPE: u8 = 0x1b;
+const PARAMETERS_START: usize = 2;
 const PENDING_CAPACITY: usize = 64;
+const MOST_STEPS_PER_POLL: usize = 2 * PENDING_CAPACITY;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
@@ -111,25 +113,18 @@ fn shift_held(parameters: &[u8]) -> bool {
 }
 
 fn control_sequence(bytes: &[u8]) -> Step {
-    let parameters_start = 2;
-    let mut length = parameters_start;
+    let parameters = &bytes[PARAMETERS_START..];
+    let Some(length) = parameters.iter().position(|byte| !is_parameter(*byte)) else {
+        return Step::Incomplete;
+    };
 
-    while let Some(byte) = bytes.get(length) {
-        if is_parameter(*byte) {
-            length += 1;
-            continue;
-        }
-
-        return Step::Took {
-            bytes: length + 1,
-            press: arrow(*byte).map(|key| Press {
-                key,
-                shifted: shift_held(&bytes[parameters_start..length]),
-            }),
-        };
+    Step::Took {
+        bytes: PARAMETERS_START + length + 1,
+        press: arrow(parameters[length]).map(|key| Press {
+            key,
+            shifted: shift_held(&parameters[..length]),
+        }),
     }
-
-    Step::Incomplete
 }
 
 fn single_shift(bytes: &[u8]) -> Step {
@@ -190,6 +185,11 @@ fn next_press(bytes: &[u8]) -> Step {
 /// terminal is put into a mode that returns immediately by
 /// [`TerminalScreen`](super::TerminalScreen).
 ///
+/// A poll is bounded work for the same reason. It gives up after a couple of
+/// passes over the buffer, so a source that never runs dry — a pasted page of
+/// text arriving as keystrokes — costs one frame rather than all of them, and
+/// what it did not reach is still there for the next poll.
+///
 /// A key that arrives split across reads — an escape sequence is several bytes,
 /// and a terminal is under no obligation to deliver them together — is held
 /// until the rest of it turns up. A byte that begins nothing the panel has is
@@ -232,7 +232,7 @@ impl<R: Read> KeyReader<R> {
 
 impl<R: Read> Controls for KeyReader<R> {
     fn poll(&mut self) -> Option<ControlEvent> {
-        loop {
+        for _ in 0..MOST_STEPS_PER_POLL {
             match next_press(&self.pending[..self.filled]) {
                 Step::Took { bytes, press } => {
                     self.take(bytes);
@@ -247,5 +247,7 @@ impl<R: Read> Controls for KeyReader<R> {
                 }
             }
         }
+
+        None
     }
 }
