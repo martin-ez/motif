@@ -1,5 +1,15 @@
 # Project Brief — Terminal Groovebox
 
+> **This is the founding brief, written before any code existed. It is an input
+> to the project, not a description of it.**
+>
+> It is the single exemption to `AGENTS.md` rule 1.7, which forbids documenting
+> features that do not exist. Everything below is intent. Nothing here is
+> evidence that a feature works, and this file is not updated to track what gets
+> built — the issue tracker does that. Read it for the *reasoning*: the
+> architecture is shaped by the arguments in it, and changes that ignore them
+> tend to be wrong in ways that are expensive to discover.
+
 ## What it is
 
 A terminal-based music groovebox that listens to you play, works out the musical structure of
