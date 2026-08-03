@@ -10,3 +10,10 @@
 # the granted configuration, the errors — lives behind AudioBackend and is
 # tested through NullBackend, which is mutated normally.
 exclude_globs = ["src/main.rs", "src/audio/cpal_backend.rs"]
+
+# A command is packed into one word as a tag above bit 32 and a payload below
+# it. The two fields never share a bit, so `|` and `^` compute the same word for
+# every command that exists, and no test can tell them apart — the mutant is
+# equivalent to the code it replaces rather than uncaught by it. Excluded by
+# name so that every other mutation of the encoding still has to be caught.
+exclude_re = ['replace \| with \^ in Command::to_bits']
