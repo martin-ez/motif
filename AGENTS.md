@@ -185,8 +185,10 @@ scripts/track.sh --help           # add, dep, note, claim, release, blocked, gra
 ```
 
 Take the top row of `ready`; it sorts by how much each item unblocks, so the top
-row is the one that frees the most work. Any non-zero exit other than 2 is fatal
-— surface stderr and stop. Release anything you will not finish.
+row is the one that frees the most work. **Claim it before you write any code** —
+`start <n>` claims and branches in one step, and an issue nobody has claimed is
+an issue another agent will take. Any non-zero exit other than 2 is fatal —
+surface stderr and stop. Release anything you will not finish.
 
 > This is a correctness rule, not a preference. The legacy search index — raw
 > GraphQL `search(type: ISSUE)`, or REST without `advanced_search=true` —
@@ -204,11 +206,22 @@ Issue types and fields are organisation-only, so metadata is labels: `area:`,
 `claim` will accept — a `size:l` issue is listed under `SPLIT:` instead, and is
 split with `add --parent <n>`.
 
+**Filing new work.** `find` first: a duplicate check that cannot see closed
+issues is the one that lets a closed issue be filed again. Then `add`, with all
+three labels **and its dependency edges** — `ready` sorts by how much each issue
+unblocks, so one filed with no `--blocked-by` or `--blocking` sorts last and
+stays invisible. Filing is also what to do instead of a `TODO` marker (3.4): file
+it, wire it, and go back to the task in hand.
+
+The `next`, `refine` and `file` skills in `.claude/skills/` carry the full
+procedure for taking, grooming and filing work.
+
 ## Working agreement
 
 - **One task per session, one pull request per task.** Scope creep is the most
   expensive thing an agent can do here.
-- **Branch from `main`** and open pull requests as drafts.
+- **Start work with `start <n>`**, which claims the issue and branches from
+  `main` onto it. Open pull requests as drafts.
 - **New dependencies need a reason**: what it does, why not hand-rolled, its
   licence, and that it cross-compiles.
 - **No `unwrap()` or `expect()` where failure is possible at runtime.** Setup and
