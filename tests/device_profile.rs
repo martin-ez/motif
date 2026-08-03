@@ -35,11 +35,10 @@ fn a_screen_is_counted_in_cells_at_compile_time() {
 fn controls_are_counted_across_every_type() {
     let controls = ControlProfile {
         encoders: 2,
-        pads: 8,
         buttons: 3,
     };
 
-    assert_eq!(controls.total(), 13);
+    assert_eq!(controls.total(), 5);
 }
 
 #[test]
@@ -66,7 +65,6 @@ fn the_target_offers_every_kind_of_control() {
     let controls = target().controls;
 
     assert!(controls.encoders > 0);
-    assert!(controls.pads > 0);
     assert!(controls.buttons > 0);
 }
 

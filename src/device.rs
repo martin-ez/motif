@@ -45,14 +45,12 @@ impl ScreenProfile {
 /// The physical controls, counted by kind.
 ///
 /// Counting them by kind rather than in total is what lets input be named after
-/// a control — encoder two, pad nine — instead of after a key.
+/// a control — encoder two, button five — instead of after a key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlProfile {
     /// Rotary encoders, which turn in either direction without a limit and
     /// press.
     pub encoders: usize,
-    /// Pads, which report how hard they were struck.
-    pub pads: usize,
     /// Buttons, which are pressed or not.
     pub buttons: usize,
 }
@@ -60,7 +58,7 @@ pub struct ControlProfile {
 impl ControlProfile {
     /// Controls of every kind together.
     pub const fn total(self) -> usize {
-        self.encoders + self.pads + self.buttons
+        self.encoders + self.buttons
     }
 }
 
@@ -118,7 +116,6 @@ impl DeviceProfile {
         },
         controls: ControlProfile {
             encoders: 4,
-            pads: 16,
             buttons: 8,
         },
         audio: AudioProfile {
