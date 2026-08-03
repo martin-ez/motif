@@ -41,6 +41,19 @@ fn a_device_stream_starts_and_stops() {
 
 #[test]
 #[ignore = "requires an audio device"]
+fn a_block_size_of_zero_is_an_error_rather_than_a_panic() {
+    let backend = CpalBackend::new();
+
+    let opened = backend.open(StreamRequest {
+        sample_rate: 48_000,
+        block_size: 0,
+    });
+
+    assert!(opened.is_err());
+}
+
+#[test]
+#[ignore = "requires an audio device"]
 fn a_sample_rate_no_device_supports_is_an_error() {
     let backend = CpalBackend::new();
 
