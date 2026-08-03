@@ -36,7 +36,7 @@ scripts/track.sh <command> [args] [--json]
   blocked                     open work with open blockers, and what blocks it
   find <term>                 match issue titles, open and closed
   show <n>                    one issue in full, including claim state
-  start <n>                   branch from main, then claim (see: claim needs a branch)
+  start <n>                   claim, then branch from main onto it
   claim <n> [--force]         take an issue (adds wip + a claim marker)
   mine                        issues this agent currently holds
   release <n> [--force]       give it back
@@ -417,7 +417,7 @@ branch_for() {   # branch_for <kind> <num> <title>
 
 cmd_start() {
   [ $# -ge 1 ] || die "usage: track.sh start <n>"
-  local n="${1#\#}" info kind title branch orig created=0 rc=0
+  local n="${1#\#}" info kind title branch created=0 rc=0
 
   git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository."
   git diff --quiet && git diff --cached --quiet \
@@ -429,30 +429,29 @@ cmd_start() {
   title="$(printf '%s' "$info" | jq -r '.title // ""')"
   [ -n "$title" ] || die "#$n has no title — is it a real issue?"
   branch="$(branch_for "$kind" "$n" "$title")"
-  orig="$(git rev-parse --abbrev-ref HEAD)"
+
+  # Claim before branching, not after. `claim` only needs the branch name to
+  # derive an agent id, and MOTIF_AGENT supplies that directly — so a contended
+  # issue never leaves a branch behind to roll back, which is the common case
+  # whenever two agents reach for the same row.
+  # cmd_claim exits on a fatal error, so it runs in a subshell.
+  rc=0
+  ( export MOTIF_AGENT="$branch"; cmd_claim "$n" ) || rc=$?
+  [ "$rc" -eq 0 ] || exit "$rc"
 
   if git show-ref --verify --quiet "refs/heads/$branch"; then
-    git switch "$branch" >/dev/null 2>&1 || die "could not switch to existing branch $branch."
+    git switch "$branch" >/dev/null 2>&1 || rc=$?
   else
-    git switch -c "$branch" main >/dev/null 2>&1 || die "could not create branch $branch from main."
+    git switch -c "$branch" main >/dev/null 2>&1 || rc=$?
     created=1
   fi
-
-  # cmd_claim exits on a fatal error, so it runs in a subshell: the branch has to
-  # be rolled back here, and an exit would take that with it.
-  rc=0
-  ( cmd_claim "$n" ) || rc=$?
   if [ "$rc" -ne 0 ]; then
-    if [ "$created" = 1 ]; then
-      git switch "$orig" >/dev/null 2>&1 || true
-      git branch -D "$branch" >/dev/null 2>&1 || true
-      note "rolled back branch $branch — the claim did not succeed."
-    else
-      note "left existing branch $branch in place — the claim did not succeed."
-    fi
-    exit "$rc"
+    ( export MOTIF_AGENT="$branch"; cmd_release "$n" ) >/dev/null 2>&1 || true
+    die "claimed #$n but could not switch to $branch — the claim has been released."
   fi
+
   printf 'started #%s on %s\n' "$n" "$branch"
+  [ "$created" = 1 ] || note "note: $branch already existed; it was not recreated from main."
   return 0
 }
 
