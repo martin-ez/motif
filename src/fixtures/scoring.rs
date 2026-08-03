@@ -112,14 +112,13 @@ impl Score {
     /// This is the single figure to quote: precision alone rewards a detector
     /// that reports one beat it is sure of, and recall alone rewards one that
     /// reports every instant.
+    ///
+    /// The harmonic mean of the two rates reduces to twice the hits over the
+    /// two counts together, which is what this computes: one division instead
+    /// of three, and a score of zero where there is nothing on either side
+    /// falls out of it rather than needing a case of its own.
     pub fn f1(&self) -> f64 {
-        let precision = self.precision();
-        let recall = self.recall();
-        if precision + recall == 0.0 {
-            return 0.0;
-        }
-
-        2.0 * precision * recall / (precision + recall)
+        share(2 * self.hits, self.annotated + self.detected)
     }
 }
 

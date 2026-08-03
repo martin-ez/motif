@@ -111,11 +111,18 @@ fn recall_is_the_share_of_annotations_that_were_found() {
 
 #[test]
 fn f1_is_the_harmonic_mean_of_precision_and_recall() {
+    let score = Score::of(&at(&[0, 500, 1_000, 1_500]), &at(&[0, 500, 5_000]));
+
+    assert_close(score.precision(), 2.0 / 3.0);
+    assert_close(score.recall(), 0.5);
+    assert_close(score.f1(), 4.0 / 7.0);
+}
+
+#[test]
+fn f1_falls_between_precision_and_recall() {
     let score = Score::of(&at(&[0, 500, 1_000, 1_500]), &at(&[0, 500]));
 
-    assert_close(score.precision(), 1.0);
-    assert_close(score.recall(), 0.5);
-    assert_close(score.f1(), 2.0 / 3.0);
+    assert!(score.recall() < score.f1() && score.f1() < score.precision());
 }
 
 #[test]
