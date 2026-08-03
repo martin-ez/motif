@@ -4,4 +4,5 @@
 //! `AGENTS.md` holds the design invariants that constrain what belongs here.
 
 pub mod audio;
+pub mod device;
 pub mod fixtures;

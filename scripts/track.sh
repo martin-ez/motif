@@ -33,6 +33,7 @@ usage() {
 scripts/track.sh <command> [args] [--json]
 
   ready                       work that can be started right now
+  refs [-F FILE]              issues a pull request body tracks (stdin default)
   blocked                     open work with open blockers, and what blocks it
   find <term>                 match issue titles, open and closed
   show <n>                    one issue in full, including claim state
@@ -640,6 +641,53 @@ ${msg:-Completed by \`$me\`.}" >/dev/null || true
   return 0
 }
 
+# ----------------------------------------------------------------- refs -----
+# A pull request body is written by hand and kept largely as the template left
+# it, so the two things it reliably contains are template instructions inside
+# HTML comments and prose that mentions other issues in passing. Neither may
+# settle an issue, so only `Tracks` lines are read, and comments are removed
+# first.
+strip_html_comments() {
+  awk '
+    { line = $0
+      while (1) {
+        if (open) {
+          i = index(line, "-->")
+          if (i == 0) { line = ""; break }
+          line = substr(line, i + 3); open = 0
+        } else {
+          i = index(line, "<!--")
+          if (i == 0) break
+          rest = substr(line, i + 4)
+          j = index(rest, "-->")
+          if (j == 0) { line = substr(line, 1, i - 1); open = 1; break }
+          line = substr(line, 1, i - 1) substr(rest, j + 3)
+        }
+      }
+      print line
+    }'
+}
+
+# Every number on the line, not just the one after the keyword: GitHub binds a
+# closing keyword to a single number, so `Closes #98, #99, #100, #101` on #96
+# closed #98 and left three issues open with `wip` still set.
+cmd_refs() {
+  local body="" nums
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -F|--file) [ $# -ge 2 ] || die "-F needs a file"; body="$(cat "$2")"; shift 2 ;;
+      *)         die "usage: track.sh refs [-F FILE]" ;;
+    esac
+  done
+  [ -n "$body" ] || body="$(cat)"
+
+  nums="$(printf '%s\n' "$body" | strip_html_comments \
+          | grep -iE '^[[:space:]]*tracks\b' \
+          | grep -oE '#[0-9]+' | tr -d '#' | sort -n -u || true)"
+  [ -n "$nums" ] && printf '%s\n' "$nums"
+  return 0
+}
+
 add_flag_list() {   # $1 = flag, $2 = comma list; appends to GH_ARGS
   local flag="$1" list="$2" v
   [ -n "$list" ] || return 0
@@ -1064,6 +1112,30 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; ( validate_agent "$bn" ) >/dev/null 2>&1 || rc=1
   st_assert "$rc" "branch_for output passes validate_agent"
 
+  # #96 is the case this exists for: `Closes #98, #99, #100, #101` closed only
+  # #98, because a GitHub keyword binds to the number directly after it.
+  out="$(printf 'Tracks #98, #99, #100, #101\n' | cmd_refs)"
+  rc=0; [ "$out" = "$(printf '98\n99\n100\n101')" ] || rc=1
+  st_assert "$rc" "refs takes every number on a Tracks line"
+
+  out="$(printf 'Unlike #96, this parses the body itself.\n\nTracks #116\n' | cmd_refs)"
+  rc=0; [ "$out" = "116" ] || rc=1
+  st_assert "$rc" "refs leaves a mention outside a Tracks line alone"
+
+  # The template carries its own instructions in an HTML comment, so a body that
+  # keeps them must not settle whatever issue the example names.
+  out="$(printf '<!--\n  Link the issue: Tracks #12\n-->\nTracks #116\n' | cmd_refs)"
+  rc=0; [ "$out" = "116" ] || rc=1
+  st_assert "$rc" "refs ignores a Tracks line inside an HTML comment"
+
+  out="$(printf 'Tracks #7\n\nTracks #7 as well\n' | cmd_refs)"
+  rc=0; [ "$out" = "7" ] || rc=1
+  st_assert "$rc" "refs reports each issue once"
+
+  rc=0; out="$(printf 'A pull request that tracks nothing.\n' | cmd_refs)" || rc=1
+  [ -z "$out" ] || rc=1
+  st_assert "$rc" "refs succeeds and stays silent when nothing is tracked"
+
   # GitHub rejects a direct 2-cycle server-side but does NOT check transitively,
   # so a 3-cycle is reachable and is what we must detect. Verified 2026-08-03.
   D="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle D" --area infra --kind chore --size s --selftest)")"
@@ -1137,6 +1209,7 @@ CMD="$1"; shift
 
 case "$CMD" in
   ready)        cmd_ready "$@" ;;
+  refs)         cmd_refs "$@" ;;
   blocked)      cmd_blocked "$@" ;;
   find)         cmd_find "$@" ;;
   show)         cmd_show "$@" ;;

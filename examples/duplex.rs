@@ -13,15 +13,15 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use motif::audio::{AudioBackend, CpalBackend, DeviceError, DuplexStream, StreamRequest};
+use motif::device::DeviceProfile;
 
-const REQUESTED_SAMPLE_RATE: u32 = 48_000;
-const REQUESTED_BLOCK_SIZE: u32 = 256;
 const TIME_SPENT_RUNNING: Duration = Duration::from_secs(2);
 
 fn main() -> Result<(), DeviceError> {
+    let profile = DeviceProfile::TARGET.audio;
     let request = StreamRequest {
-        sample_rate: REQUESTED_SAMPLE_RATE,
-        block_size: REQUESTED_BLOCK_SIZE,
+        sample_rate: profile.sample_rate,
+        block_size: profile.block_size,
     };
     println!(
         "requested  {} Hz, {} frames",
