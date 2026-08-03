@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Agent worktrees live inside the repo and are not part of it.
+/.claude/worktrees/
+
+# Local audio captures and analysis scratch. Test fixtures live in
+# tests/fixtures and are committed deliberately; anything else audio-shaped is
+# scratch.
+/scratch
+/recordings
+
+.DS_Store

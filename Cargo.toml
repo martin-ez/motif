@@ -1,0 +1,40 @@
+[package]
+name = "motif"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "A terminal groovebox that listens to you play and works out the musical structure of what you played."
+repository = "https://github.com/martin-ez/motif"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["audio", "dsp", "looper", "music", "tui"]
+categories = ["multimedia::audio", "command-line-utilities"]
+
+[lib]
+name = "motif"
+path = "src/lib.rs"
+
+[[bin]]
+name = "motif"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
+
+# Audio work is unusable in an unoptimised build: a debug-speed DSP path
+# underruns the callback, and every timing measurement becomes noise. Own code
+# stays at 1 so backtraces and stepping still work; dependencies go to 2.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
