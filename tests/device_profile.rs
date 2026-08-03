@@ -1,7 +1,7 @@
 //! The device profile: the frozen shape of the machine `motif` is built for,
 //! and the arithmetic the rest of the crate sizes itself with.
 
-use motif::device::{AudioProfile, Button, DeviceProfile, ScreenProfile};
+use motif::device::{AudioProfile, Button, DeviceProfile, Encoder, ScreenProfile};
 
 fn target() -> DeviceProfile {
     DeviceProfile::TARGET
@@ -51,10 +51,19 @@ fn the_target_screen_fits_in_a_default_terminal() {
 }
 
 #[test]
-fn the_target_offers_encoders_to_turn() {
-    let controls = target().controls;
+fn no_encoder_is_listed_twice() {
+    for (position, encoder) in Encoder::ALL.iter().enumerate() {
+        let duplicate = Encoder::ALL[position + 1..].contains(encoder);
 
-    assert!(controls.encoders > 0);
+        assert!(!duplicate, "{encoder:?} is listed more than once");
+    }
+}
+
+#[test]
+fn an_encoder_is_its_own_position_on_the_panel() {
+    for (position, encoder) in Encoder::ALL.iter().enumerate() {
+        assert_eq!(*encoder as usize, position);
+    }
 }
 
 #[test]

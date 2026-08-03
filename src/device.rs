@@ -1,26 +1,35 @@
 //! The shape of the machine `motif` is built for, stated once.
 //!
-//! Screen, controls, audio and cores are frozen in [`DeviceProfile::TARGET`],
-//! and the rest of the crate sizes itself from that rather than from whatever
-//! the host it happens to be running on reports. A terminal that is 200 columns
-//! wide still draws a [`ScreenProfile::columns`]-wide frame, because the screen
-//! being aimed at is not the terminal.
+//! Screen, audio and cores are frozen in [`DeviceProfile::TARGET`], and the
+//! panel is frozen in [`Encoder`] and [`Button`]. The rest of the crate sizes
+//! itself from those rather than from whatever the host it happens to be
+//! running on reports. A terminal that is 200 columns wide still draws a
+//! [`ScreenProfile::columns`]-wide frame, because the screen being aimed at is
+//! not the terminal.
 //!
 //! The numbers are allowed to be wrong. They are not allowed to be implicit,
 //! scattered, or discovered at runtime: a profile field is a decision that a
 //! future hardware backend has to meet, so changing one is a change to the
 //! product rather than to a default.
 //!
-//! Every field is available in a constant expression, so buffers can be sized
-//! by the compiler:
+//! A control is a closed set rather than a count, so a backend that maps input
+//! onto the panel can be checked by the compiler: a `match` stops compiling
+//! when the panel gains a control, and a control the panel lacks cannot be
+//! named at all.
+//!
+//! Everything is available in a constant expression, so buffers can be sized by
+//! the compiler:
 //!
 //! ```
-//! use motif::device::DeviceProfile;
+//! use motif::device::{DeviceProfile, Encoder};
 //!
 //! const CELLS: usize = DeviceProfile::TARGET.screen.cells();
 //!
 //! let frame = [' '; CELLS];
 //! assert_eq!(frame.len(), CELLS);
+//!
+//! let mut parameters = [0.0; Encoder::ALL.len()];
+//! parameters[Encoder::Third as usize] = 0.5;
 //! ```
 
 /// The screen the UI draws into, measured in character cells.
@@ -40,6 +49,32 @@ impl ScreenProfile {
     pub const fn cells(self) -> usize {
         self.columns * self.rows
     }
+}
+
+/// An encoder on the panel, named for where it sits.
+///
+/// The name is the position and nothing else: an encoder adjusts whatever the
+/// page beneath it is showing, so unlike a [`Button`] it carries no meaning of
+/// its own. It is a closed set rather than a count because an encoder the panel
+/// does not have should not be expressible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoder {
+    /// The leftmost encoder.
+    First,
+    /// The second encoder from the left.
+    Second,
+    /// The third encoder from the left.
+    Third,
+    /// The rightmost encoder.
+    Fourth,
+}
+
+impl Encoder {
+    /// Every encoder, left to right.
+    ///
+    /// An encoder's position here is its discriminant, so `encoder as usize`
+    /// indexes an array sized by `ALL.len()`.
+    pub const ALL: [Self; 4] = [Self::First, Self::Second, Self::Third, Self::Fourth];
 }
 
 /// A button on the panel, named for what it is rather than numbered.
@@ -86,20 +121,6 @@ impl Button {
     ];
 }
 
-/// The controls the panel carries.
-///
-/// Encoders are counted and buttons are not, because the two are addressed
-/// differently: an encoder is positional, meaning whatever the page beneath it
-/// currently shows, while a button means the same thing on every page. Counting
-/// a button would throw away the only useful thing about it, and [`Button`]
-/// carries its own count.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ControlProfile {
-    /// Rotary encoders, which turn in either direction without a limit and
-    /// press.
-    pub encoders: usize,
-}
-
 /// The audio device the engine is built against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioProfile {
@@ -127,8 +148,6 @@ impl AudioProfile {
 pub struct DeviceProfile {
     /// The screen a frame is drawn into.
     pub screen: ScreenProfile,
-    /// The controls a player reaches for.
-    pub controls: ControlProfile,
     /// The audio device the engine is built against.
     pub audio: AudioProfile,
     /// Cores the whole program has to share.
@@ -143,18 +162,19 @@ impl DeviceProfile {
     ///
     /// The screen is a 320×240 panel drawn with an 8×16 cell, which is 40
     /// columns by 15 rows — small enough that a default 80×24 terminal can
-    /// always show a whole frame. The panel carries four encoders, one per
-    /// parameter slot a page can show, alongside the buttons in [`Button`] and
-    /// a shift modifier. The audio device is the configuration a
+    /// always show a whole frame. The audio device is the configuration a
     /// class-compliant USB interface offers everywhere: 48 kHz in blocks of
     /// 256 frames, which is 5.33 ms of deadline per callback. Four cores is a
     /// quad-core ARM board of the kind this would be built on.
+    ///
+    /// The panel is not here. [`Encoder`] and [`Button`] are closed sets, so
+    /// they state it themselves and a field repeating their length would be a
+    /// second place to change.
     pub const TARGET: Self = Self {
         screen: ScreenProfile {
             columns: 40,
             rows: 15,
         },
-        controls: ControlProfile { encoders: 4 },
         audio: AudioProfile {
             sample_rate: 48_000,
             block_size: 256,
