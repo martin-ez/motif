@@ -42,17 +42,62 @@ impl ScreenProfile {
     }
 }
 
-/// The physical controls, counted by kind.
+/// A button on the panel, named for what it is rather than numbered.
 ///
-/// Counting them by kind rather than in total is what lets input be named after
-/// a control — encoder two, button five — instead of after a key.
+/// Naming them is what lets a backend's key mapping be checked: a `match` over
+/// this enum stops compiling when the panel gains a button, so the terminal's
+/// table of keys cannot silently fall behind the device.
+///
+/// Shift is absent deliberately. It is a modifier — it changes what another
+/// control means rather than meaning anything alone — so a backend resolves it
+/// and stamps it onto the event. A `Shift` variant here would put the held
+/// state back into every consumer, which is key handling with a new name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    /// Navigate up.
+    Up,
+    /// Navigate down.
+    Down,
+    /// Navigate left.
+    Left,
+    /// Navigate right.
+    Right,
+    /// Start playback.
+    Play,
+    /// Halt playback.
+    Stop,
+    /// Arm capture.
+    Record,
+}
+
+impl Button {
+    /// Every button, in panel order.
+    ///
+    /// A button's position here is its discriminant, so `button as usize`
+    /// indexes an array sized by `ALL.len()`.
+    pub const ALL: [Self; 7] = [
+        Self::Up,
+        Self::Down,
+        Self::Left,
+        Self::Right,
+        Self::Play,
+        Self::Stop,
+        Self::Record,
+    ];
+}
+
+/// The controls the panel carries.
+///
+/// Encoders are counted and buttons are not, because the two are addressed
+/// differently: an encoder is positional, meaning whatever the page beneath it
+/// currently shows, while a button means the same thing on every page. Counting
+/// a button would throw away the only useful thing about it, and [`Button`]
+/// carries its own count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlProfile {
     /// Rotary encoders, which turn in either direction without a limit and
     /// press.
     pub encoders: usize,
-    /// Buttons, which are pressed or not.
-    pub buttons: usize,
 }
 
 /// The audio device the engine is built against.
@@ -98,7 +143,9 @@ impl DeviceProfile {
     ///
     /// The screen is a 320×240 panel drawn with an 8×16 cell, which is 40
     /// columns by 15 rows — small enough that a default 80×24 terminal can
-    /// always show a whole frame. The audio device is the configuration a
+    /// always show a whole frame. The panel carries four encoders, one per
+    /// parameter slot a page can show, alongside the buttons in [`Button`] and
+    /// a shift modifier. The audio device is the configuration a
     /// class-compliant USB interface offers everywhere: 48 kHz in blocks of
     /// 256 frames, which is 5.33 ms of deadline per callback. Four cores is a
     /// quad-core ARM board of the kind this would be built on.
@@ -107,10 +154,7 @@ impl DeviceProfile {
             columns: 40,
             rows: 15,
         },
-        controls: ControlProfile {
-            encoders: 4,
-            buttons: 8,
-        },
+        controls: ControlProfile { encoders: 4 },
         audio: AudioProfile {
             sample_rate: 48_000,
             block_size: 256,

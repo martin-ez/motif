@@ -1,7 +1,7 @@
 //! The device profile: the frozen shape of the machine `motif` is built for,
 //! and the arithmetic the rest of the crate sizes itself with.
 
-use motif::device::{AudioProfile, DeviceProfile, ScreenProfile};
+use motif::device::{AudioProfile, Button, DeviceProfile, ScreenProfile};
 
 fn target() -> DeviceProfile {
     DeviceProfile::TARGET
@@ -51,11 +51,40 @@ fn the_target_screen_fits_in_a_default_terminal() {
 }
 
 #[test]
-fn the_target_offers_every_kind_of_control() {
+fn the_target_offers_encoders_to_turn() {
     let controls = target().controls;
 
     assert!(controls.encoders > 0);
-    assert!(controls.buttons > 0);
+}
+
+#[test]
+fn no_button_is_listed_twice() {
+    for (position, button) in Button::ALL.iter().enumerate() {
+        let duplicate = Button::ALL[position + 1..].contains(button);
+
+        assert!(!duplicate, "{button:?} is listed more than once");
+    }
+}
+
+#[test]
+fn a_button_is_its_own_position_in_the_panel() {
+    for (position, button) in Button::ALL.iter().enumerate() {
+        assert_eq!(*button as usize, position);
+    }
+}
+
+#[test]
+fn the_panel_navigates_in_four_directions() {
+    for direction in [Button::Up, Button::Down, Button::Left, Button::Right] {
+        assert!(Button::ALL.contains(&direction), "{direction:?} is missing");
+    }
+}
+
+#[test]
+fn the_panel_carries_the_transport() {
+    for transport in [Button::Play, Button::Stop, Button::Record] {
+        assert!(Button::ALL.contains(&transport), "{transport:?} is missing");
+    }
 }
 
 #[test]
