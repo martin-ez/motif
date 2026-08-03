@@ -97,6 +97,16 @@ fn changed_cells_side_by_side_are_one_positioned_run() {
 }
 
 #[test]
+fn a_run_of_changes_keeps_growing_past_the_second_cell() {
+    let output = render_after(
+        &Frame::blank(),
+        &drawn(&[(3, 2, 'x'), (4, 2, 'y'), (5, 2, 'z')]),
+    );
+
+    assert_eq!(output, "\u{1b}[3;4Hxyz");
+}
+
+#[test]
 fn a_gap_between_changes_starts_a_new_run() {
     let output = render_after(&Frame::blank(), &drawn(&[(3, 2, 'x'), (6, 2, 'y')]));
 
