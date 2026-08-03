@@ -1,22 +1,16 @@
 ---
 name: file
-description: Track new scope that has no issue yet — a bug found mid-task, a follow-up, a dependency that needs replacing. Checks for duplicates, sets area, kind and size, and wires the dependency edges so it does not sink to the bottom of the queue. Use when something needs an issue, when tempted to write TODO or FIXME, or when work turns up that is out of scope for the task in hand.
+description: Track new scope that has no issue yet — a bug found mid-task, a follow-up, a dependency to replace. Use when something needs an issue, when tempted to write TODO or FIXME, or when work turns up outside the task in hand.
 ---
 
 # File new scope
 
-**File it, wire it, keep going.** This usually fires in the middle of another
-task, and the whole point is that you return to that task afterwards. Scope creep
-is the most expensive thing that happens here.
+**File it, wire it, keep going.** This fires in the middle of another task, and
+the point is that you return to that task afterwards.
 
-To decide whether it is even a separate issue: if the fix is needed to make the
-claimed issue's tests pass, it is part of the current task. If it can be
-described without reference to the current task, it is a new issue.
-
-This is also what to do instead of a marker comment. `TODO`, `FIXME`, `XXX` and
-`HACK` are rejected by `check-style.sh` — incomplete work goes behind a Cargo
-feature named for the capability, and into an issue where it is queryable and can
-block other work.
+Is it separate work? If the fix is needed to make the claimed issue's tests pass,
+it belongs to the current task. If it can be described without reference to that
+task, it is a new issue. This is also what to do instead of a `TODO` marker.
 
 ## 1. Check it is not already filed
 
@@ -24,69 +18,42 @@ block other work.
 scripts/track.sh find ring
 ```
 
-This matches titles across **open and closed** issues, locally, without touching
-the search index. Closed matches are the ones that matter: something filed,
-rejected and closed last week is exactly what gets filed again.
+Matches titles across open **and closed** issues. The closed ones are what
+matter: something filed, rejected and closed last week is exactly what gets filed
+again. Titles only, so try the words someone else would have reached for, not
+just your own.
 
-It matches titles only, so a duplicate worded differently still slips through.
-Try the two or three words someone else would have reached for, not just your
-own. If you suspect a duplicate you cannot find, say so in the body and let a
-human close it.
+## 2. Label it
 
-## 2. Set the three required labels
+`--area`, `--kind` and `--size`, all three required. `size:l` cannot be claimed —
+either split it immediately with `--parent`, or file it knowing it is a container
+whose children are the real work.
 
-`add` refuses without all three.
+## 3. Write a body that reads cold
 
-- **area** — `engine`, `seq`, `synth`, `ui`, `io`, `infra`
-- **kind** — `feat`, `bug`, `chore`, `spike`
-- **size** — `s` well under one session, `m` about one session, `l` too big to
-  claim
-
-`size:l` cannot be claimed at all. If the answer is honestly `l`, either split it
-immediately with `--parent`, or file it as an epic knowing it is a container and
-its children are the real work.
-
-## 3. Write a body someone can pick up cold
-
-Context, then a `### Done when` that names an observable outcome. "The meter
-reads within 1 dB of the input" is testable; "metering works" is not.
-
-- Touching the audio callback, the beat grid, or the UI backend boundary? Name
-  the invariant it must not break.
-- Making an accuracy claim? It needs a fixture set and a metric, which usually
-  means a dependency on the fixture harness rather than a sentence.
-
-An issue is the right home for unbuilt work — that is what rule 1.7 pushes it
-here for. Be concrete about the problem and the done condition; leave the
-implementation to whoever claims it.
+Context, then a `### Done when` naming an observable outcome. Name the invariant
+if it touches the audio callback, the beat grid or the UI backend. An accuracy
+claim needs a dependency on the fixture harness, not a sentence.
 
 ## 4. Wire the edges
 
 **The step that gets skipped.** `ready` sorts by how much each issue unblocks, so
-an issue filed with no edges sorts last and stays invisible indefinitely.
+one filed with no edges sorts last and stays invisible.
 
 Ask what someone would reach for on day one of this work. If that is an open
 issue, it is a blocker.
 
 ```sh
-scripts/track.sh add -t 'Report the actual block size after negotiation' \
-  --area io --kind bug --size s -F body.md \
-  --blocked-by 75 --blocking 88
+scripts/track.sh add -t 'Report the block size after negotiation' \
+  --area io --kind bug --size s -F body.md --blocked-by 75 --blocking 88
 ```
 
-`--parent N` instead, if it belongs to an epic rather than depending on one.
+`--parent N` instead, when it belongs to an epic rather than depends on one.
 
-## 5. Confirm it landed where you meant
+## 5. Confirm, then go back
 
-```sh
-scripts/track.sh ready
-```
+`scripts/track.sh ready` — if it should be ready and is not, an edge is wrong. If
+it landed with no `(unblocks …)` count, that is usually a missing `--blocking`.
 
-If it should be ready and is not, an edge is wrong. If it appeared with no
-`(unblocks …)` count, reconsider whether it really holds nothing up — that is
-usually a missing `--blocking` rather than a genuinely isolated task.
-
-## 6. Go back to what you were doing
-
-Reference the new number from the current pull request body if it is related.
-Do not start on it: one task per session.
+Reference the new number from the current pull request if it is related. Do not
+start on it.
