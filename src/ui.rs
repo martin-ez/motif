@@ -38,7 +38,17 @@ impl Cell {
     pub const BLANK: Self = Self::new(' ');
 
     /// A cell showing `glyph`.
+    ///
+    /// A control character is replaced by [`BLANK`](Self::BLANK). Escape,
+    /// newline and carriage return are not glyphs: written to a screen they
+    /// move the cursor rather than fill a cell, which would put a backend's
+    /// idea of where it is out of step with the frame. It would also let an
+    /// escape sequence through one cell at a time, which is the thing this
+    /// module exists to make unreachable.
     pub const fn new(glyph: char) -> Self {
+        if glyph.is_control() {
+            return Self { glyph: ' ' };
+        }
         Self { glyph }
     }
 

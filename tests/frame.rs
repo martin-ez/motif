@@ -33,6 +33,27 @@ fn step_between(from: (usize, usize), to: (usize, usize)) -> isize {
 }
 
 #[test]
+fn a_cell_shows_the_glyph_it_was_made_with() {
+    assert_eq!(Cell::new('x').glyph(), 'x');
+}
+
+#[test]
+fn a_blank_cell_shows_a_space() {
+    assert_eq!(Cell::BLANK.glyph(), ' ');
+}
+
+#[test]
+fn an_escape_character_is_not_a_glyph() {
+    assert_eq!(Cell::new('\u{1b}'), Cell::BLANK);
+}
+
+#[test]
+fn a_line_break_is_not_a_glyph() {
+    assert_eq!(Cell::new('\n'), Cell::BLANK);
+    assert_eq!(Cell::new('\r'), Cell::BLANK);
+}
+
+#[test]
 fn a_blank_frame_holds_only_blank_cells() {
     let frame = Frame::blank();
 
