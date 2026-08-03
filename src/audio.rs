@@ -1,14 +1,19 @@
-//! Opening a duplex audio stream and reporting what the device granted.
+//! Opening a duplex audio stream, and the boundary between its callback and
+//! the rest of the system.
 //!
 //! Devices are reached through [`AudioBackend`] rather than directly, so that
 //! the rest of the crate compiles against the abstraction and a backend with no
-//! hardware behind it can stand in where no audio device exists.
+//! hardware behind it can stand in where no audio device exists. Samples cross
+//! between the callback and the application thread through [`sample_ring`],
+//! which neither locks nor allocates.
 
 use std::fmt;
 
 mod cpal_backend;
+mod ring;
 
 pub use cpal_backend::{CpalBackend, CpalStream};
+pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 
 /// The sample rate and block size a stream is asked to run at.
 ///
