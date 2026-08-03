@@ -18,9 +18,10 @@
 //! genuinely do touch the same slot without synchronising on it, and only an
 //! atomic makes that defined. The slot is read and written relaxed; the index
 //! publication either side of it is what orders the data. A tag naming no
-//! command decodes as a gain, which is unreachable rather than merely unlikely:
-//! the only writer of a slot is [`CommandSender::send`], and the only reader is
-//! a [`CommandReceiver`] on a slot that a send has published.
+//! command is discarded rather than guessed at: the encoding is written in one
+//! place and read in another, so a command added to one and forgotten in the
+//! other is the mistake to design for, and a command applied as the wrong one
+//! is a worse outcome than a command not applied.
 //!
 //! Each end counts the commands it has moved since the queue was built, and the
 //! difference between the two counts is what the queue is holding — the same
@@ -63,12 +64,13 @@ impl Command {
         (tag << TAG_SHIFT) | u64::from(payload)
     }
 
-    fn from_bits(bits: u64) -> Self {
+    fn from_bits(bits: u64) -> Option<Self> {
         let payload = bits as u32;
         match bits >> TAG_SHIFT {
-            ARMED => Self::SetArmed(payload != 0),
-            MUTED => Self::SetMuted(payload != 0),
-            _ => Self::SetGain(f32::from_bits(payload)),
+            ARMED => Some(Self::SetArmed(payload != 0)),
+            MUTED => Some(Self::SetMuted(payload != 0)),
+            GAIN => Some(Self::SetGain(f32::from_bits(payload))),
+            _ => None,
         }
     }
 }
@@ -77,9 +79,8 @@ impl Command {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SendError {
-    /// The queue is full, because the callback has not drained what is already
-    /// in it. The command was not queued, and the sender decides whether to
-    /// retry it or to drop it.
+    /// The queue has no room. The command was not queued, and the sender
+    /// decides whether to retry it or to drop it.
     Full,
 }
 
@@ -198,7 +199,7 @@ impl CommandReceiver {
         let bits = self.queue.slot(received).load(Ordering::Relaxed);
         self.queue.received.store(received + 1, Ordering::Release);
 
-        Some(Command::from_bits(bits))
+        Command::from_bits(bits)
     }
 
     /// Take every command that was waiting when the drain began, oldest first.
