@@ -199,6 +199,10 @@ explain a function that a reader can simply open. Explain the problem, the
 decision, and anything a reviewer could not infer — a trade-off taken, an
 alternative rejected, a risk accepted.
 
+Do not add a verification or test section. CI reports what passed, and prose
+repeating it is a claim rather than evidence. The shape is: context, then
+`### Changes`, then optional `### Notes` — the template in `.github/` has it.
+
 **4.4 Titles are at most 50 characters.** This is the width `git log --oneline`
 gives you before truncating, and the check rejects 51. If the change will not
 fit, it is usually two changes.
@@ -230,11 +234,11 @@ ladder as it goes:
 | 3.3 no direct pushes to `main` | ruleset — pull request required, force-push and deletion blocked | push rejected |
 | 3.2 linear history | ruleset — squash or rebase merges only | merge blocked |
 | 4.2 title format | `PR hygiene` workflow | CI fails |
-| 4.4 title under 50 characters | `PR hygiene` workflow | CI fails |
+| 4.4 title at most 50 characters | `PR hygiene` workflow | CI fails |
 | 4.5 no co-authors, no tool attribution | `PR hygiene` workflow, over every commit and the body | CI fails |
 | 4.1, 4.3 concision, no implementation walkthrough | review | review |
 | 1.3 private items *not* documented | review — no lint exists for the inverse | review |
-| 1.1, 1.2, 1.5 clarity | review, plus the pull request checklist | review |
+| 1.1, 1.2, 1.5 clarity | review | review |
 | 2.2 red-before-green ordering | not observable in a diff | honour |
 | 3.1, 3.2 branch size and age | review | review |
 
