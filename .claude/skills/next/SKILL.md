@@ -55,8 +55,11 @@ gate from AGENTS.md — all six, including the aarch64 cross-check.
 
 ## 6. Stop at a draft pull request
 
-**Do not close the issue and do not merge.** `scripts/track.sh done 74 -m "…"`
-runs only after someone else merges; closing it earlier has the tracker assert
+Link the issue in the body on its own line — `Tracks #74`, never `Closes`.
+
+**Do not close the issue and do not merge.** Merging settles it: the `tracking`
+workflow runs `done` for every issue the body tracks, and `release` if the pull
+request is closed unmerged. Closing it by hand earlier has the tracker assert
 work is in `main` when it is not.
 
-Abandoning instead: `scripts/track.sh release 74`.
+Abandoning without a pull request: `scripts/track.sh release 74`.
