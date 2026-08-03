@@ -16,6 +16,22 @@ fn last_row() -> usize {
     SCREEN.rows - 1
 }
 
+fn index_of(frame: &Frame, cell: Cell) -> isize {
+    frame
+        .cells()
+        .iter()
+        .position(|candidate| *candidate == cell)
+        .expect("the cell was drawn somewhere") as isize
+}
+
+fn step_between(from: (usize, usize), to: (usize, usize)) -> isize {
+    let mut frame = Frame::blank();
+    frame.set(from.0, from.1, Cell::new('a'));
+    frame.set(to.0, to.1, Cell::new('b'));
+
+    index_of(&frame, Cell::new('b')) - index_of(&frame, Cell::new('a'))
+}
+
 #[test]
 fn a_blank_frame_holds_only_blank_cells() {
     let frame = Frame::blank();
@@ -46,6 +62,16 @@ fn a_cell_is_addressed_by_column_before_row() {
     frame.set(3, 2, Cell::new('x'));
 
     assert_eq!(frame.get(2, 3), Some(Cell::BLANK));
+}
+
+#[test]
+fn the_cell_one_column_right_is_the_very_next_cell() {
+    assert_eq!(step_between((3, 2), (4, 2)), 1);
+}
+
+#[test]
+fn the_cell_one_row_down_is_a_whole_screen_width_on() {
+    assert_eq!(step_between((3, 2), (3, 3)), SCREEN.columns as isize);
 }
 
 #[test]
