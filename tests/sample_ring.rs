@@ -106,6 +106,28 @@ fn a_read_of_a_partly_filled_ring_reports_how_much_it_got() {
 }
 
 #[test]
+fn a_read_leaves_the_rest_of_the_output_untouched() {
+    let (mut producer, mut consumer) = sample_ring(8);
+    let mut taken = [9.0; 4];
+    producer.write(&[1.0]);
+
+    consumer.read(&mut taken);
+
+    assert_eq!(taken, [1.0, 9.0, 9.0, 9.0]);
+}
+
+#[test]
+fn a_write_that_does_not_fit_leaves_the_samples_it_took_intact() {
+    let (mut producer, mut consumer) = sample_ring(4);
+    let mut taken = [0.0; 4];
+
+    producer.write(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    consumer.read(&mut taken);
+
+    assert_eq!(taken, [1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
 fn a_read_leaves_the_samples_it_did_not_take() {
     let (mut producer, mut consumer) = sample_ring(8);
     let mut first = [0.0; 2];
