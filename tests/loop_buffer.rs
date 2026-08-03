@@ -114,6 +114,15 @@ fn a_new_buffer_holds_nothing() {
 }
 
 #[test]
+fn a_buffer_holding_a_frame_is_not_empty() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+
+    buffer.record(&[0.1]);
+
+    assert!(!buffer.is_empty());
+}
+
+#[test]
 fn recorded_frames_are_read_back_in_the_order_they_arrived() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
 
