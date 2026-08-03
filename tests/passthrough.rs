@@ -136,6 +136,29 @@ fn a_ring_that_has_run_dry_does_not_repeat_itself() {
 }
 
 #[test]
+fn a_trailing_part_of_a_frame_is_silenced_rather_than_left() {
+    let (mut input, mut output) = passthrough(config(1, 2), 0);
+    let mut played = [9.0; 5];
+
+    input.capture(&[0.5, 0.5]);
+    output.render(&mut played);
+
+    assert_eq!(played, [0.5, 0.5, 0.5, 0.5, 0.0]);
+}
+
+#[test]
+fn an_output_too_short_for_one_frame_is_silenced() {
+    let (mut input, mut output) = passthrough(config(1, 4), 0);
+    let mut played = [9.0; 3];
+
+    input.capture(&[0.5]);
+    let rendered = output.render(&mut played);
+
+    assert_eq!(rendered, 0);
+    assert_eq!(played, [0.0; 3]);
+}
+
+#[test]
 fn slack_delays_playback_by_that_many_frames() {
     let (mut input, mut output) = passthrough(config(1, 1), 2);
     let mut played = [0.0; 4];

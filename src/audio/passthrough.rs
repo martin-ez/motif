@@ -142,8 +142,9 @@ impl PassthroughOutput {
     /// channels in place, last frame first. A frame sits at or below the slot
     /// it spreads into, so working backwards writes only over slots already
     /// read — which is what lets this end hold no buffer of its own, and take
-    /// an `output` of any length. Samples past the last whole frame are left
-    /// untouched.
+    /// an `output` of any length. Nothing is left as it was found, including a
+    /// trailing part of a frame: every slot the ring did not fill is silenced,
+    /// for the same reason the underrun is.
     pub fn render(&mut self, output: &mut [f32]) -> usize {
         let frames = output.len() / self.channels;
         let supplied = self.consumer.read(&mut output[..frames]);
@@ -153,6 +154,7 @@ impl PassthroughOutput {
             let sample = output[frame];
             output[frame * self.channels..][..self.channels].fill(sample);
         }
+        output[frames * self.channels..].fill(0.0);
 
         supplied
     }

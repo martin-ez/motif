@@ -60,15 +60,22 @@ impl AudioBackend for CpalBackend {
     type Stream = CpalStream;
 
     /// The two callbacks are joined by a [`passthrough`] path, so audio at the
-    /// input is audible at the output for as long as the stream runs. Its slack
-    /// is one block, which is the least give that keeps a playback callback
-    /// from reading a ring the capture callback has not reached yet — the two
-    /// are separate streams, and nothing orders one against the other.
+    /// input is audible at the output. Its slack is one block, which is the
+    /// least give that keeps a playback callback from reading a ring the
+    /// capture callback has not reached yet — the two are separate streams, and
+    /// nothing orders one against the other.
     ///
-    /// The path is sized from the requested block size, because the granted one
-    /// is only readable once the stream it belongs to exists. A device that
-    /// grants a larger block is carried a block at a time rather than dropped.
+    /// The path has to be sized before either stream exists, because a stream
+    /// wants its callback at the moment it is built and only reports the block
+    /// size it was granted afterwards. It is sized from the request, so a
+    /// device that grants a larger block than it was asked for is refused here
+    /// rather than run against a path too small to feed it — which would be
+    /// audible on every callback for the life of the stream.
     fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
+        if request.block_size == 0 {
+            return Err(DeviceError::UnsupportedConfig);
+        }
+
         let host = cpal::default_host();
         let input = host
             .default_input_device()
@@ -153,6 +160,11 @@ impl AudioBackend for CpalBackend {
             .map_err(|e| classify(&e))?;
 
         let block_size = output_stream.buffer_size().map_err(|e| classify(&e))?;
+        let captured_block_size = input_stream.buffer_size().map_err(|e| classify(&e))?;
+
+        if block_size > request.block_size || captured_block_size > request.block_size {
+            return Err(DeviceError::UnsupportedConfig);
+        }
 
         Ok(CpalStream {
             config: StreamConfig {
