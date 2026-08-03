@@ -167,21 +167,35 @@ not a fact about the change.
 second tracker — dual tracking is the main way a project like this loses track of
 itself.
 
+**Reach it through `scripts/track.sh`, never `gh` directly.**
+
 ```sh
-gh issue list --search "is:open -is:blocked"
-gh issue create --title "..." --body-file spec.md --parent 12 --blocked-by 8,9
-gh issue edit 14 --add-blocked-by 8 --add-sub-issue 15
+scripts/track.sh ready            # what can be started right now
+scripts/track.sh show 7           # one issue in full, before you write any code
+scripts/track.sh claim 7          # exit 2: someone else has it, take the next row
+scripts/track.sh done 7 -m "..."  # closes it, prints what that unblocked
+scripts/track.sh --help           # add, dep, note, release, blocked, graph, doctor
 ```
 
-> Dependency queries must go through `gh issue list --search`, which uses
-> GitHub's *advanced* index. The legacy index — raw GraphQL `search(type: ISSUE)`,
-> or REST without `advanced_search=true` — silently ignores `is:blocked` and
-> returns wrong results with no error.
+Take the top row of `ready`; it sorts by how much each item unblocks, so the top
+row is the one that frees the most work. Any non-zero exit other than 2 is fatal
+— surface stderr and stop. Release anything you will not finish.
 
-Issue types and fields are organisation-only and unavailable here, so use labels.
-Writes are capped at 80/minute and 500/hour account-wide; space out bulk
-creation. Report progress with `gh issue comment N --edit-last --create-if-none`
-so a long task leaves one updating comment rather than a wall of them.
+> This is a correctness rule, not a preference. The legacy search index — raw
+> GraphQL `search(type: ISSUE)`, or REST without `advanced_search=true` —
+> silently ignores `is:blocked` and returns blocked issues as ready, with a 200
+> and no error. The script derives readiness from each issue's `blockedBy`
+> payload instead, which makes that failure unreachable rather than merely
+> documented, and read-your-writes consistent where the index lags by seconds.
+
+It also spaces writes against the 80/minute and 500/hour account limits, and
+holds a lock across both the read and the write in `claim`, so two agents cannot
+take the same issue.
+
+Issue types and fields are organisation-only, so metadata is labels: `area:`,
+`kind:` and `size:`, all three required by `add`. `ready` offers only what
+`claim` will accept — a `size:l` issue is listed under `SPLIT:` instead, and is
+split with `add --parent <n>`.
 
 ## Working agreement
 
