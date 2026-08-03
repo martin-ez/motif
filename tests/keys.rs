@@ -40,6 +40,17 @@ impl Read for Chunks {
     }
 }
 
+/// A source that never runs dry, standing in for a page of text pasted into the
+/// terminal and arriving as keystrokes.
+struct Endless;
+
+impl Read for Endless {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        buffer.fill(b'.');
+        Ok(buffer.len())
+    }
+}
+
 /// A source that refuses every read, standing in for a keyboard that has gone.
 struct BrokenSource;
 
@@ -231,6 +242,13 @@ fn an_escape_sequence_that_never_ends_is_no_event() {
 #[test]
 fn nothing_to_read_is_no_event() {
     assert!(events(b"").is_empty());
+}
+
+#[test]
+fn a_poll_gives_up_on_a_source_that_never_runs_dry() {
+    let mut reader = KeyReader::new(Endless);
+
+    assert_eq!(reader.poll(), None);
 }
 
 #[test]

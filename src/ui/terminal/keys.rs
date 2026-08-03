@@ -12,7 +12,6 @@ use crate::ui::{ControlEvent, Controls, Turn};
 const ESCAPE: u8 = 0x1b;
 const PARAMETERS_START: usize = 2;
 const PENDING_CAPACITY: usize = 64;
-const MOST_STEPS_PER_POLL: usize = 2 * PENDING_CAPACITY;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Key {
@@ -185,10 +184,10 @@ fn next_press(bytes: &[u8]) -> Step {
 /// terminal is put into a mode that returns immediately by
 /// [`TerminalScreen`](super::TerminalScreen).
 ///
-/// A poll is bounded work for the same reason. It gives up after a couple of
-/// passes over the buffer, so a source that never runs dry — a pasted page of
-/// text arriving as keystrokes — costs one frame rather than all of them, and
-/// what it did not reach is still there for the next poll.
+/// A poll is bounded work for the same reason. It gives up after a bufferful of
+/// bytes that yield no control, so a source that never runs dry — a pasted page
+/// of text arriving as keystrokes — costs one frame rather than hanging in one,
+/// and what it did not reach is still there for the next poll.
 ///
 /// A key that arrives split across reads — an escape sequence is several bytes,
 /// and a terminal is under no obligation to deliver them together — is held
@@ -232,7 +231,7 @@ impl<R: Read> KeyReader<R> {
 
 impl<R: Read> Controls for KeyReader<R> {
     fn poll(&mut self) -> Option<ControlEvent> {
-        for _ in 0..MOST_STEPS_PER_POLL {
+        for _ in 0..PENDING_CAPACITY {
             match next_press(&self.pending[..self.filled]) {
                 Step::Took { bytes, press } => {
                     self.take(bytes);
