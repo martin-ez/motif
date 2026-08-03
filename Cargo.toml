@@ -19,6 +19,7 @@ name = "motif"
 path = "src/main.rs"
 
 [dependencies]
+cpal = "0.18.1"
 
 [dev-dependencies]
 
