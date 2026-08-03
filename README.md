@@ -97,11 +97,14 @@ omissions otherwise:
 - **Incomplete work sits behind Cargo features**, off by default, so branches
   stay short-lived and `main` stays green.
 
-Work that is ready to pick up — open, with nothing open blocking it:
+Work that is ready to pick up — open, unclaimed, with nothing open blocking it:
 
 ```sh
-gh issue list --search "is:open -is:blocked"
+scripts/track.sh ready
 ```
+
+Not `gh issue list --search`: the legacy search index ignores `is:blocked` and
+returns blocked issues as though they were ready, with a 200 and no error.
 
 ## Licence
 
