@@ -166,6 +166,12 @@ usually two changes.
 attribution in any body. Agents especially: the tool that produced a change is
 not a fact about the change.
 
+**4.6 Link the issue with `Tracks #N`, on a line of its own.** Merging then runs
+`done` for every number on that line, and closing the pull request unmerged runs
+`release`. Never a keyword GitHub acts on itself — `Closes`, `Fixes` — which
+closes the issue behind `track.sh`'s back, leaves `wip` set, and binds to only
+the first of several numbers.
+
 ## Task tracking
 
 **GitHub Issues is the single source of truth.** Not a markdown TODO list, not a
