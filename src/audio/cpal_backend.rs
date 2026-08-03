@@ -4,7 +4,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, DeviceError, DuplexStream, StreamConfig, StreamRequest, StreamState, passthrough,
+    AudioBackend, DeviceError, DuplexStream, LevelReader, Levels, StreamConfig, StreamRequest,
+    StreamState, level_meter, passthrough,
 };
 
 /// Audio devices reached through `cpal`.
@@ -71,6 +72,11 @@ impl AudioBackend for CpalBackend {
     /// device that grants a larger block than it was asked for is refused here
     /// rather than run against a path too small to feed it — which would be
     /// audible on every callback for the life of the stream.
+    ///
+    /// The capture callback also meters what the device handed it, before the
+    /// passthrough path folds the channels together. A meter is there to catch
+    /// clipping, and a channel at full scale disappears into the mean of a
+    /// frame it shares with a quiet one.
     fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
         if request.block_size == 0 {
             return Err(DeviceError::UnsupportedConfig);
@@ -130,6 +136,7 @@ impl AudioBackend for CpalBackend {
             },
             request.block_size as usize,
         );
+        let (mut level_writer, levels) = level_meter();
 
         let input_stream = input
             .build_input_stream_raw(
@@ -137,6 +144,7 @@ impl AudioBackend for CpalBackend {
                 SampleFormat::F32,
                 move |data: &Data, _: &_| {
                     if let Some(samples) = data.as_slice::<f32>() {
+                        level_writer.publish(samples);
                         passthrough_input.capture(samples);
                     }
                 },
@@ -176,6 +184,7 @@ impl AudioBackend for CpalBackend {
             state: StreamState::Stopped,
             input: input_stream,
             output: output_stream,
+            levels,
         })
     }
 }
@@ -186,6 +195,7 @@ pub struct CpalStream {
     state: StreamState,
     input: cpal::Stream,
     output: cpal::Stream,
+    levels: LevelReader,
 }
 
 impl DuplexStream for CpalStream {
@@ -202,6 +212,12 @@ impl DuplexStream for CpalStream {
     /// through the stream's error callback, which this type does not observe.
     fn state(&self) -> StreamState {
         self.state
+    }
+
+    /// Measured on the samples the input device delivered, across every channel
+    /// it delivered them on.
+    fn levels(&self) -> Levels {
+        self.levels.read()
     }
 
     /// Both streams are acted on before either error is returned, so one of

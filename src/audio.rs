@@ -6,15 +6,19 @@
 //! hardware behind it can stand in where no audio device exists. [`sample_ring`]
 //! carries samples between two threads without locking or allocating, which is
 //! what a real-time callback needs of anything it touches, and [`passthrough`]
-//! is what a duplex stream's two callbacks do with one.
+//! is what a duplex stream's two callbacks do with one. [`level_meter`] sends
+//! the other thing that crosses the boundary: not the audio itself but how loud
+//! it was.
 
 use std::fmt;
 
 mod cpal_backend;
+mod level;
 mod passthrough;
 mod ring;
 
 pub use cpal_backend::{CpalBackend, CpalStream};
+pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 
@@ -120,6 +124,13 @@ pub trait DuplexStream {
     /// Whether the callback is running.
     fn state(&self) -> StreamState;
 
+    /// How loud the most recent block of input was.
+    ///
+    /// Measured in the callback and published without a lock, so this reads
+    /// whatever the last block to arrive measured, and reads it again until the
+    /// next one does. A stopped stream keeps reporting the block it stopped on.
+    fn levels(&self) -> Levels;
+
     /// Start calling back.
     ///
     /// # Errors
@@ -194,6 +205,12 @@ impl DuplexStream for NullStream {
 
     fn state(&self) -> StreamState {
         self.state
+    }
+
+    /// A stream that moves no samples has nothing to measure, so this is always
+    /// [`Levels::SILENT`].
+    fn levels(&self) -> Levels {
+        Levels::SILENT
     }
 
     fn start(&mut self) -> Result<(), DeviceError> {
