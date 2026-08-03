@@ -3,8 +3,13 @@
 # `cargo check` never links, so pkg-config only has to succeed: a stub .pc is
 # enough, and keeps the aarch64 guard in AGENTS.md a plain `cargo check` away.
 #
+# Both variables carry the target suffix, which pkg-config reads in preference
+# to the bare name. A bare PKG_CONFIG_PATH would apply to host builds too, where
+# it shadows the real alsa.pc and hands the linker an -lasound that is not
+# there — passing every job that only type-checks and failing the ones that link.
+#
 # This validates type-checking and cfg resolution, not linking. Producing an
 # actual aarch64 binary still needs a sysroot with libasound2-dev:arm64.
 [env]
-PKG_CONFIG_ALLOW_CROSS = "1"
-PKG_CONFIG_PATH = { value = "cross/pkgconfig", relative = true }
+PKG_CONFIG_ALLOW_CROSS_aarch64_unknown_linux_gnu = "1"
+PKG_CONFIG_PATH_aarch64_unknown_linux_gnu = { value = "cross/pkgconfig", relative = true }
