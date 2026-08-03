@@ -3,7 +3,9 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
-use super::{AudioBackend, DeviceError, DuplexStream, StreamConfig, StreamRequest, StreamState};
+use super::{
+    AudioBackend, DeviceError, DuplexStream, StreamConfig, StreamRequest, StreamState, passthrough,
+};
 
 /// Audio devices reached through `cpal`.
 ///
@@ -57,6 +59,15 @@ fn offers(
 impl AudioBackend for CpalBackend {
     type Stream = CpalStream;
 
+    /// The two callbacks are joined by a [`passthrough`] path, so audio at the
+    /// input is audible at the output for as long as the stream runs. Its slack
+    /// is one block, which is the least give that keeps a playback callback
+    /// from reading a ring the capture callback has not reached yet — the two
+    /// are separate streams, and nothing orders one against the other.
+    ///
+    /// The path is sized from the requested block size, because the granted one
+    /// is only readable once the stream it belongs to exists. A device that
+    /// grants a larger block is carried a block at a time rather than dropped.
     fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
         let host = cpal::default_host();
         let input = host
@@ -103,11 +114,25 @@ impl AudioBackend for CpalBackend {
             buffer_size: cpal::BufferSize::Fixed(request.block_size),
         };
 
+        let (mut passthrough_input, mut passthrough_output) = passthrough(
+            StreamConfig {
+                sample_rate: request.sample_rate,
+                block_size: request.block_size,
+                input_channels,
+                output_channels,
+            },
+            request.block_size as usize,
+        );
+
         let input_stream = input
             .build_input_stream_raw(
                 input_config,
                 SampleFormat::F32,
-                |_: &Data, _: &_| {},
+                move |data: &Data, _: &_| {
+                    if let Some(samples) = data.as_slice::<f32>() {
+                        passthrough_input.capture(samples);
+                    }
+                },
                 |_| {},
                 None,
             )
@@ -117,9 +142,9 @@ impl AudioBackend for CpalBackend {
             .build_output_stream_raw(
                 output_config,
                 SampleFormat::F32,
-                |data: &mut Data, _: &_| {
+                move |data: &mut Data, _: &_| {
                     if let Some(samples) = data.as_slice_mut::<f32>() {
-                        samples.fill(0.0);
+                        passthrough_output.render(samples);
                     }
                 },
                 |_| {},
