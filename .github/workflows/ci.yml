@@ -24,6 +24,16 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features
 
+  style:
+    name: house style
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # AGENTS.md rules that rustc and clippy cannot express: no inline
+      # comments, no test modules under src/, no TODO markers, no prose outside
+      # the code beyond a folder README, no documentation of unbuilt features.
+      - run: scripts/check-style.sh
+
   docs:
     name: docs
     runs-on: ubuntu-latest
@@ -59,6 +69,31 @@ jobs:
       # unsafe.
       - run: cargo check --all-targets
       - run: cargo check --all-targets --no-default-features
+
+  mutants:
+    name: mutation coverage
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # Test-first ordering is not observable in a diff, but its purpose is:
+      # tests that genuinely constrain behaviour. cargo-mutants alters the code
+      # and fails when no test notices. Scoped to the diff so the runtime stays
+      # proportional to the change.
+      - run: |
+          git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
+          cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 2
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: mutants.out
 
   aarch64:
     name: cross-compile guard (aarch64)

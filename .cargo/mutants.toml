@@ -1,0 +1,5 @@
+# Mutating the binary entry point reports a miss that no test could ever catch:
+# main is a shell over the library, and there is nothing in it to constrain.
+# Keeping it that thin is deliberate — the behaviour worth testing lives in the
+# library, where tests/ can reach it as an external consumer.
+exclude_globs = ["src/main.rs"]
