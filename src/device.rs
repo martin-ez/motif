@@ -47,18 +47,49 @@ pub struct ScreenProfile {
 impl ScreenProfile {
     /// Cells in a full frame.
     pub const fn cells(self) -> usize {
-        self.columns * self.rows
+        self.columns.saturating_mul(self.rows)
     }
 }
 
-/// An encoder on the panel, named for where it sits.
-///
-/// The name is the position and nothing else: an encoder adjusts whatever the
-/// page beneath it is showing, so unlike a [`Button`] it carries no meaning of
-/// its own. It is a closed set rather than a count because an encoder the panel
-/// does not have should not be expressible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Encoder {
+macro_rules! panel_control {
+    (
+        $(#[$control_doc:meta])*
+        enum $control:ident;
+        $(#[$all_doc:meta])*
+        const ALL;
+        $($(#[$variant_doc:meta])* $variant:ident,)+
+    ) => {
+        $(#[$control_doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum $control {
+            $($(#[$variant_doc])* $variant,)+
+        }
+
+        impl $control {
+            $(#[$all_doc])*
+            pub const ALL: [Self; [$(stringify!($variant)),+].len()] = [$(Self::$variant),+];
+        }
+    };
+}
+
+panel_control! {
+    /// An encoder on the panel, named for where it sits.
+    ///
+    /// The name is the position and nothing else: an encoder adjusts whatever
+    /// the page beneath it is showing, so unlike a [`Button`] it carries no
+    /// meaning of its own. It is a closed set rather than a count because an
+    /// encoder the panel does not have should not be expressible.
+    ///
+    /// The set is declared once, and [`ALL`](Self::ALL) is generated from that
+    /// declaration. An encoder cannot be added to the panel and left out of the
+    /// array, which would compile and then index past the end of anything sized
+    /// by `ALL.len()`.
+    enum Encoder;
+    /// Every encoder, left to right.
+    ///
+    /// An encoder's position here is its discriminant, so `encoder as usize`
+    /// indexes an array sized by `ALL.len()`.
+    const ALL;
     /// The leftmost encoder.
     First,
     /// The second encoder from the left.
@@ -69,26 +100,26 @@ pub enum Encoder {
     Fourth,
 }
 
-impl Encoder {
-    /// Every encoder, left to right.
+panel_control! {
+    /// A button on the panel, named for what it is rather than numbered.
     ///
-    /// An encoder's position here is its discriminant, so `encoder as usize`
+    /// Naming them is what lets a backend's key mapping be checked: a `match`
+    /// over this enum stops compiling when the panel gains a button, so the
+    /// terminal's table of keys cannot silently fall behind the device. As with
+    /// [`Encoder`], the set is declared once and [`ALL`](Self::ALL) is
+    /// generated from it, so the two cannot drift apart.
+    ///
+    /// Shift is absent deliberately. It is a modifier — it changes what another
+    /// control means rather than meaning anything alone — so a backend resolves
+    /// it and stamps it onto the event. A `Shift` variant here would put the
+    /// held state back into every consumer, which is key handling with a new
+    /// name.
+    enum Button;
+    /// Every button, in panel order.
+    ///
+    /// A button's position here is its discriminant, so `button as usize`
     /// indexes an array sized by `ALL.len()`.
-    pub const ALL: [Self; 4] = [Self::First, Self::Second, Self::Third, Self::Fourth];
-}
-
-/// A button on the panel, named for what it is rather than numbered.
-///
-/// Naming them is what lets a backend's key mapping be checked: a `match` over
-/// this enum stops compiling when the panel gains a button, so the terminal's
-/// table of keys cannot silently fall behind the device.
-///
-/// Shift is absent deliberately. It is a modifier — it changes what another
-/// control means rather than meaning anything alone — so a backend resolves it
-/// and stamps it onto the event. A `Shift` variant here would put the held
-/// state back into every consumer, which is key handling with a new name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Button {
+    const ALL;
     /// Navigate up.
     Up,
     /// Navigate down.
@@ -103,22 +134,6 @@ pub enum Button {
     Stop,
     /// Arm capture.
     Record,
-}
-
-impl Button {
-    /// Every button, in panel order.
-    ///
-    /// A button's position here is its discriminant, so `button as usize`
-    /// indexes an array sized by `ALL.len()`.
-    pub const ALL: [Self; 7] = [
-        Self::Up,
-        Self::Down,
-        Self::Left,
-        Self::Right,
-        Self::Play,
-        Self::Stop,
-        Self::Record,
-    ];
 }
 
 /// The audio device the engine is built against.
@@ -138,8 +153,12 @@ pub struct AudioProfile {
 
 impl AudioProfile {
     /// Frames in the longest capturable loop.
+    ///
+    /// Saturates rather than wrapping, so a profile too large for the target's
+    /// pointer width sizes a buffer that cannot be allocated instead of one
+    /// quietly too small to hold the loop.
     pub const fn max_loop_frames(self) -> usize {
-        self.sample_rate as usize * self.max_loop_seconds as usize
+        (self.sample_rate as usize).saturating_mul(self.max_loop_seconds as usize)
     }
 }
 
