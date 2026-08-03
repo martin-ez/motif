@@ -200,8 +200,11 @@ decision, and anything a reviewer could not infer — a trade-off taken, an
 alternative rejected, a risk accepted.
 
 Do not add a verification or test section. CI reports what passed, and prose
-repeating it is a claim rather than evidence. The shape is: context, then
-`### Changes`, then optional `### Notes` — the template in `.github/` has it.
+repeating it is a claim rather than evidence.
+
+The shape is context, then `### Changes`. A further section is allowed where
+something genuinely does not fit either — but reach for it rarely; most pull
+requests need those two and nothing else.
 
 **4.4 Titles are at most 50 characters.** This is the width `git log --oneline`
 gives you before truncating, and the check rejects 51. If the change will not
