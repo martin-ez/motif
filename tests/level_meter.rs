@@ -111,6 +111,14 @@ fn one_loud_sample_shows_in_the_peak_and_barely_in_the_rms() {
 }
 
 #[test]
+fn a_sample_that_is_not_finite_is_measured_as_silence() {
+    let levels = Levels::of(&[f32::NAN, 1.0, f32::INFINITY, 1.0]);
+
+    assert_eq!(levels.peak, 1.0);
+    assert_near(levels.rms, 0.5f32.sqrt());
+}
+
+#[test]
 fn silence_reads_zero_on_both() {
     assert_eq!(Levels::of(&[0.0; 16]), Levels::SILENT);
 }

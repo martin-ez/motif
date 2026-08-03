@@ -50,7 +50,13 @@ impl Levels {
     /// wants. Folding the channels together first would let one channel at full
     /// scale hide against another.
     ///
-    /// A block with no samples in it measures as [`SILENT`](Self::SILENT).
+    /// A block with no samples in it measures as [`SILENT`](Self::SILENT), and
+    /// so does a sample that is not finite. A driver is free to hand back
+    /// whatever is in its buffer, and left alone one such sample poisons the
+    /// whole block: comparison ignores a NaN where addition carries it, so the
+    /// block would read as an infinite peak beside an RMS of NaN — a pair no
+    /// block ever had, which is the thing packing the two into one word exists
+    /// to prevent.
     ///
     /// ```
     /// use motif::audio::Levels;
@@ -68,8 +74,11 @@ impl Levels {
         let mut peak = 0.0f32;
         let mut squares = 0.0f32;
         for sample in samples {
-            peak = peak.max(sample.abs());
-            squares += sample * sample;
+            let magnitude = sample.abs();
+            if magnitude.is_finite() {
+                peak = peak.max(magnitude);
+                squares += magnitude * magnitude;
+            }
         }
 
         Self {
@@ -79,7 +88,7 @@ impl Levels {
     }
 
     fn packed(self) -> u64 {
-        u64::from(self.peak.to_bits()) << 32 | u64::from(self.rms.to_bits())
+        (u64::from(self.peak.to_bits()) << 32) + u64::from(self.rms.to_bits())
     }
 
     fn unpacked(packed: u64) -> Self {
