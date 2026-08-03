@@ -1,0 +1,5 @@
+Name: alsa
+Description: Stub so cargo check can cross-compile without a sysroot
+Version: 1.2.0
+Libs: -lasound
+Cflags:

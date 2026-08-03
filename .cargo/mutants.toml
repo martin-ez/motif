@@ -2,4 +2,11 @@
 # main is a shell over the library, and there is nothing in it to constrain.
 # Keeping it that thin is deliberate — the behaviour worth testing lives in the
 # library, where tests/ can reach it as an external consumer.
-exclude_globs = ["src/main.rs"]
+#
+# The cpal backend is excluded for the same reason, one layer down: it is a
+# shell over cpal's API, and the runners have no audio device, so every test
+# that could constrain it is #[ignore]d and cargo-mutants would report misses
+# nothing could ever catch. The behaviour that is not cpal's — the lifecycle,
+# the granted configuration, the errors — lives behind AudioBackend and is
+# tested through NullBackend, which is mutated normally.
+exclude_globs = ["src/main.rs", "src/audio/cpal_backend.rs"]
