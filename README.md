@@ -80,8 +80,8 @@ AGENTS.md       how this project is built; read before contributing
 ## Development
 
 This project is built agentically. [`AGENTS.md`](AGENTS.md) holds the working
-agreement — documentation rules, test-first development, trunk-based branching,
-and how each rule is enforced. It applies to humans too.
+agreement: documentation rules, test-first development, and trunk-based
+branching. It applies to humans too.
 
 Four consequences worth knowing before reading the code, because they look like
 omissions otherwise:

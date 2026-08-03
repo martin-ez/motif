@@ -169,6 +169,10 @@ merged changes over one branch that accumulates.
 merge your own pull request. Every check must pass before a merge, and a change
 that breaks `main` is reverted first and diagnosed second.
 
+`main` carries a ruleset with no bypass. A direct push is rejected rather than
+warned about, and no credential in this repository can override it — so a
+rejection means find another route, not try harder.
+
 **3.4 Incomplete work sits behind a feature flag.** Use Cargo features, named for
 the capability rather than the ticket. CI builds both with default features and
 with `--no-default-features`, so a flag that only compiles when enabled is caught.
@@ -207,49 +211,6 @@ fit, it is usually two changes.
 tool attribution in any pull request body. Agents included, and agents
 especially — the tool that produced a change is not a fact about the change, and
 the history should not be a record of what was fashionable.
-
----
-
-## How these are enforced
-
-Rules that live only in this file get broken. Each one is pushed as far up this
-ladder as it goes:
-
-| Rule | Enforced by | Tier |
-|---|---|---|
-| 2.1 only public members tested | the compiler — tests in `tests/` cannot see private items | impossible to break |
-| 1.3 every public item documented | `missing_docs` + `-D warnings` | CI fails |
-| 1.4 no inline comments | `scripts/check-style.sh` | CI fails |
-| 1.6 prose outside code is folder READMEs only | `scripts/check-style.sh` | CI fails |
-| 1.7 no documentation of unbuilt features | `scripts/check-style.sh`, on the phrases that give it away | CI fails |
-| 3.4 no `TODO` markers | `scripts/check-style.sh` | CI fails |
-| 3.4 feature flags compile both ways | default and `--no-default-features` builds | CI fails |
-| 1.5 doc examples stay true | `cargo test --doc` | CI fails |
-| 2.2 tests actually constrain behaviour | `cargo-mutants` on the diff | CI fails |
-| 3.3 `main` green | every check above is a **required status check** on `main` | merge blocked |
-| 3.3 no direct pushes to `main` | ruleset — pull request required, force-push and deletion blocked | push rejected |
-| 3.2 linear history | ruleset — squash or rebase merges only | merge blocked |
-| 4.2 title format | `PR hygiene` workflow | CI fails |
-| 4.4 title at most 50 characters | `PR hygiene` workflow | CI fails |
-| 4.5 no co-authors, no tool attribution | `PR hygiene` workflow, over every commit and the body | CI fails |
-| 4.1, 4.3 concision, no implementation walkthrough | review | review |
-| 1.3 private items *not* documented | review — no lint exists for the inverse | review |
-| 1.1, 1.2, 1.5 clarity | review | review |
-| 2.2 red-before-green ordering | not observable in a diff | honour |
-| 3.1, 3.2 branch size and age | review | review |
-
-The `main` branch carries a ruleset with **no bypass actors**, deliberately. An
-agent runs with the repository owner's credentials, so an admin exemption would
-be an exemption for every agent too, and 3.3 would be back to an honour system.
-Turning the ruleset off is a visible, deliberate act rather than an accident.
-
-Because the pull request rule requires branches to be up to date before merging,
-a long-lived branch has to keep rebasing onto a moving `main`. That friction is
-the point: it makes 3.1 cheaper to obey than to ignore.
-
-One gap remains: **nothing stops a doc comment on a private item.** Clippy has a
-lint for the opposite case only, and catching this properly needs an AST walk
-rather than a grep. It is on review until someone writes that check.
 
 ## Task tracking
 

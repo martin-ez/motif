@@ -1,8 +1,7 @@
 # Contributing
 
-Everything — the design invariants, the documentation and testing rules, the
-branching model, and how each of them is enforced — lives in
-[AGENTS.md](AGENTS.md).
+Everything — the design invariants, the documentation and testing rules, and the
+branching model — lives in [AGENTS.md](AGENTS.md).
 
 It is written for agents, but the rules are the same for everyone, and keeping
 them in one file is what stops the two versions from drifting apart. This file
