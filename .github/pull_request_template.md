@@ -4,7 +4,9 @@ Keep the body short. What changed and why; the code accounts for how.
 -->
 
 <!-- One or two paragraphs of context: the problem this solves, and why now.
-     Link the issue: Closes #N -->
+     Link the issue on its own line: Tracks #N — several numbers on that line
+     are all settled. Never a keyword GitHub acts on itself (Closes, Fixes),
+     which would close the issue behind track.sh's back and leave wip set. -->
 
 ### Changes
 
