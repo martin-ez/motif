@@ -1,11 +1,12 @@
 //! The frame the UI draws into, and the traits a panel is reached through.
 //!
 //! The application fills a [`Frame`], hands it to a [`Renderer`], and takes
-//! [`ControlEvent`]s back from [`Controls`]. Which screen and which keyboard
-//! are on the other side is not visible from here, and must not become visible:
-//! no type in this module, or above it, may name a terminal, an escape
-//! sequence, a key, or a crate that implies any of them. A terminal is one
-//! backend, and the device being aimed at is not a terminal.
+//! [`ControlEvent`]s back from [`Controls`]. Nothing that crosses those traits
+//! may name a terminal, an escape sequence, a key, or a crate that implies any
+//! of them, and nor may anything above them: a terminal is one backend, and the
+//! device being aimed at is not a terminal. The backends are re-exported here
+//! so that a program can construct one, which is the only thing it does that
+//! reveals which it picked.
 //!
 //! A frame is the size of the device's screen, taken from
 //! [`DeviceProfile::TARGET`], so it is a fixed-size array rather than an

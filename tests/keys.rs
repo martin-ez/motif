@@ -9,7 +9,8 @@ use motif::device::{Button, Encoder};
 use motif::ui::{ControlEvent, Controls, KeyReader, Turn};
 
 /// A source that hands over one chunk per read, standing in for keys that
-/// arrive split across reads.
+/// arrive split across reads. An empty chunk is a read that came up empty,
+/// which is what a poll finding nothing typed looks like.
 struct Chunks {
     remaining: Vec<Vec<u8>>,
 }
@@ -24,11 +25,18 @@ impl Chunks {
 
 impl Read for Chunks {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let Some(chunk) = self.remaining.pop() else {
+        let Some(mut chunk) = self.remaining.pop() else {
             return Ok(0);
         };
-        buffer[..chunk.len()].copy_from_slice(&chunk);
-        Ok(chunk.len())
+        let taken = chunk.len().min(buffer.len());
+        buffer[..taken].copy_from_slice(&chunk[..taken]);
+
+        chunk.drain(..taken);
+        if !chunk.is_empty() {
+            self.remaining.push(chunk);
+        }
+
+        Ok(taken)
     }
 }
 
@@ -180,6 +188,21 @@ fn an_escape_sequence_split_across_reads_is_one_event() {
             button: Button::Up,
             shifted: false
         }]
+    );
+}
+
+#[test]
+fn an_escape_still_begins_a_sequence_that_arrives_a_poll_later() {
+    let mut reader = KeyReader::new(Chunks::new(&[b"\x1b", b"", b"[A"]));
+
+    assert_eq!(reader.poll(), None);
+
+    assert_eq!(
+        reader.poll(),
+        Some(ControlEvent::Pressed {
+            button: Button::Up,
+            shifted: false
+        })
     );
 }
 
