@@ -27,6 +27,10 @@ use std::fmt;
 
 use crate::device::DeviceProfile;
 
+mod terminal;
+
+pub use terminal::{FrameWriter, TerminalScreen};
+
 /// One character cell of the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cell {
@@ -122,12 +126,15 @@ impl Default for Frame {
 pub enum RenderError {
     /// The screen could not be written to.
     WriteFailed,
+    /// There is no screen to draw on.
+    Unavailable,
 }
 
 impl fmt::Display for RenderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let described = match self {
             Self::WriteFailed => "the screen could not be written to",
+            Self::Unavailable => "the screen is not available",
         };
         f.write_str(described)
     }
