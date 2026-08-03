@@ -6,4 +6,5 @@
 pub mod audio;
 pub mod device;
 pub mod fixtures;
+pub mod looper;
 pub mod ui;
