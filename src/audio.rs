@@ -5,18 +5,20 @@
 //! the rest of the crate compiles against the abstraction and a backend with no
 //! hardware behind it can stand in where no audio device exists. [`sample_ring`]
 //! carries samples between two threads without locking or allocating, which is
-//! what a real-time callback needs of anything it touches, and [`passthrough`]
-//! is what a duplex stream's two callbacks do with one. [`level_meter`] sends
-//! the other thing that crosses the boundary: not the audio itself but how loud
-//! it was.
+//! what a real-time callback needs of anything it touches; [`passthrough`] is
+//! what a duplex stream's two callbacks do with one, [`command_channel`] carries
+//! changes the other way, and [`level_meter`] sends back the other thing that
+//! crosses the boundary: not the audio itself but how loud it was.
 
 use std::fmt;
 
+mod command;
 mod cpal_backend;
 mod level;
 mod passthrough;
 mod ring;
 
+pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
