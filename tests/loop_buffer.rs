@@ -8,6 +8,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::hint::black_box;
 
 use motif::device::{AudioProfile, DeviceProfile};
 use motif::looper::LoopBuffer;
@@ -64,6 +65,25 @@ fn eight_frame_profile() -> AudioProfile {
         block_size: 4,
         max_loop_seconds: 1,
     }
+}
+
+#[test]
+fn the_allocation_counter_counts_an_allocation() {
+    let before = allocations();
+    black_box(vec![0.0_f32; 4]);
+    let after = allocations();
+
+    assert!(after > before, "the counter is not wired to the allocator");
+}
+
+#[test]
+#[should_panic(expected = "frames")]
+fn a_profile_with_no_loop_length_is_refused_at_setup() {
+    LoopBuffer::for_profile(AudioProfile {
+        sample_rate: 48_000,
+        block_size: 256,
+        max_loop_seconds: 0,
+    });
 }
 
 #[test]
