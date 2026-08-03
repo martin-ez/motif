@@ -67,6 +67,8 @@ fn two_candidates_in_one_window_are_one_hit() {
     let score = Score::of(&at(&[1_000]), &at(&[970, 1_030]));
 
     assert_eq!(score.hits(), 1);
+    assert_close(score.precision(), 0.5);
+    assert_close(score.recall(), 1.0);
 }
 
 #[test]

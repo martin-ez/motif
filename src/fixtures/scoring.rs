@@ -12,8 +12,7 @@ use std::time::Duration;
 /// against beats or downbeats against downbeats — it never learns which.
 ///
 /// The counts are reported alongside the rates because a rate over a handful of
-/// positions and the same rate over a thousand are not the same evidence, and
-/// only the counts add up across fixtures.
+/// positions and the same rate over a thousand are not the same evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Score {
     hits: usize,
