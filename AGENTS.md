@@ -14,8 +14,8 @@ short, and it explains *why* the architecture is shaped the way it is. Most bad
 changes to this codebase come from not knowing the reasoning in it. Read it as
 history and intent, not as a description of what exists — see 1.7.
 
-Status: early. The crate is a skeleton. v1 scope is passthrough, loop capture,
-beat grid, tempo, downbeat, and one generated MIDI part.
+Status: the crate is a skeleton and nothing works yet. What is ready to pick up
+is in the issue tracker, not here.
 
 ## Commands
 
@@ -107,10 +107,12 @@ decision-record directory, no design note that lives alongside the thing it
 describes rather than inside it. Documentation trees rot from the leaves inward,
 and nobody notices because nothing links to the leaves.
 
-Four root files are exempt, because they are the project's contract rather than
+Three root files are exempt, because they are the project's contract rather than
 documentation of it, and because GitHub looks for them by name: `README.md`,
-`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`. Templates under `.github/` are
-configuration.
+`AGENTS.md`, `CONTRIBUTING.md`. Templates under `.github/` are configuration.
+`CLAUDE.md` is a symlink to `AGENTS.md`, not a second file — Claude Code loads
+that name automatically, and a symlink means it reads the real rules rather than
+a pointer it has to follow.
 
 **1.7 Never document a feature that does not exist yet.** No "coming soon", no
 roadmap section, no doc comment on a stub describing what it will eventually do.
