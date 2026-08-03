@@ -36,6 +36,9 @@ fn beats_per_bar(fixture: &Fixture) -> Vec<usize> {
         }
         counted += 1;
     }
+    if counted > 0 {
+        lengths.push(counted);
+    }
     lengths
 }
 
@@ -138,10 +141,7 @@ fn the_set_covers_more_than_one_steady_tempo() {
 
 #[test]
 fn the_set_covers_three_four_as_well_as_four_four() {
-    let metres: Vec<_> = synth::set()
-        .iter()
-        .flat_map(beats_per_bar)
-        .collect();
+    let metres: Vec<_> = synth::set().iter().flat_map(beats_per_bar).collect();
 
     assert!(metres.contains(&3), "bar lengths: {metres:?}");
     assert!(metres.contains(&4), "bar lengths: {metres:?}");
@@ -149,11 +149,7 @@ fn the_set_covers_three_four_as_well_as_four_four() {
 
 #[test]
 fn a_waltz_is_three_beats_to_the_bar_throughout() {
-    assert!(
-        beats_per_bar(&named("waltz-150-3-4"))
-            .iter()
-            .all(|&n| n == 3)
-    );
+    assert_eq!(beats_per_bar(&named("waltz-150-3-4")), [3, 3, 3, 3]);
 }
 
 #[test]
@@ -162,6 +158,18 @@ fn a_tempo_ramp_shortens_every_interval() {
 
     assert!(
         intervals.windows(2).all(|pair| pair[1] < pair[0]),
+        "{intervals:?}"
+    );
+}
+
+#[test]
+fn a_tempo_ramp_spans_the_tempi_it_is_named_for() {
+    let intervals = intervals(&named("ramp-100-140-4-4"));
+    let tempo = |interval: Duration| 60.0 / interval.as_secs_f64();
+
+    assert!((tempo(intervals[0]) - 100.0).abs() < 0.1, "{intervals:?}");
+    assert!(
+        (tempo(intervals[intervals.len() - 1]) - 140.0).abs() < 0.1,
         "{intervals:?}"
     );
 }
@@ -212,6 +220,29 @@ fn a_syncopated_fixture_puts_most_onsets_off_the_beat() {
         "{on_the_beat} of {} onsets were on a beat",
         fixture.onsets().len()
     );
+}
+
+#[test]
+fn a_syncopated_onset_falls_midway_between_the_beats_it_sits_between() {
+    let fixture = named("syncopated-120-4-4");
+    let beats = fixture.beats();
+
+    for onset in fixture.onsets() {
+        let Some(before) = beats.iter().rev().find(|beat| beat.at < onset.at) else {
+            continue;
+        };
+        let Some(after) = beats.iter().find(|beat| beat.at > onset.at) else {
+            continue;
+        };
+        let early = onset.at - before.at;
+        let late = after.at - onset.at;
+
+        assert!(
+            early.abs_diff(late) <= Duration::from_nanos(u64::from(1_000_000_000 / SAMPLE_RATE)),
+            "an onset at {:?} sat {early:?} after one beat and {late:?} before the next",
+            onset.at
+        );
+    }
 }
 
 #[test]
@@ -319,6 +350,20 @@ fn the_committed_annotations_match_their_generator() {
         assert_eq!(
             String::from_utf8_lossy(&committed),
             fixture.annotation_text(),
+            "{}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
+fn the_committed_wav_headers_match_their_generator() {
+    for fixture in synth::set() {
+        let committed = read(&format!("{}.wav", fixture.name()));
+
+        assert_eq!(
+            committed[..44],
+            fixture.wav_bytes()[..44],
             "{}",
             fixture.name()
         );

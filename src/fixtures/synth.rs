@@ -209,12 +209,13 @@ fn steady(tempo: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
 
 fn ramp(from: f64, to: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
     let count = beats_per_bar * bars;
+    let intervals = count - 1;
     let mut at = 0.0;
-    let mut times = Vec::with_capacity(count);
-    for index in 0..count {
-        times.push(at);
-        let tempo = from + (to - from) * index as f64 / (count - 1) as f64;
+    let mut times = vec![at];
+    for interval in 0..intervals {
+        let tempo = from + (to - from) * interval as f64 / (intervals - 1) as f64;
         at += 60.0 / tempo;
+        times.push(at);
     }
 
     grid(times.into_iter(), beats_per_bar)
@@ -251,7 +252,7 @@ fn grid(times: impl Iterator<Item = f64>, beats_per_bar: usize) -> Vec<Beat> {
 fn on_the_sample_grid(seconds: f64) -> Duration {
     let frame = (seconds * f64::from(SAMPLE_RATE)).round() as u64;
 
-    Duration::from_nanos(frame * (1_000_000_000 / u64::from(SAMPLE_RATE)))
+    Duration::from_nanos(frame * 1_000_000_000 / u64::from(SAMPLE_RATE))
 }
 
 fn on_every_beat(beats: &[Beat]) -> Vec<Onset> {
@@ -269,7 +270,10 @@ fn on_every_beat(beats: &[Beat]) -> Vec<Onset> {
 }
 
 fn off_the_beat(beats: &[Beat]) -> Vec<Onset> {
-    let half = (beats[1].at - beats[0].at) / 2;
+    let intervals: Vec<Duration> = beats
+        .windows(2)
+        .map(|pair| pair[1].at - pair[0].at)
+        .collect();
     let mut onsets: Vec<Onset> = beats
         .iter()
         .filter(|beat| beat.is_downbeat)
@@ -277,14 +281,23 @@ fn off_the_beat(beats: &[Beat]) -> Vec<Onset> {
             at: beat.at,
             voice: Voice::Accent,
         })
-        .chain(beats.iter().map(|beat| Onset {
-            at: beat.at + half,
-            voice: Voice::Tick,
-        }))
         .collect();
+
+    for (index, beat) in beats.iter().enumerate() {
+        if let Some(interval) = intervals.get(index).or_else(|| intervals.last()) {
+            onsets.push(Onset {
+                at: halfway_past(beat.at, *interval),
+                voice: Voice::Tick,
+            });
+        }
+    }
     onsets.sort_by_key(|onset| onset.at);
 
     onsets
+}
+
+fn halfway_past(beat: Duration, interval: Duration) -> Duration {
+    on_the_sample_grid(beat.as_secs_f64() + interval.as_secs_f64() / 2.0)
 }
 
 const TAIL: Duration = Duration::from_millis(300);
@@ -297,7 +310,11 @@ const TICK_DECAY: f64 = 0.030;
 const TICK_LEVEL: f64 = 0.55;
 
 fn render(onsets: &[Onset], seed: u32) -> Vec<i16> {
-    let last = onsets.last().map(|onset| onset.at).unwrap_or_default();
+    let last = onsets
+        .iter()
+        .map(|onset| onset.at)
+        .max()
+        .unwrap_or_default();
     let mut signal = vec![0.0; frames(last + TAIL)];
     let mut noise = Noise::from(seed);
 
