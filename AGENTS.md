@@ -199,9 +199,9 @@ explain a function that a reader can simply open. Explain the problem, the
 decision, and anything a reviewer could not infer — a trade-off taken, an
 alternative rejected, a risk accepted.
 
-**4.4 Titles stay under 50 characters.** This is the width `git log --oneline`
-gives you before truncating. If the change will not fit, it is usually two
-changes.
+**4.4 Titles are at most 50 characters.** This is the width `git log --oneline`
+gives you before truncating, and the check rejects 51. If the change will not
+fit, it is usually two changes.
 
 **4.5 Never add a co-author.** No `Co-authored-by:` trailer on any commit, no
 tool attribution in any pull request body. Agents included, and agents
