@@ -1,0 +1,7 @@
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+# The long-term ambition is a standalone aarch64 device. Keeping the target
+# installed makes the cross-compile guard a `cargo check` away rather than a
+# discovery made late.
+targets = ["aarch64-unknown-linux-gnu"]
