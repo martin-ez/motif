@@ -15,11 +15,19 @@
 //! loop. Play plays without capturing, closing a take or a layer that was open,
 //! and stop halts.
 //!
-//! Halted with a loop is [`Transport::Stopped`] rather than
+//! Halted after a take is [`Transport::Stopped`] rather than
 //! [`Transport::Idle`], because the two answer both other actions differently:
-//! there is a take to resume from one and nothing to play from the other. The
+//! one resumes a take that was made and the other has none to resume. The
 //! alternative is one state and a flag beside it saying which of the two it
 //! really is, which is a state machine whose state is not all in its state.
+//!
+//! What the transport does not know is how many frames that take captured. A
+//! record and a stop that arrive in the same drain are applied to the same
+//! block, so [`Transport::Stopped`] over an empty buffer is reachable and
+//! [`Transport::Playing`] after it plays nothing. The states say what to do
+//! with a block and the buffer says what there is to do it with, so a consumer
+//! reads both: one that plays a loop handles a loop of no frames, and a state
+//! here never stands in for a length.
 //!
 //! Transitions land on block boundaries because of where they are applied,
 //! not because anything here waits for one: the callback drains the commands
@@ -57,13 +65,15 @@ pub enum Transport {
     Playing,
     /// The loop is playing and the input is being layered onto it.
     Overdubbing,
-    /// A loop has been recorded and is not playing.
+    /// A take has been made and nothing is playing. How much of it reached the
+    /// buffer is the buffer's to say.
     Stopped,
 }
 
 impl Transport {
     /// Capture onto the loop: open the first take, open a layer over the loop
     /// that exists, or drop back out of the layer that is open.
+    #[must_use = "a transition is the next state, and applying it is keeping it"]
     pub const fn record(self) -> Self {
         match self {
             Self::Idle => Self::Recording,
@@ -77,6 +87,7 @@ impl Transport {
     ///
     /// [`Transport::Idle`] is the one state this leaves alone: nothing has been
     /// recorded, so there is nothing to play.
+    #[must_use = "a transition is the next state, and applying it is keeping it"]
     pub const fn play(self) -> Self {
         match self {
             Self::Idle => Self::Idle,
@@ -85,6 +96,7 @@ impl Transport {
     }
 
     /// Halt, keeping what has been recorded.
+    #[must_use = "a transition is the next state, and applying it is keeping it"]
     pub const fn stop(self) -> Self {
         match self {
             Self::Idle => Self::Idle,
