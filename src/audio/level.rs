@@ -88,7 +88,7 @@ impl Levels {
     }
 
     fn packed(self) -> u64 {
-        (u64::from(self.peak.to_bits()) << 32) + u64::from(self.rms.to_bits())
+        u64::from(self.peak.to_bits()) << 32 | u64::from(self.rms.to_bits())
     }
 
     fn unpacked(packed: u64) -> Self {
