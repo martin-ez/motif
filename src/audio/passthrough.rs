@@ -3,8 +3,8 @@
 //! A duplex device is two streams with two callbacks on two threads, so the
 //! path from input to output is not a copy but a hand-off: the capture end
 //! writes what the device gave it, the playback end takes whatever is there.
-//! Both ends do their work in buffers allocated when the path is built, which
-//! is what lets a callback touch them.
+//! Neither end allocates: the capture end folds into a buffer built with the
+//! path, and the playback end works in the buffer the device handed it.
 //!
 //! The ring carries one sample per frame, not one per channel. Channel counts
 //! differ between the two devices as a matter of course — a mono instrument
@@ -76,7 +76,6 @@ pub fn passthrough(config: StreamConfig, slack: usize) -> (PassthroughInput, Pas
         PassthroughOutput {
             consumer,
             channels: config.output_channels as usize,
-            frames: vec![0.0; block].into_boxed_slice(),
         },
     )
 }
@@ -127,7 +126,6 @@ impl PassthroughInput {
 pub struct PassthroughOutput {
     consumer: SampleConsumer,
     channels: usize,
-    frames: Box<[f32]>,
 }
 
 impl PassthroughOutput {
@@ -140,23 +138,22 @@ impl PassthroughOutput {
     /// same buffer back repeatedly, so leaving it is a block of audio played
     /// twice.
     ///
-    /// `output` may be longer than the block size the path was built for; it is
-    /// filled a block at a time. Samples past the last whole frame are left
+    /// The frames land in the head of `output` and are spread across their
+    /// channels in place, last frame first. A frame sits at or below the slot
+    /// it spreads into, so working backwards writes only over slots already
+    /// read — which is what lets this end hold no buffer of its own, and take
+    /// an `output` of any length. Samples past the last whole frame are left
     /// untouched.
     pub fn render(&mut self, output: &mut [f32]) -> usize {
-        let mut rendered = 0;
+        let frames = output.len() / self.channels;
+        let supplied = self.consumer.read(&mut output[..frames]);
+        output[supplied..frames].fill(0.0);
 
-        for chunk in output.chunks_mut(self.frames.len() * self.channels) {
-            let frames = chunk.len() / self.channels;
-            let supplied = self.consumer.read(&mut self.frames[..frames]);
-            self.frames[supplied..frames].fill(0.0);
-            let spread = self.frames[..frames].iter();
-            for (frame, samples) in spread.zip(chunk.chunks_exact_mut(self.channels)) {
-                samples.fill(*frame);
-            }
-            rendered += supplied;
+        for frame in (0..frames).rev() {
+            let sample = output[frame];
+            output[frame * self.channels..][..self.channels].fill(sample);
         }
 
-        rendered
+        supplied
     }
 }
