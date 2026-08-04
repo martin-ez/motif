@@ -1,17 +1,19 @@
-//! Counting the blocks that were lost, from the audio callback to the
+//! Counting the callbacks that lost frames, from the audio callback to the
 //! application thread.
 //!
 //! An xrun is the one thing the callback has to say that nothing else can say
-//! for it: a block arrived that there was no room for, or a block was wanted
-//! that was not there. Neither leaves a trace anywhere else — the samples are
+//! for it: frames arrived that there was no room for, or frames were wanted
+//! that were not there. Neither leaves a trace anywhere else — the samples are
 //! simply gone — so a dropout is invisible unless the callback counts it as it
 //! happens. Incrementing an atomic is one of the few things it may do.
 //!
-//! The two directions are counted apart because they mean opposite things. An
-//! overrun says the application thread is not draining what the device
-//! delivers; an underrun says it is not filling what the device asks for.
-//! Summed into one number they cancel out into a count that names no fault at
-//! all.
+//! The two directions are counted apart because they name opposite faults. An
+//! overrun says whatever drains the path is not keeping up with the device
+//! delivering into it; an underrun says whatever fills the path is not keeping
+//! up with the device asking of it. Which threads those are is the caller's
+//! arrangement — under [`passthrough`](super::passthrough) both are callbacks,
+//! and no application thread is involved at all. Summed into one number the two
+//! cancel into a count that names no fault.
 //!
 //! Each count is a plain [`AtomicUsize`] rather than a pair packed into one
 //! word, which is what [`level_meter`](super::level_meter) does and for a
@@ -20,31 +22,39 @@
 //! catches one an instant before the other sees a number that is briefly stale,
 //! never one that is impossible.
 //!
+//! They do share a cache line, and are left sharing it. A store happens only
+//! when a dropout does, so between dropouts the line is read-only; dropouts
+//! frequent enough for two writers to contend over it are already the failure
+//! the count exists to report, and padding would buy nothing on the path that
+//! matters.
+//!
 //! Each count also has exactly one writer, which is why incrementing is a load
-//! and a store rather than a read-modify-write: overruns are seen by the thread
-//! capturing input, underruns by the thread playing output, and the two ends
-//! are separate types so that neither can be handed to the wrong callback.
+//! and a store rather than a read-modify-write: overruns are seen where input
+//! is captured, underruns where output is played, and the two ends are separate
+//! types so that neither can be handed to the wrong callback.
 //!
 //! Neither count handles wrapping, for the reason [`sample_ring`](super::sample_ring)
 //! gives for its own: a 64-bit count has more room than the hardware has life,
-//! and this one advances once per lost block rather than once per sample.
+//! and this one advances once per failed callback rather than once per sample.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// How many blocks have been lost in each direction since counting began.
+/// How many callbacks have lost frames in each direction since counting began.
+///
+/// A callback that lost one frame and a callback that lost every frame it had
+/// count the same, because what these answer is how often the path failed.
 ///
 /// Both only ever grow. A caller watching for new dropouts subtracts a reading
 /// it took earlier rather than expecting these to return to zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Xruns {
-    /// Blocks the output could not fill, because the samples to fill them with
-    /// had not been produced yet.
+    /// Callbacks that could not fill the output they were asked for, because
+    /// the samples to fill it with had not been produced yet.
     ///
     /// This is the one a player hears, as a gap in the audio.
     pub underruns: usize,
-    /// Blocks of input that were dropped, because there was nowhere to put
-    /// them.
+    /// Callbacks that had input dropped, because there was nowhere to put it.
     ///
     /// This one is silent, and shows up as audio that was played but never
     /// captured.
@@ -68,12 +78,12 @@ impl Xruns {
 /// ```
 /// let (mut overruns, mut underruns, reader) = motif::audio::xrun_counter();
 ///
-/// overruns.overran();
-/// underruns.underran();
-/// underruns.underran();
+/// overruns.captured(64, 64);
+/// overruns.captured(48, 64);
+/// underruns.supplied(64, 64);
 ///
 /// assert_eq!(reader.read().overruns, 1);
-/// assert_eq!(reader.read().underruns, 2);
+/// assert_eq!(reader.read().underruns, 0);
 /// ```
 pub fn xrun_counter() -> (OverrunCounter, UnderrunCounter, XrunReader) {
     let counts = Arc::new(Counts {
@@ -100,13 +110,20 @@ pub struct OverrunCounter {
 }
 
 impl OverrunCounter {
-    /// Count one block of input that was dropped.
+    /// Count a callback that took `captured` frames of the `offered` it was
+    /// handed, which is an overrun when it took fewer.
     ///
-    /// A block rather than a sample: what a caller wants to know is how many
-    /// times the path failed, and a count of samples reports a long block as a
-    /// worse failure than a short one when both lost the same moment of audio.
-    pub fn overran(&mut self) {
-        increment(&self.counts.overruns);
+    /// Deciding here rather than at the call site is what makes the rule
+    /// testable: the callback that would otherwise hold it cannot be built
+    /// without a device.
+    ///
+    /// A callback rather than a frame. What a caller wants to know is how often
+    /// the path failed, and counting frames reports a long block as a worse
+    /// failure than a short one when both lost the same moment of audio.
+    pub fn captured(&mut self, captured: usize, offered: usize) {
+        if captured < offered {
+            increment(&self.counts.overruns);
+        }
     }
 }
 
@@ -118,12 +135,15 @@ pub struct UnderrunCounter {
 }
 
 impl UnderrunCounter {
-    /// Count one block of output that could not be filled.
+    /// Count a callback that filled `supplied` frames of the `wanted` it was
+    /// asked for, which is an underrun when it filled fewer.
     ///
-    /// A block rather than a sample, for the reason given on
-    /// [`OverrunCounter::overran`].
-    pub fn underran(&mut self) {
-        increment(&self.counts.underruns);
+    /// A callback rather than a frame, and decided here rather than at the call
+    /// site, for the reasons given on [`OverrunCounter::captured`].
+    pub fn supplied(&mut self, supplied: usize, wanted: usize) {
+        if supplied < wanted {
+            increment(&self.counts.underruns);
+        }
     }
 }
 

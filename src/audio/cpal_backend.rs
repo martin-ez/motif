@@ -205,11 +205,8 @@ impl AudioBackend for CpalBackend {
                 move |data: &Data, _: &_| {
                     if let Some(samples) = data.as_slice::<f32>() {
                         level_writer.publish(samples);
-                        if passthrough_input.capture(samples)
-                            < samples.len() / input_channels as usize
-                        {
-                            overruns.overran();
-                        }
+                        let offered = samples.len() / input_channels as usize;
+                        overruns.captured(passthrough_input.capture(samples), offered);
                     }
                 },
                 |_| {},
@@ -222,11 +219,9 @@ impl AudioBackend for CpalBackend {
                 output_config,
                 SampleFormat::F32,
                 move |data: &mut Data, _: &_| {
-                    if let Some(samples) = data.as_slice_mut::<f32>()
-                        && passthrough_output.render(samples)
-                            < samples.len() / output_channels as usize
-                    {
-                        underruns.underran();
+                    if let Some(samples) = data.as_slice_mut::<f32>() {
+                        let wanted = samples.len() / output_channels as usize;
+                        underruns.supplied(passthrough_output.render(samples), wanted);
                     }
                 },
                 |_| {},
@@ -290,7 +285,7 @@ impl DuplexStream for CpalStream {
     }
 
     /// Counted against the passthrough path rather than reported by the device:
-    /// a block is an overrun when the capture end could not take every frame
+    /// a callback is an overrun when the capture end could not take every frame
     /// the device delivered, and an underrun when the playback end could not
     /// supply every frame the device asked for. A device that drops a block
     /// before the callback ever sees it is invisible here, because the callback

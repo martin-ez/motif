@@ -182,7 +182,7 @@ pub trait DuplexStream {
     /// next one does. A stopped stream keeps reporting the block it stopped on.
     fn levels(&self) -> Levels;
 
-    /// How many blocks the stream has lost in each direction.
+    /// How many callbacks have lost frames in each direction.
     ///
     /// Counted in the callback as it happens, because a dropout leaves no other
     /// trace to find afterwards. The counts run from when the stream was opened
