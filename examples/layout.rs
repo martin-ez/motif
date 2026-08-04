@@ -20,6 +20,12 @@
 //! Piped, it writes the grid as plain text between the same box-drawing edges
 //! the terminal would show, which is what makes the layout readable in a diff
 //! or a pull request.
+//!
+//! The meter's bar runs down to -48 dB. That is a floor rather than a
+//! measurement: low enough that a quiet take still moves the bar, high enough
+//! that what a converter idles at does not. The bar is drawn from the RMS and
+//! the peak is marked on it, so the bar and the number beside it are reading
+//! the same block rather than disagreeing silently.
 
 use std::io::{self, IsTerminal, Write};
 
@@ -30,11 +36,11 @@ use motif::ui::{Cell, Frame, RenderError, Renderer, Viewport};
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
 
-/// The quietest level the meter draws, below which the bar is empty.
 const METER_FLOOR_DECIBELS: f32 = -48.0;
 
 const FILLED: char = '█';
 const EMPTY: char = '░';
+const PEAK: char = '┃';
 const RULE: char = '─';
 
 fn write_at(frame: &mut Frame, column: usize, row: usize, text: &str) {
@@ -86,8 +92,6 @@ fn seconds(frames: usize) -> f32 {
     frames as f32 / DeviceProfile::TARGET.audio.sample_rate as f32
 }
 
-/// A loop with roughly `wanted` seconds captured, filled a block at a time the
-/// way the callback fills it.
 fn captured(wanted: f32) -> LoopBuffer {
     let profile = DeviceProfile::TARGET.audio;
     let mut buffer = LoopBuffer::for_profile(profile);
@@ -95,7 +99,9 @@ fn captured(wanted: f32) -> LoopBuffer {
     let target = (wanted * profile.sample_rate as f32) as usize;
 
     while buffer.len() + block.len() <= target {
-        buffer.record(&block);
+        if buffer.record(&block) == 0 {
+            break;
+        }
     }
     buffer
 }
@@ -106,13 +112,13 @@ fn draw_meter(frame: &mut Frame, row: usize, levels: Levels) {
     let gap = 2;
     let width = SCREEN.columns - label.len() - gap - readout.chars().count() - gap;
 
+    let bar_at = label.len() + gap;
+    let peak_cell = ((meter_fraction(levels.peak) * width as f32).round() as usize)
+        .min(width.saturating_sub(1));
+
     write_at(frame, 0, row, label);
-    write_at(
-        frame,
-        label.len() + gap,
-        row,
-        &bar(meter_fraction(levels.rms), width),
-    );
+    write_at(frame, bar_at, row, &bar(meter_fraction(levels.rms), width));
+    frame.set(bar_at + peak_cell, row, Cell::new(PEAK));
     write_right(frame, row, &readout);
 }
 
@@ -127,7 +133,7 @@ fn draw_position(frame: &mut Frame, row: usize, loop_buffer: &LoopBuffer) {
 }
 
 fn draw_transport(frame: &mut Frame, row: usize, transport: Transport) {
-    let stopped = !transport.captures_input() && !transport.plays_loop();
+    let stopped = matches!(transport, Transport::Stopped);
     let indicators = format!(
         "{} REC     {} PLAY     {} STOP",
         lamp(transport.captures_input()),
@@ -142,7 +148,9 @@ fn draw_encoders(frame: &mut Frame, row: usize) {
     let slot = SCREEN.columns / Encoder::ALL.len();
 
     for (position, _) in Encoder::ALL.iter().enumerate() {
-        let label = format!("{} {}", position + 1, String::from(RULE).repeat(slot - 4));
+        let number = format!("{} ", position + 1);
+        let width = slot.saturating_sub(number.chars().count() + 2);
+        let label = number + &String::from(RULE).repeat(width);
         write_at(frame, position * slot, row, &label);
     }
 }

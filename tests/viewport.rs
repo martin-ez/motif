@@ -5,7 +5,9 @@
 //! that the box is the profile's size and sits clear of the frame — the border
 //! belongs to the terminal, and the panel it stands for has none.
 
+use std::cell::{Cell as MutableCell, RefCell};
 use std::io::{self, Write};
+use std::rc::Rc;
 
 use motif::device::DeviceProfile;
 use motif::ui::{Cell, Frame, RenderError, Renderer, Viewport};
@@ -35,6 +37,50 @@ impl Write for FailsOnce {
             return Err(io::Error::other("the screen is gone"));
         }
         self.written.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A sink that can be made to refuse and then accept again from outside,
+/// so that a write can be failed after the border has already gone out.
+#[derive(Clone)]
+struct Switchable {
+    refusing: Rc<MutableCell<bool>>,
+    written: Rc<RefCell<Vec<u8>>>,
+}
+
+impl Switchable {
+    fn new() -> Self {
+        Self {
+            refusing: Rc::new(MutableCell::new(false)),
+            written: Rc::new(RefCell::new(Vec::new())),
+        }
+    }
+
+    fn refuse(&self, refusing: bool) {
+        self.refusing.set(refusing);
+    }
+
+    fn since(&self, already_written: usize) -> String {
+        String::from_utf8(self.written.borrow()[already_written..].to_vec())
+            .expect("the output is utf-8")
+    }
+
+    fn len(&self) -> usize {
+        self.written.borrow().len()
+    }
+}
+
+impl Write for Switchable {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.refusing.get() {
+            return Err(io::Error::other("the screen is gone"));
+        }
+        self.written.borrow_mut().extend_from_slice(bytes);
         Ok(bytes.len())
     }
 
@@ -165,5 +211,30 @@ fn the_border_is_drawn_again_after_a_failed_write() {
     assert!(
         output.contains(&top_border()),
         "the border was not redrawn: {output:?}"
+    );
+}
+
+#[test]
+fn the_border_is_drawn_again_after_a_frame_failed_under_it() {
+    let screen = Switchable::new();
+    let mut viewport = Viewport::new(screen.clone());
+    viewport
+        .render(&Frame::blank())
+        .expect("the screen is accepting writes");
+
+    screen.refuse(true);
+    let failed = viewport.render(&drawn(&[(3, 2, 'x')]));
+
+    screen.refuse(false);
+    let already_written = screen.len();
+    let recovered = viewport.render(&drawn(&[(3, 2, 'x')]));
+
+    assert_eq!(failed, Err(RenderError::WriteFailed));
+    assert_eq!(recovered, Ok(()));
+
+    let output = screen.since(already_written);
+    assert!(
+        output.contains(&top_border()),
+        "the border was not redrawn after the frame under it failed: {output:?}"
     );
 }
