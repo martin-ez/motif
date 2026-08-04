@@ -1,15 +1,20 @@
-//! Ground truth for a fixture: where the beats fall, and which of them begin a
-//! bar.
+//! Ground truth for a fixture: where the beats fall, which of them begin a bar,
+//! and how close a candidate came to finding them.
 //!
 //! A wrong annotation is a silent source of wrong accuracy numbers, so the
 //! format is line-oriented text meant to be read and corrected in a pull
-//! request rather than taken on trust.
+//! request rather than taken on trust. [`Score`] is what turns an accuracy
+//! claim into a number a reviewer can check.
 
 pub mod synth;
 
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
+
+mod scoring;
+
+pub use scoring::Score;
 
 /// One annotated beat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
