@@ -13,6 +13,10 @@ use motif::ui::{
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
 
+/// More frames than any run here draws, so a loop that will not stop fails an
+/// assertion rather than running until the harness gives up on it.
+const FRAMES_ACCEPTED: usize = 8;
+
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
         button,
@@ -78,6 +82,40 @@ impl Controls for Endless {
     }
 }
 
+/// A screen that takes a stated number of frames and then reports failure.
+///
+/// A loop that will not stop makes a test that never ends, and a test that never
+/// ends reports nothing. Bounding what the screen will accept turns that into an
+/// assertion failing at once.
+struct Patient {
+    screen: NullRenderer,
+    accepts: usize,
+}
+
+impl Patient {
+    fn accepting(frames: usize) -> Self {
+        Self {
+            screen: NullRenderer::new(),
+            accepts: frames,
+        }
+    }
+
+    fn rendered(&self) -> Option<&Frame> {
+        self.screen.rendered()
+    }
+}
+
+impl Renderer for Patient {
+    fn render(&mut self, frame: &Frame) -> Result<(), RenderError> {
+        self.accepts = self
+            .accepts
+            .checked_sub(1)
+            .ok_or(RenderError::Unavailable)?;
+
+        self.screen.render(frame)
+    }
+}
+
 struct BrokenScreen;
 
 impl Renderer for BrokenScreen {
@@ -98,7 +136,7 @@ fn still() -> EventLoop<ScriptedClock> {
 fn a_run_ends_when_the_application_asks_to_exit() {
     let mut app = Page::lasting(1);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     let report = still().run(&mut app, &mut controls, &mut screen);
 
@@ -109,7 +147,7 @@ fn a_run_ends_when_the_application_asks_to_exit() {
 fn a_run_ends_when_a_control_asks_to_exit() {
     let mut app = Page::quitting_on(Button::Stop);
     let mut controls = ScriptedControls::new([pressed(Button::Stop)]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     let report = still().run(&mut app, &mut controls, &mut screen);
 
@@ -120,11 +158,11 @@ fn a_run_ends_when_a_control_asks_to_exit() {
 fn a_control_that_ends_the_run_is_not_drawn_after() {
     let mut app = Page::quitting_on(Button::Stop);
     let mut controls = ScriptedControls::new([pressed(Button::Stop)]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(app.drawn, 0);
     assert_eq!(screen.rendered(), None);
@@ -134,11 +172,11 @@ fn a_control_that_ends_the_run_is_not_drawn_after() {
 fn events_waiting_behind_an_exit_are_left_unread() {
     let mut app = Page::quitting_on(Button::Stop);
     let mut controls = ScriptedControls::new([pressed(Button::Stop), pressed(Button::Play)]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(controls.poll(), Some(pressed(Button::Play)));
 }
@@ -147,11 +185,11 @@ fn events_waiting_behind_an_exit_are_left_unread() {
 fn every_event_waiting_reaches_the_application_in_one_frame() {
     let mut app = Page::lasting(1);
     let mut controls = ScriptedControls::new([pressed(Button::Play), pressed(Button::Record)]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(app.seen, [pressed(Button::Play), pressed(Button::Record)]);
 }
@@ -160,11 +198,11 @@ fn every_event_waiting_reaches_the_application_in_one_frame() {
 fn a_frame_takes_no_more_events_than_the_bound_allows() {
     let mut app = Page::lasting(1);
     let mut controls = Endless(pressed(Button::Play));
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(app.seen.len(), EVENTS_PER_FRAME);
 }
@@ -173,11 +211,11 @@ fn a_frame_takes_no_more_events_than_the_bound_allows() {
 fn a_panel_that_never_runs_dry_still_reaches_the_screen() {
     let mut app = Page::lasting(1);
     let mut controls = Endless(pressed(Button::Play));
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     let report = still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(report.frames(), 1);
 }
@@ -187,11 +225,11 @@ fn events_past_the_bound_wait_for_the_next_frame() {
     let mut app = Page::lasting(1);
     let waiting = std::iter::repeat_n(pressed(Button::Play), EVENTS_PER_FRAME + 1);
     let mut controls = ScriptedControls::new(waiting);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(controls.poll(), Some(pressed(Button::Play)));
 }
@@ -200,11 +238,11 @@ fn events_past_the_bound_wait_for_the_next_frame() {
 fn what_the_application_drew_is_what_the_screen_is_given() {
     let mut app = Page::lasting(1);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     let drawn = screen.rendered().and_then(|frame| frame.get(0, 0));
     assert_eq!(drawn, Some(Cell::new('*')));
@@ -214,11 +252,11 @@ fn what_the_application_drew_is_what_the_screen_is_given() {
 fn each_frame_starts_blank() {
     let mut app = Page::lasting(2);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     let rendered = screen.rendered().expect("two frames were drawn");
     assert_eq!(rendered.get(0, 0), Some(Cell::BLANK));
@@ -229,11 +267,11 @@ fn each_frame_starts_blank() {
 fn a_frame_is_counted_for_every_time_the_screen_was_drawn() {
     let mut app = Page::lasting(3);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     let report = still()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(report.frames(), 3);
 }
@@ -242,7 +280,7 @@ fn a_frame_is_counted_for_every_time_the_screen_was_drawn() {
 fn a_frame_with_time_to_spare_gives_the_rest_of_it_back() {
     let mut app = Page::lasting(2);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
     let mut loops = scripted([
         Duration::ZERO,
         Duration::from_millis(3),
@@ -252,7 +290,7 @@ fn a_frame_with_time_to_spare_gives_the_rest_of_it_back() {
 
     loops
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(loops.clock().slept(), [BUDGET - Duration::from_millis(3)]);
 }
@@ -261,12 +299,12 @@ fn a_frame_with_time_to_spare_gives_the_rest_of_it_back() {
 fn a_frame_that_ran_over_its_budget_does_not_wait() {
     let mut app = Page::lasting(2);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
     let mut loops = scripted([Duration::ZERO, BUDGET + Duration::from_millis(1)]);
 
     loops
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert!(loops.clock().slept().is_empty());
 }
@@ -275,12 +313,12 @@ fn a_frame_that_ran_over_its_budget_does_not_wait() {
 fn a_frame_that_ran_over_its_budget_is_counted_as_an_overrun() {
     let mut app = Page::lasting(2);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
     let mut loops = scripted([Duration::ZERO, BUDGET + Duration::from_millis(1)]);
 
     let report = loops
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(report.overruns(), 1);
 }
@@ -289,12 +327,12 @@ fn a_frame_that_ran_over_its_budget_is_counted_as_an_overrun() {
 fn a_frame_inside_its_budget_is_no_overrun() {
     let mut app = Page::lasting(2);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
     let mut loops = scripted([Duration::ZERO, Duration::from_millis(1)]);
 
     let report = loops
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(report.overruns(), 0);
 }
@@ -303,12 +341,12 @@ fn a_frame_inside_its_budget_is_no_overrun() {
 fn the_last_frame_of_a_run_is_not_paced() {
     let mut app = Page::lasting(1);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
     let mut loops = scripted([Duration::ZERO, Duration::from_millis(1)]);
 
     loops
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert!(loops.clock().slept().is_empty());
 }
@@ -317,12 +355,12 @@ fn the_last_frame_of_a_run_is_not_paced() {
 fn the_last_frame_of_a_run_is_counted_when_it_runs_over() {
     let mut app = Page::lasting(1);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
     let mut loops = scripted([Duration::ZERO, BUDGET + Duration::from_millis(1)]);
 
     let report = loops
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert_eq!(report.overruns(), 1);
     assert!(loops.clock().slept().is_empty());
@@ -355,12 +393,12 @@ fn a_screen_that_cannot_be_written_is_not_drawn_again() {
 fn a_run_on_the_machine_clock_spends_a_budget_on_every_frame_but_the_last() {
     let mut app = Page::lasting(2);
     let mut controls = ScriptedControls::new([]);
-    let mut screen = NullRenderer::new();
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
     let started = Instant::now();
     EventLoop::new()
         .run(&mut app, &mut controls, &mut screen)
-        .expect("the null screen accepts every frame");
+        .expect("the screen accepts the frames this run draws");
 
     assert!(started.elapsed() >= BUDGET);
 }
