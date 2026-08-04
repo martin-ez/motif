@@ -47,7 +47,7 @@ The issue the user picked. Claims first, then branches onto `feat/74-…`. Exit 
 means someone else took it in the meantime: say so and ask again with the rows
 that are left, never `--force`.
 
-## 4. Read it whole
+## 4. Read it whole, then plan
 
 ```sh
 scripts/track.sh show 74
@@ -56,10 +56,17 @@ scripts/track.sh show 74
 Restate the scope in a sentence, and name any design invariant it touches. If it
 is really several tasks, split it with `add --parent` instead of doing all of it.
 
+Then plan: the tests you will write, the shape of the code under them, and how
+that shape holds the invariants you named. `ExitPlanMode` puts it to the user —
+no test and no code until they approve it. A rejected plan is cheaper than a
+reviewed pull request.
+
 ## 5. Build
 
-Test first, in `tests/`, and watch it fail for the right reason. Then the full
-gate from AGENTS.md — all six, including the aarch64 cross-check.
+The approved plan, test first, in `tests/`, and watch it fail for the right
+reason. Then the full gate from AGENTS.md — all six, including the aarch64
+cross-check. If the build shows the plan was wrong, say so and re-plan rather
+than quietly taking another route.
 
 ## 6. Stop at a draft pull request
 
