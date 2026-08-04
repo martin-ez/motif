@@ -1,0 +1,10 @@
+# steady-90-4-4: 4/4 at 90 BPM
+# rendered by `cargo run --example generate-fixtures`
+0.000000 downbeat
+0.666625 beat
+1.333375 beat
+2.000000 beat
+2.666625 downbeat
+3.333375 beat
+4.000000 beat
+4.666625 beat

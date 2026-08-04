@@ -1,0 +1,10 @@
+# ramp-100-140-4-4: 4/4 accelerating from 100 to 140 BPM
+# rendered by `cargo run --example generate-fixtures`
+0.000000 downbeat
+0.600000 beat
+1.162500 beat
+1.691875 beat
+2.191875 downbeat
+2.665625 beat
+3.115625 beat
+3.544125 beat
