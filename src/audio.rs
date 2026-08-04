@@ -9,6 +9,9 @@
 //! what a duplex stream's two callbacks do with one, [`command_channel`] carries
 //! changes the other way, and [`level_meter`] sends back the other thing that
 //! crosses the boundary: not the audio itself but how loud it was.
+//!
+//! [`xrun_counter`] carries the news that the boundary failed, which none of
+//! the others can report: the samples a dropout costs are gone.
 
 use std::fmt;
 
@@ -17,12 +20,14 @@ mod cpal_backend;
 mod level;
 mod passthrough;
 mod ring;
+mod xrun;
 
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
+pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};
 
 /// The sample rate and block size a stream is asked to run at.
 ///
@@ -176,6 +181,12 @@ pub trait DuplexStream {
     /// next one does. A stopped stream keeps reporting the block it stopped on.
     fn levels(&self) -> Levels;
 
+    /// How many callbacks have lost frames in each direction.
+    ///
+    /// Counted from when the stream was opened, and never cleared — stopping
+    /// and starting one does not reset them.
+    fn xruns(&self) -> Xruns;
+
     /// Start calling back.
     ///
     /// # Errors
@@ -291,6 +302,12 @@ impl DuplexStream for NullStream {
     /// [`Levels::SILENT`].
     fn levels(&self) -> Levels {
         Levels::SILENT
+    }
+
+    /// A stream that moves no samples can lose none, so this is always
+    /// [`Xruns::NONE`].
+    fn xruns(&self) -> Xruns {
+        Xruns::NONE
     }
 
     fn start(&mut self) -> Result<(), DeviceError> {

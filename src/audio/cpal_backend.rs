@@ -5,7 +5,8 @@ use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
     AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, LevelReader, Levels,
-    StreamConfig, StreamRequest, StreamState, level_meter, passthrough,
+    StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, level_meter, passthrough,
+    xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -195,6 +196,7 @@ impl AudioBackend for CpalBackend {
             request.block_size as usize,
         );
         let (mut level_writer, levels) = level_meter();
+        let (mut overruns, mut underruns, xruns) = xrun_counter();
 
         let input_stream = input
             .build_input_stream_raw(
@@ -203,7 +205,8 @@ impl AudioBackend for CpalBackend {
                 move |data: &Data, _: &_| {
                     if let Some(samples) = data.as_slice::<f32>() {
                         level_writer.publish(samples);
-                        passthrough_input.capture(samples);
+                        let offered = samples.len() / input_channels as usize;
+                        overruns.captured(passthrough_input.capture(samples), offered);
                     }
                 },
                 |_| {},
@@ -217,7 +220,8 @@ impl AudioBackend for CpalBackend {
                 SampleFormat::F32,
                 move |data: &mut Data, _: &_| {
                     if let Some(samples) = data.as_slice_mut::<f32>() {
-                        passthrough_output.render(samples);
+                        let wanted = samples.len() / output_channels as usize;
+                        underruns.supplied(passthrough_output.render(samples), wanted);
                     }
                 },
                 |_| {},
@@ -243,6 +247,7 @@ impl AudioBackend for CpalBackend {
             input: input_stream,
             output: output_stream,
             levels,
+            xruns,
         })
     }
 }
@@ -254,6 +259,7 @@ pub struct CpalStream {
     input: cpal::Stream,
     output: cpal::Stream,
     levels: LevelReader,
+    xruns: XrunReader,
 }
 
 impl DuplexStream for CpalStream {
@@ -276,6 +282,13 @@ impl DuplexStream for CpalStream {
     /// it delivered them on.
     fn levels(&self) -> Levels {
         self.levels.read()
+    }
+
+    /// Counted against the passthrough path rather than reported by the device,
+    /// so a block the device drops before the callback sees it is invisible
+    /// here — the callback is simply not called.
+    fn xruns(&self) -> Xruns {
+        self.xruns.read()
     }
 
     /// Both streams are acted on before either error is returned, so one of
