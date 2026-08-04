@@ -12,14 +12,13 @@
 
 use crate::device::{Button, DeviceProfile};
 use crate::looper::{PositionReader, Transport};
-use crate::ui::{App, Cell, ControlEvent, Flow, Frame};
+use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Legend};
 
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
 const READOUT_ROW: usize = 2;
 const BAR_ROW: usize = 3;
 const ARMED: &str = "ARMED";
-const LEGEND: &str = "play   stop   rec";
 const FILLED: char = '#';
 const UNFILLED: char = '-';
 const TENTHS_PER_SECOND: u64 = 10;
@@ -132,6 +131,13 @@ impl App for LooperPage {
         Flow::Continue
     }
 
+    fn legend(&self) -> Legend {
+        Legend::blank()
+            .naming(Button::Play, "play")
+            .naming(Button::Stop, "stop")
+            .naming(Button::Record, "rec")
+    }
+
     fn draw(&mut self, frame: &mut Frame) -> Flow {
         let position = self.position.read();
 
@@ -151,12 +157,6 @@ impl App for LooperPage {
             0,
             BAR_ROW,
             &bar(position.playhead(), position.recorded()),
-        );
-        write(
-            frame,
-            0,
-            DeviceProfile::TARGET.screen.rows.saturating_sub(1),
-            LEGEND,
         );
 
         Flow::Continue

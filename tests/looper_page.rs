@@ -226,10 +226,18 @@ fn the_bar_spans_the_screen() {
 }
 
 #[test]
-fn the_panel_legend_is_on_screen() {
-    let legend = drawn(&mut page()).pop().unwrap_or_default();
+fn the_page_declares_what_the_transport_buttons_do() {
+    let legend = page().legend();
 
-    assert!(legend.contains("play"));
-    assert!(legend.contains("stop"));
-    assert!(legend.contains("rec"));
+    assert_eq!(legend.meaning(Button::Play), Some("play"));
+    assert_eq!(legend.meaning(Button::Stop), Some("stop"));
+    assert_eq!(legend.meaning(Button::Record), Some("rec"));
+}
+
+#[test]
+fn the_page_declares_nothing_for_a_control_it_leaves_alone() {
+    let legend = page().legend();
+
+    assert_eq!(legend.meaning(Button::Up), None);
+    assert_eq!(legend.meaning(Encoder::First), None);
 }

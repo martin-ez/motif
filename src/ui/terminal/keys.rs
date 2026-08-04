@@ -6,8 +6,8 @@
 
 use std::io::Read;
 
-use crate::device::{Button, Encoder};
-use crate::ui::{ControlEvent, Controls, Turn};
+use crate::device::{Button, Control, Encoder};
+use crate::ui::{ControlEvent, Controls, Hint, Turn};
 
 const ESCAPE: u8 = 0x1b;
 const PARAMETERS_START: usize = 2;
@@ -86,6 +86,26 @@ fn encoder_turned(press: Press) -> Option<ControlEvent> {
 
 fn control_of(press: Press) -> Option<ControlEvent> {
     button_pressed(press).or_else(|| encoder_turned(press))
+}
+
+fn glyph_of(key: Key) -> char {
+    match key {
+        Key::Glyph(glyph) => glyph,
+        Key::Up => '^',
+        Key::Down => 'v',
+        Key::Left => '<',
+        Key::Right => '>',
+    }
+}
+
+fn hint_of(control: Control) -> Hint {
+    match control {
+        Control::Button(button) => Hint::new([glyph_of(key_of(button))]),
+        Control::Encoder(encoder) => {
+            let [anticlockwise, clockwise] = keys_of(encoder);
+            Hint::new([glyph_of(anticlockwise), '/', glyph_of(clockwise)])
+        }
+    }
 }
 
 fn arrow(final_byte: u8) -> Option<Key> {
@@ -179,6 +199,11 @@ fn next_press(bytes: &[u8]) -> Step {
 /// case letter, or an arrow whose escape sequence carries modifier 2, and it is
 /// resolved here rather than reported as a control of its own.
 ///
+/// The same mapping is what the reader hands the screen to name a control by,
+/// so the legend a player reads cannot disagree with the keys that work. A key
+/// that has no glyph of its own is named by the shape it points in — `^`, `v`,
+/// `<`, `>` — and an encoder by its pair, as `q/w`.
+///
 /// Reads are never waited on: a read that hands back nothing ends the poll, so
 /// a source that blocks until a key is pressed will spend the frame budget. The
 /// terminal is put into a mode that returns immediately by
@@ -230,6 +255,10 @@ impl<R: Read> KeyReader<R> {
 }
 
 impl<R: Read> Controls for KeyReader<R> {
+    fn hint(&self, control: Control) -> Option<Hint> {
+        Some(hint_of(control))
+    }
+
     fn poll(&mut self) -> Option<ControlEvent> {
         for _ in 0..PENDING_CAPACITY {
             match next_press(&self.pending[..self.filled]) {

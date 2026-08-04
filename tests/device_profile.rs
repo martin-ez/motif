@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use motif::device::{AudioProfile, Button, DeviceProfile, Encoder, ScreenProfile};
+use motif::device::{AudioProfile, Button, Control, DeviceProfile, Encoder, ScreenProfile};
 
 fn target() -> DeviceProfile {
     DeviceProfile::TARGET
@@ -135,6 +135,36 @@ fn the_panel_navigates_in_four_directions() {
 fn the_panel_carries_the_transport() {
     for transport in [Button::Play, Button::Stop, Button::Record] {
         assert!(Button::ALL.contains(&transport), "{transport:?} is missing");
+    }
+}
+
+#[test]
+fn every_button_is_a_control_on_the_panel() {
+    for button in Button::ALL {
+        let listed = Control::ALL.contains(&Control::Button(button));
+
+        assert!(listed, "{button:?} is not listed as a control");
+    }
+}
+
+#[test]
+fn every_encoder_is_a_control_on_the_panel() {
+    for encoder in Encoder::ALL {
+        let listed = Control::ALL.contains(&Control::Encoder(encoder));
+
+        assert!(listed, "{encoder:?} is not listed as a control");
+    }
+}
+
+#[test]
+fn the_panel_holds_nothing_but_its_buttons_and_encoders() {
+    assert_eq!(Control::ALL.len(), Button::ALL.len() + Encoder::ALL.len());
+}
+
+#[test]
+fn a_control_is_its_own_position_on_the_panel() {
+    for (position, control) in Control::ALL.iter().enumerate() {
+        assert_eq!(control.position(), position);
     }
 }
 

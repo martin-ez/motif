@@ -5,7 +5,7 @@
 
 use std::io::{self, Read};
 
-use motif::device::{Button, Encoder};
+use motif::device::{Button, Control, Encoder};
 use motif::ui::{ControlEvent, Controls, KeyReader, Turn};
 
 /// A source that hands over one chunk per read, standing in for keys that
@@ -254,4 +254,44 @@ fn a_poll_gives_up_on_a_source_that_never_runs_dry() {
 #[test]
 fn a_source_that_refuses_a_read_is_no_event() {
     assert!(events_from(BrokenSource).is_empty());
+}
+
+fn hint(control: Control) -> String {
+    KeyReader::new(&b""[..])
+        .hint(control)
+        .expect("every control is reached by a key")
+        .to_string()
+}
+
+#[test]
+fn a_transport_button_is_named_by_the_key_that_presses_it() {
+    assert_eq!(hint(Control::Button(Button::Play)), "z");
+    assert_eq!(hint(Control::Button(Button::Stop)), "x");
+    assert_eq!(hint(Control::Button(Button::Record)), "c");
+}
+
+#[test]
+fn a_navigation_button_is_named_by_the_arrow_that_points_at_it() {
+    assert_eq!(hint(Control::Button(Button::Up)), "^");
+    assert_eq!(hint(Control::Button(Button::Down)), "v");
+    assert_eq!(hint(Control::Button(Button::Left)), "<");
+    assert_eq!(hint(Control::Button(Button::Right)), ">");
+}
+
+#[test]
+fn an_encoder_is_named_by_the_pair_of_keys_that_turn_it() {
+    assert_eq!(hint(Control::Encoder(Encoder::First)), "q/w");
+    assert_eq!(hint(Control::Encoder(Encoder::Fourth)), "u/i");
+}
+
+#[test]
+fn every_control_on_the_panel_is_reached_by_a_key() {
+    let reader = KeyReader::new(&b""[..]);
+
+    for control in Control::ALL {
+        assert!(
+            reader.hint(control).is_some(),
+            "{control:?} is on the panel and no key reaches it"
+        );
+    }
 }

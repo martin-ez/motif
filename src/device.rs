@@ -158,6 +158,68 @@ panel_control! {
     Record,
 }
 
+/// A control on the panel, of whichever kind.
+///
+/// [`Button`] and [`Encoder`] are separate sets because a button is pressed and
+/// an encoder is turned, and an event is one or the other. Anything describing
+/// the panel as a whole — which controls a page answers, how a backend reaches
+/// them — needs the two as one set, and this is it.
+///
+/// [`ALL`](Self::ALL) is derived from the two arrays rather than written out, so
+/// a control added to the panel cannot be left out of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Control {
+    /// A button, which is pressed.
+    Button(Button),
+    /// An encoder, which is turned.
+    Encoder(Encoder),
+}
+
+impl Control {
+    /// Every control on the panel: the buttons in panel order, then the
+    /// encoders left to right.
+    ///
+    /// A control's place here is its [`position`](Self::position), so an array
+    /// sized by `ALL.len()` holds one entry per control.
+    pub const ALL: [Self; Button::ALL.len() + Encoder::ALL.len()] = Self::listed();
+
+    /// Where this control sits in [`ALL`](Self::ALL).
+    pub const fn position(self) -> usize {
+        match self {
+            Self::Button(button) => button as usize,
+            Self::Encoder(encoder) => Button::ALL.len() + encoder as usize,
+        }
+    }
+
+    const fn listed() -> [Self; Button::ALL.len() + Encoder::ALL.len()] {
+        let mut listed = [Self::Button(Button::Up); Button::ALL.len() + Encoder::ALL.len()];
+        let mut at = 0;
+
+        while at < Button::ALL.len() {
+            listed[at] = Self::Button(Button::ALL[at]);
+            at += 1;
+        }
+        while at < listed.len() {
+            listed[at] = Self::Encoder(Encoder::ALL[at - Button::ALL.len()]);
+            at += 1;
+        }
+
+        listed
+    }
+}
+
+impl From<Button> for Control {
+    fn from(button: Button) -> Self {
+        Self::Button(button)
+    }
+}
+
+impl From<Encoder> for Control {
+    fn from(encoder: Encoder) -> Self {
+        Self::Encoder(encoder)
+    }
+}
+
 /// The audio device the engine is built against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AudioProfile {

@@ -15,7 +15,9 @@ use std::process::ExitCode;
 
 use motif::device::{Button, DeviceProfile};
 use motif::looper::{LooperPage, PositionReader, position_meter};
-use motif::ui::{App, Cell, ControlEvent, EventLoop, Flow, Frame, RenderError, TerminalScreen};
+use motif::ui::{
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, TerminalScreen,
+};
 
 const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
 const QUIT: &str = "shift + stop to quit";
@@ -30,6 +32,13 @@ impl Shell {
             looper: LooperPage::new(position),
         }
     }
+}
+
+fn last_row_above_the_legend() -> usize {
+    DeviceProfile::TARGET
+        .screen
+        .rows
+        .saturating_sub(Legend::ROWS + 1)
 }
 
 fn write_right(frame: &mut Frame, row: usize, text: &str) {
@@ -52,15 +61,15 @@ impl App for Shell {
         }
     }
 
+    fn legend(&self) -> Legend {
+        self.looper.legend()
+    }
+
     fn draw(&mut self, frame: &mut Frame) -> Flow {
         let flow = self.looper.draw(frame);
 
         write_right(frame, 0, NAME);
-        write_right(
-            frame,
-            DeviceProfile::TARGET.screen.rows.saturating_sub(1),
-            QUIT,
-        );
+        write_right(frame, last_row_above_the_legend(), QUIT);
 
         flow
     }

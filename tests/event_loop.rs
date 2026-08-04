@@ -7,9 +7,13 @@ use std::time::{Duration, Instant};
 
 use motif::device::{Button, DeviceProfile};
 use motif::ui::{
-    App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, NullRenderer,
-    RenderError, Renderer, ScriptedClock, ScriptedControls,
+    App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, Legend,
+    NullRenderer, RenderError, Renderer, ScriptedClock, ScriptedControls,
 };
+
+/// What the page below says its one answered control does, so a legend on the
+/// screen can be told apart from anything else drawn there.
+const MEANING: &str = "go";
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
 
@@ -58,6 +62,10 @@ impl App for Page {
             ControlEvent::Pressed { button, .. } if self.quits_on == Some(button) => Flow::Exit,
             _ => Flow::Continue,
         }
+    }
+
+    fn legend(&self) -> Legend {
+        Legend::blank().naming(Button::Play, MEANING)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {
@@ -387,6 +395,70 @@ fn a_screen_that_cannot_be_written_is_not_drawn_again() {
 
     assert!(failed.is_err());
     assert_eq!(app.drawn, 1);
+}
+
+/// An application that draws over the rows the legend keeps for itself.
+struct Covering;
+
+impl App for Covering {
+    fn control(&mut self, _event: ControlEvent) -> Flow {
+        Flow::Continue
+    }
+
+    fn legend(&self) -> Legend {
+        Legend::blank().naming(Button::Play, MEANING)
+    }
+
+    fn draw(&mut self, frame: &mut Frame) -> Flow {
+        let screen = DeviceProfile::TARGET.screen;
+        for column in 0..screen.columns {
+            frame.set(column, screen.rows - 1, Cell::new('#'));
+        }
+
+        Flow::Exit
+    }
+}
+
+fn text_of(frame: &Frame) -> String {
+    let screen = DeviceProfile::TARGET.screen;
+    let mut text = String::new();
+
+    for row in 0..screen.rows {
+        for column in 0..screen.columns {
+            text.push(frame.get(column, row).unwrap_or(Cell::BLANK).glyph());
+        }
+        text.push('\n');
+    }
+
+    text
+}
+
+#[test]
+fn a_run_puts_what_the_page_declares_on_the_screen() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    let drawn = screen.rendered().expect("a frame was drawn");
+    assert!(text_of(drawn).contains(MEANING));
+}
+
+#[test]
+fn the_legend_is_drawn_over_what_the_page_put_in_its_rows() {
+    let mut app = Covering;
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    let drawn = screen.rendered().expect("a frame was drawn");
+    assert!(!text_of(drawn).contains('#'));
 }
 
 #[test]
