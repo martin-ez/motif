@@ -40,7 +40,21 @@ Three signals worth acting on:
 - **Edges complete?** Ask what this work reaches for on day one. If that is an
   open issue and not a blocker, the edge is missing.
 
-## 3. Apply, additively
+## 3. Offer a closer look
+
+The assessment is a proposal, and the user knows things the tracker does not —
+why a design went the way it did, what they mean to try next. Put it to them with
+`AskUserQuestion` before applying any of it: one option per issue you would
+change, at most three and the ones where their input would change the shape, plus
+one for applying the plan as it stands. `Other` is where they name an issue you
+did not list.
+
+On a pick, `show` that issue and work it through with them. What they add is
+scope, so it leaves as sub-issues, edges or a `note` — never as a promise to
+remember it. Then ask again: context on one issue tends to surface context on the
+next. Stop when they choose to apply.
+
+## 4. Apply, additively
 
 ```sh
 scripts/track.sh add -t '<part>' --parent 65 --area infra --kind chore --size s
@@ -52,7 +66,7 @@ There is no body-edit command, and that is the right constraint: a change of
 scope becomes a comment plus new sub-issues, so the issue's history stays
 readable instead of being rewritten under a reviewer who already read it.
 
-## 4. Confirm
+## 5. Confirm
 
 `scripts/track.sh ready` — children should appear, `SPLIT:` should be gone, any
 cycle resolved. If nothing moved, the refinement did not land; say so rather than
