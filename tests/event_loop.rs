@@ -1,0 +1,301 @@
+//! The loop that ties controls, application state and drawing together.
+//!
+//! Nothing here names a terminal or a key: the loop is handed a panel and a
+//! screen, and an application that knows only about controls and frames.
+
+use std::time::{Duration, Instant};
+
+use motif::device::{Button, DeviceProfile};
+use motif::ui::{
+    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, NullRenderer, RenderError, Renderer,
+    ScriptedClock, ScriptedControls,
+};
+
+const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
+
+fn pressed(button: Button) -> ControlEvent {
+    ControlEvent::Pressed {
+        button,
+        shifted: false,
+    }
+}
+
+/// An application that marks each frame it draws on a row of its own.
+struct Page {
+    seen: Vec<ControlEvent>,
+    drawn: usize,
+    draws_before_exit: usize,
+    quits_on: Option<Button>,
+}
+
+impl Page {
+    fn lasting(draws: usize) -> Self {
+        Self {
+            seen: Vec::new(),
+            drawn: 0,
+            draws_before_exit: draws,
+            quits_on: None,
+        }
+    }
+
+    fn quitting_on(button: Button) -> Self {
+        Self {
+            quits_on: Some(button),
+            ..Self::lasting(usize::MAX)
+        }
+    }
+}
+
+impl App for Page {
+    fn control(&mut self, event: ControlEvent) -> Flow {
+        self.seen.push(event);
+
+        match event {
+            ControlEvent::Pressed { button, .. } if self.quits_on == Some(button) => Flow::Exit,
+            _ => Flow::Continue,
+        }
+    }
+
+    fn draw(&mut self, frame: &mut Frame) -> Flow {
+        frame.set(0, self.drawn, Cell::new('*'));
+        self.drawn += 1;
+
+        if self.drawn >= self.draws_before_exit {
+            Flow::Exit
+        } else {
+            Flow::Continue
+        }
+    }
+}
+
+struct BrokenScreen;
+
+impl Renderer for BrokenScreen {
+    fn render(&mut self, _frame: &Frame) -> Result<(), RenderError> {
+        Err(RenderError::WriteFailed)
+    }
+}
+
+fn scripted(readings: impl IntoIterator<Item = Duration>) -> EventLoop<ScriptedClock> {
+    EventLoop::with_clock(ScriptedClock::new(readings))
+}
+
+fn still() -> EventLoop<ScriptedClock> {
+    scripted([])
+}
+
+#[test]
+fn a_run_ends_when_the_application_asks_to_exit() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+
+    let report = still().run(&mut app, &mut controls, &mut screen);
+
+    assert_eq!(report.map(|report| report.frames()), Ok(1));
+}
+
+#[test]
+fn a_run_ends_when_a_control_asks_to_exit() {
+    let mut app = Page::quitting_on(Button::Stop);
+    let mut controls = ScriptedControls::new([pressed(Button::Stop)]);
+    let mut screen = NullRenderer::new();
+
+    let report = still().run(&mut app, &mut controls, &mut screen);
+
+    assert!(report.is_ok());
+}
+
+#[test]
+fn a_control_that_ends_the_run_is_not_drawn_after() {
+    let mut app = Page::quitting_on(Button::Stop);
+    let mut controls = ScriptedControls::new([pressed(Button::Stop)]);
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(app.drawn, 0);
+    assert_eq!(screen.rendered(), None);
+}
+
+#[test]
+fn events_waiting_behind_an_exit_are_left_unread() {
+    let mut app = Page::quitting_on(Button::Stop);
+    let mut controls = ScriptedControls::new([pressed(Button::Stop), pressed(Button::Play)]);
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(controls.poll(), Some(pressed(Button::Play)));
+}
+
+#[test]
+fn every_event_waiting_reaches_the_application_in_one_frame() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([pressed(Button::Play), pressed(Button::Record)]);
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(app.seen, [pressed(Button::Play), pressed(Button::Record)]);
+}
+
+#[test]
+fn what_the_application_drew_is_what_the_screen_is_given() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    let drawn = screen.rendered().and_then(|frame| frame.get(0, 0));
+    assert_eq!(drawn, Some(Cell::new('*')));
+}
+
+#[test]
+fn each_frame_starts_blank() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    let rendered = screen.rendered().expect("two frames were drawn");
+    assert_eq!(rendered.get(0, 0), Some(Cell::BLANK));
+    assert_eq!(rendered.get(0, 1), Some(Cell::new('*')));
+}
+
+#[test]
+fn a_frame_is_counted_for_every_time_the_screen_was_drawn() {
+    let mut app = Page::lasting(3);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+
+    let report = still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(report.frames(), 3);
+}
+
+#[test]
+fn a_frame_with_time_to_spare_gives_the_rest_of_it_back() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+    let mut loops = scripted([
+        Duration::ZERO,
+        Duration::from_millis(3),
+        Duration::from_millis(3),
+        Duration::from_millis(6),
+    ]);
+
+    loops
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(loops.clock().slept(), [BUDGET - Duration::from_millis(3)]);
+}
+
+#[test]
+fn a_frame_that_ran_over_its_budget_does_not_wait() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+    let mut loops = scripted([Duration::ZERO, BUDGET + Duration::from_millis(1)]);
+
+    loops
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert!(loops.clock().slept().is_empty());
+}
+
+#[test]
+fn a_frame_that_ran_over_its_budget_is_counted_as_an_overrun() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+    let mut loops = scripted([Duration::ZERO, BUDGET + Duration::from_millis(1)]);
+
+    let report = loops
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(report.overruns(), 1);
+}
+
+#[test]
+fn a_frame_inside_its_budget_is_no_overrun() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+    let mut loops = scripted([Duration::ZERO, Duration::from_millis(1)]);
+
+    let report = loops
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(report.overruns(), 0);
+}
+
+#[test]
+fn the_last_frame_of_a_run_is_not_paced() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+    let mut loops = scripted([Duration::ZERO, Duration::from_millis(1)]);
+
+    loops
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert!(loops.clock().slept().is_empty());
+}
+
+#[test]
+fn a_screen_that_cannot_be_written_ends_the_run() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = BrokenScreen;
+
+    let report = still().run(&mut app, &mut controls, &mut screen);
+
+    assert_eq!(report.err(), Some(RenderError::WriteFailed));
+}
+
+#[test]
+fn a_screen_that_cannot_be_written_is_not_drawn_again() {
+    let mut app = Page::lasting(usize::MAX);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = BrokenScreen;
+
+    let failed = still().run(&mut app, &mut controls, &mut screen);
+
+    assert!(failed.is_err());
+    assert_eq!(app.drawn, 1);
+}
+
+#[test]
+fn a_run_on_the_machine_clock_spends_a_budget_on_every_frame_but_the_last() {
+    let mut app = Page::lasting(2);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+
+    let started = Instant::now();
+    EventLoop::new()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert!(started.elapsed() >= BUDGET);
+}

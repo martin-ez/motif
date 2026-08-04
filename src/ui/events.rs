@@ -1,0 +1,210 @@
+//! The loop that runs an application: controls in, a frame out, at a fixed rate.
+//!
+//! The rate is [`ScreenProfile::frame_budget`], and it is a budget rather than a
+//! target to beat. Drawing as often as the machine allows costs a laptop
+//! nothing and costs the target the time analysis needs, so a frame that
+//! finishes early gives the rest back.
+//!
+//! An [`App`] is handed controls and a blank [`Frame`], and says whether it is
+//! still running. It never learns what the frame is drawn on or what the player
+//! touched to produce a control, which is what keeps a terminal one backend
+//! among others.
+//!
+//! ```
+//! use motif::device::Button;
+//! use motif::ui::{
+//!     App, Cell, ControlEvent, EventLoop, Flow, Frame, NullRenderer, ScriptedControls,
+//! };
+//!
+//! struct Splash;
+//!
+//! impl App for Splash {
+//!     fn control(&mut self, event: ControlEvent) -> Flow {
+//!         match event {
+//!             ControlEvent::Pressed { button: Button::Stop, .. } => Flow::Exit,
+//!             _ => Flow::Continue,
+//!         }
+//!     }
+//!
+//!     fn draw(&mut self, frame: &mut Frame) -> Flow {
+//!         frame.set(0, 0, Cell::new('m'));
+//!         Flow::Continue
+//!     }
+//! }
+//!
+//! let mut app = Splash;
+//! let mut controls = ScriptedControls::new([ControlEvent::Pressed {
+//!     button: Button::Stop,
+//!     shifted: false,
+//! }]);
+//! let mut screen = NullRenderer::new();
+//!
+//! let report = EventLoop::new().run(&mut app, &mut controls, &mut screen)?;
+//!
+//! assert_eq!(report.frames(), 0);
+//! # Ok::<(), motif::ui::RenderError>(())
+//! ```
+
+use std::time::Duration;
+
+use crate::device::DeviceProfile;
+use crate::ui::{Clock, ControlEvent, Controls, Frame, RenderError, Renderer, SystemClock};
+
+/// Whether the application is still running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    /// Carry on to the next frame.
+    Continue,
+    /// Stop, and hand control back to whoever started the loop.
+    Exit,
+}
+
+impl Flow {
+    /// Whether this is [`Flow::Exit`].
+    pub const fn is_exit(self) -> bool {
+        matches!(self, Self::Exit)
+    }
+}
+
+/// An application an [`EventLoop`] can run.
+///
+/// Both methods answer with a [`Flow`], because a run ends for more reasons
+/// than a player pressing something: a state the application reaches between
+/// frames can end it too.
+pub trait App {
+    /// Take one thing the player did.
+    ///
+    /// Called once per event, for every event waiting when the frame began.
+    fn control(&mut self, event: ControlEvent) -> Flow;
+
+    /// Put the application's state on `frame`.
+    ///
+    /// The frame arrives blank. Drawing is what the frame budget is for, so
+    /// this is the one place in a frame where an application is expected to
+    /// spend it.
+    fn draw(&mut self, frame: &mut Frame) -> Flow;
+}
+
+/// What a run of the loop did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RunReport {
+    frames: u64,
+    overruns: u64,
+}
+
+impl RunReport {
+    /// How many frames reached the screen.
+    pub const fn frames(self) -> u64 {
+        self.frames
+    }
+
+    /// How many of them took longer than the budget allows.
+    ///
+    /// An overrun is reported rather than made up for: a loop that ran the next
+    /// frame early to catch up would draw two frames back to back and spend
+    /// twice the budget doing it, which is the opposite of what a budget is
+    /// for.
+    pub const fn overruns(self) -> u64 {
+        self.overruns
+    }
+}
+
+/// The loop an application runs inside.
+///
+/// It owns the [`Frame`] every draw goes into, so a running loop allocates
+/// nothing per frame; the frame is blanked between draws rather than replaced.
+pub struct EventLoop<K: Clock = SystemClock> {
+    clock: K,
+    budget: Duration,
+    frame: Frame,
+}
+
+impl EventLoop<SystemClock> {
+    /// A loop paced by the machine's clock.
+    pub fn new() -> Self {
+        Self::with_clock(SystemClock::new())
+    }
+}
+
+impl Default for EventLoop<SystemClock> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K: Clock> EventLoop<K> {
+    /// A loop paced by `clock`.
+    pub fn with_clock(clock: K) -> Self {
+        Self {
+            clock,
+            budget: DeviceProfile::TARGET.screen.frame_budget(),
+            frame: Frame::blank(),
+        }
+    }
+
+    /// The clock the loop is pacing itself against.
+    pub fn clock(&self) -> &K {
+        &self.clock
+    }
+
+    /// Run `app` until it asks to stop, taking controls from `controls` and
+    /// drawing to `screen`.
+    ///
+    /// A frame takes every control event that was already waiting, draws once,
+    /// renders, and then waits out the rest of its budget. An event arriving
+    /// mid-frame is handled by the next one: the frame boundary is what makes a
+    /// draw see one state rather than a state that changed underneath it.
+    ///
+    /// An exit from [`App::control`] ends the run without drawing, because the
+    /// application has just said there is nothing further to show. An exit from
+    /// [`App::draw`] renders that frame first — it is the one the application
+    /// wants left on the screen — and neither waits out a budget nobody is
+    /// going to use.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`RenderError`] the screen gave, having stopped: a screen
+    /// that cannot be written to will not improve by being written to sixty
+    /// times a second, and the caller is the one that can tell the player.
+    pub fn run(
+        &mut self,
+        app: &mut impl App,
+        controls: &mut impl Controls,
+        screen: &mut impl Renderer,
+    ) -> Result<RunReport, RenderError> {
+        let mut report = RunReport::default();
+
+        loop {
+            let started = self.clock.now();
+
+            if drain(app, controls).is_exit() {
+                return Ok(report);
+            }
+
+            self.frame = Frame::blank();
+            let flow = app.draw(&mut self.frame);
+            screen.render(&self.frame)?;
+            report.frames += 1;
+
+            if flow.is_exit() {
+                return Ok(report);
+            }
+
+            let spent = self.clock.now().duration_since(started);
+            match self.budget.checked_sub(spent) {
+                Some(spare) => self.clock.sleep(spare),
+                None => report.overruns += 1,
+            }
+        }
+    }
+}
+
+fn drain(app: &mut impl App, controls: &mut impl Controls) -> Flow {
+    while let Some(event) = controls.poll() {
+        if app.control(event).is_exit() {
+            return Flow::Exit;
+        }
+    }
+
+    Flow::Continue
+}

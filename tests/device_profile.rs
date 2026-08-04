@@ -1,6 +1,8 @@
 //! The device profile: the frozen shape of the machine `motif` is built for,
 //! and the arithmetic the rest of the crate sizes itself with.
 
+use std::time::Duration;
+
 use motif::device::{AudioProfile, Button, DeviceProfile, Encoder, ScreenProfile};
 
 fn target() -> DeviceProfile {
@@ -11,6 +13,7 @@ fn default_terminal() -> ScreenProfile {
     ScreenProfile {
         columns: 80,
         rows: 24,
+        refresh_rate: 60,
     }
 }
 
@@ -19,9 +22,47 @@ fn a_screen_holds_one_cell_per_column_and_row() {
     let screen = ScreenProfile {
         columns: 4,
         rows: 3,
+        refresh_rate: 30,
     };
 
     assert_eq!(screen.cells(), 12);
+}
+
+#[test]
+fn a_frame_budget_is_a_second_split_between_the_frames_in_it() {
+    let screen = ScreenProfile {
+        columns: 4,
+        rows: 3,
+        refresh_rate: 50,
+    };
+
+    assert_eq!(screen.frame_budget(), Duration::from_millis(20));
+}
+
+#[test]
+fn a_screen_that_never_refreshes_has_no_budget_to_keep() {
+    let screen = ScreenProfile {
+        columns: 4,
+        rows: 3,
+        refresh_rate: 0,
+    };
+
+    assert_eq!(screen.frame_budget(), Duration::ZERO);
+}
+
+#[test]
+fn a_frame_budget_is_known_at_compile_time() {
+    const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
+
+    assert_eq!(BUDGET, target().screen.frame_budget());
+}
+
+#[test]
+fn the_target_refreshes_slower_than_its_audio_callback_arrives() {
+    let (screen, audio) = (target().screen, target().audio);
+    let block = Duration::from_secs_f64(audio.block_size as f64 / audio.sample_rate as f64);
+
+    assert!(screen.frame_budget() > block);
 }
 
 #[test]
