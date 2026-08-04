@@ -15,8 +15,12 @@
 
 use crate::device::AudioProfile;
 
+mod page;
+mod position;
 mod transport;
 
+pub use page::LooperPage;
+pub use position::{LoopPosition, PositionReader, PositionWriter, position_meter};
 pub use transport::Transport;
 
 /// The samples of a loop, in storage that is allocated once and never grows.

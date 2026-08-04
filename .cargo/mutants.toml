@@ -28,8 +28,10 @@ exclude_globs = [
 # name so that every other mutation of the encoding still has to be caught.
 #
 # A level pair is packed the same way, peak above bit 32 and RMS below it, and
-# is equivalent for the same reason: two disjoint halves of a word.
+# is equivalent for the same reason: two disjoint halves of a word. So is a loop
+# position, playhead above bit 32 and recorded length below it.
 exclude_re = [
   'replace \| with \^ in Command::to_bits',
   'replace \| with \^ in Levels::packed',
+  'replace \| with \^ in LoopPosition::packed',
 ]
