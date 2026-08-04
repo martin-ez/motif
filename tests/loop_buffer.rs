@@ -472,7 +472,8 @@ fn layering_and_mixing_do_not_allocate() {
         buffer.record(&block);
         buffer.mix_into(&mut mixed, 0);
     }
-    while buffer.undo() {
+    for _ in 1..LoopBuffer::LAYERS {
+        buffer.undo();
         buffer.mix_into(&mut mixed, 0);
     }
     buffer.clear();
