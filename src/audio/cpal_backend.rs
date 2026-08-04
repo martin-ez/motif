@@ -59,7 +59,7 @@ fn named_device(device: &cpal::Device, channels: Vec<u16>) -> Option<AudioDevice
         return None;
     }
     Some(AudioDevice {
-        name: device.to_string(),
+        name: device.description().ok()?.name().to_owned(),
         channels,
     })
 }

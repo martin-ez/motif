@@ -130,13 +130,18 @@ pub trait AudioBackend {
     /// The stream this backend opens.
     type Stream: DuplexStream;
 
-    /// Every host with a device that can be opened at `sample_rate`.
+    /// The hosts and devices there are to open at `sample_rate`.
     ///
     /// Listed means openable: a device that comes back offers `f32` at
     /// `sample_rate` on every channel count it lists, and one that cannot meet
     /// that is absent rather than listed and unopenable. A host left with no
     /// devices is absent too, being a row with nothing behind it. Channel
     /// counts ascend without repeats.
+    ///
+    /// Only that direction is promised. A backend may still open something it
+    /// did not list — [`NullBackend::rounding`] grants its own configuration
+    /// whatever it is asked for — so this is a menu to choose from rather than
+    /// a ruling on what would work.
     ///
     /// A host that will not open, or a device that will not answer, drops out
     /// of the list rather than failing the call. There is nothing a caller can

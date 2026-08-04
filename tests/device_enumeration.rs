@@ -45,7 +45,7 @@ fn a_listed_device_is_named() {
 }
 
 #[test]
-fn a_device_that_cannot_meet_the_sample_rate_is_absent() {
+fn a_device_is_listed_only_at_the_rate_it_was_granted() {
     let backend = NullBackend::rounding(config());
 
     let hosts = backend.hosts(44_100);
