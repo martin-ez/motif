@@ -94,6 +94,39 @@ agent_id() {
   printf '%s' "$br"
 }
 
+# Which claims belong to this agent. The id in a claim marker is the branch that
+# recorded it, so ownership is a question about branches: the one checked out
+# here is this agent's, and one that no worktree holds is work a crashed session
+# left behind — the case `mine` exists to answer. A branch checked out in another
+# worktree belongs to the agent working there.
+#
+# Compared by branch name rather than worktree path, because the same worktree
+# reached through a symlink yields a path that compares unequal to itself.
+foreign_branches() {
+  local cur
+  cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  git worktree list --porcelain 2>/dev/null | awk -v cur="$cur" '
+    /^branch / { b = substr($0, 8); sub(/^refs\/heads\//, "", b)
+                 if (b != "" && b != cur) print b }'
+  return 0
+}
+
+# MOTIF_AGENT names an agent outright, so it answers alone: a caller asking what
+# another agent holds must not also be told about the branches lying around here.
+held_agent_ids() {
+  if [ -n "${MOTIF_AGENT:-}" ]; then
+    validate_agent "$MOTIF_AGENT"
+    printf '%s\n' "$MOTIF_AGENT"
+    return 0
+  fi
+  { printf 'main\nmaster\n'; foreign_branches; printf -- '--\n'
+    git branch --format='%(refname:short)' 2>/dev/null; } \
+  | awk '/^--$/ { owned = 1; next }
+         !owned    { skip[$0] = 1; next }
+         !($0 in skip)'
+  return 0
+}
+
 # The claim marker parses the agent with [^ ]+, so whitespace would produce a
 # marker that can never be matched back: the claim would look successful and be
 # invisible to every other command.
@@ -386,14 +419,16 @@ cmd_find() {
 }
 
 cmd_mine() {
-  local me held n
-  me="$(agent_id)"
-  held="$(claimed_issues | jq -sc --arg me "$me" '[.[] | select(.claim.agent == $me)]')"
+  local held n ids where
+  ids="$(held_agent_ids | jq -R . | jq -sc 'unique')"
+  held="$(claimed_issues | jq -sc --argjson ids "$ids" \
+          '[.[] | select(.claim.agent as $a | $ids | index($a))]')"
 
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$held"; return 0; fi
 
   n="$(printf '%s' "$held" | jq 'length')"
-  printf 'mine %s held by %s\n' "$n" "$me"
+  where="${MOTIF_AGENT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
+  printf 'mine %s held in %s\n' "$n" "${where:-this checkout}"
   printf '%s' "$held" | jq -r --argjson m "$TITLE_MAX" '
     .[] | [ .num, (.size // ""), (.area // ""), .claim.since,
             (if (.title | length) > $m then (.title[0:$m] + "…") else .title end) ]
@@ -991,11 +1026,24 @@ st_cleanup() {
 
 st_num() { printf '%s' "$1" | awk '{print $2}' | tr -d '#'; }
 
+# main checked out, one branch held by a second worktree, one held by nothing.
+st_scratch_repo() {
+  local d="$1"
+  git init -q -b main "$d"
+  git -C "$d" -c user.email=selftest@motif -c user.name=selftest \
+      commit -q --allow-empty -m "root"
+  git -C "$d" branch held/orphan
+  git -C "$d" branch held/foreign
+  git -C "$d" worktree add -q "$d/.wt-foreign" held/foreign
+  git -C "$d" switch -q -c held/current
+  return 0
+}
+
 cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J out rc loc adv dt bn
+  local t0 A B C D E F G H I J K out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1044,6 +1092,51 @@ Re-run with:  scripts/track.sh selftest --yes"
   out="$(MOTIF_AGENT=selftest-2 AS_JSON=1 cmd_mine)"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "mine excludes #$C for a different agent"
+
+  # Branch ownership is asserted in a scratch repository: the real one cannot
+  # have main checked out twice, and must not have branches appear and vanish
+  # under another agent working in a sibling worktree.
+  scratch="$(mktemp -d)"
+  st_scratch_repo "$scratch"
+  ids="$( cd "$scratch" && held_agent_ids )"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/current' || rc=1
+  st_assert "$rc" "held_agent_ids includes the branch checked out here"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/orphan' || rc=1
+  st_assert "$rc" "held_agent_ids includes a branch no worktree holds"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/foreign' && rc=1
+  st_assert "$rc" "held_agent_ids excludes a branch another worktree holds"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'main' && rc=1
+  st_assert "$rc" "held_agent_ids excludes main"
+
+  # `next` runs `mine` on the line after `git switch main`, which exits 1 today.
+  rc=0; ( cd "$scratch" && git switch -q main && held_agent_ids ) >/dev/null 2>&1 || rc=1
+  st_assert "$rc" "held_agent_ids succeeds on main"
+
+  # Detached HEAD holds no branch, so every worktree branch belongs to someone
+  # else and only orphaned work is left.
+  ids="$( cd "$scratch" && git switch -q --detach && held_agent_ids )"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/orphan' || rc=1
+  st_assert "$rc" "held_agent_ids still finds orphaned work on a detached HEAD"
+  rm -rf "$scratch"
+
+  # The crash-recovery case end to end: the branch that recorded the claim is
+  # not checked out, so an id taken from HEAD can never match it.
+  K="$(st_num "$(AS_JSON=0 cmd_add -t "selftest orphan claim" --area infra --kind chore --size s --selftest)")"
+  ob="selftest-orphan-$$"
+  git branch "$ob" >/dev/null 2>&1
+  MOTIF_AGENT="$ob" cmd_claim "$K" >/dev/null
+  out="$(AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$K" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "mine finds #$K claimed by a local branch that is not checked out"
+  MOTIF_AGENT="$ob" cmd_release "$K" >/dev/null
+  git branch -D "$ob" >/dev/null 2>&1
+
+  # A claim whose branch is gone entirely is somebody else's, or nobody's.
+  MOTIF_AGENT=selftest-vanished cmd_claim "$K" >/dev/null
+  out="$(AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$K" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "mine excludes #$K once no local branch carries its claim"
+  MOTIF_AGENT=selftest-vanished cmd_release "$K" >/dev/null
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes claimed #$C"
