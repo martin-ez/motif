@@ -104,6 +104,17 @@ impl TerminalScreen {
             entry_mode,
         })
     }
+
+    /// The panel and the screen, borrowed apart.
+    ///
+    /// A terminal is one object that is both halves, and an event loop holds
+    /// them as two: taking controls and rendering are separate on hardware,
+    /// where the keys and the screen are separate devices. Splitting is what
+    /// lets the terminal be both without the loop having to assume they always
+    /// arrive together.
+    pub fn split(&mut self) -> (&mut KeyReader<Stdin>, &mut FrameWriter<Stdout>) {
+        (&mut self.reader, &mut self.writer)
+    }
 }
 
 impl Controls for TerminalScreen {
