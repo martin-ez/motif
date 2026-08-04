@@ -12,13 +12,18 @@ pull requests and exit codes apply here without being restated.
 
 ```sh
 git switch main && git pull --ff-only
-scripts/track.sh mine
 scripts/track.sh doctor
 ```
 
-`mine` answers "was I already working on something?" — the question after a
-crash, a restart, or a compacted context. If it lists an issue, finish or release
-that before taking new work. A dirty tree means the same thing.
+**This skill only ever starts fresh work.** It does not resume, finish or
+release an issue that is already claimed — `ready` lists nothing that is, so
+picking from it cannot collide. Held work belongs to whoever holds it: the
+user's other sessions run against this same tracker, and a claim with no branch
+or commits is far more likely to be a live parallel agent than an abandoned
+session of yours. Never run `mine` here to look for work to pick back up.
+
+To finish or hand back something already claimed, the user will say so; that is
+`show <n>` and the branch, or `release <n>`, not this skill.
 
 ## 2. Pick
 
