@@ -51,10 +51,9 @@ jobs:
       # at a stub .pc instead.
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       # Undocumented public items fail via missing_docs; broken intra-doc links
-      # fail via RUSTDOCFLAGS. Doc examples are compiled and run, which is what
-      # keeps documentation in the code from going quietly stale.
+      # fail via RUSTDOCFLAGS. The examples themselves are compiled and run by
+      # the test job, where plain `cargo test` covers doctests on both hosts.
       - run: cargo doc --no-deps --all-features
-      - run: cargo test --doc --all-features
 
   test:
     name: test (${{ matrix.os }})
@@ -110,9 +109,13 @@ jobs:
       # tests that genuinely constrain behaviour. cargo-mutants alters the code
       # and fails when no test notices. Scoped to the diff so the runtime stays
       # proportional to the change.
+      #
+      # One job per core: a standard runner has four, and the sweep is the
+      # longest job in this workflow, so it sets the wall clock for the whole
+      # pull request.
       - run: |
           git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
-          cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 2
+          cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 4
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -129,9 +132,8 @@ jobs:
       # fail loudly the first time a dependency does not cross-compile, rather
       # than letting that be discovered once it is expensive to undo.
       #
-      # When a dependency needs system libraries (ALSA, for instance), this
-      # needs a cross sysroot — switch it to `cross` rather than deleting it.
-      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      # `cargo check` never links, so it needs no cross linker and none is
+      # installed. A step that does link — `cargo build`, or a test — needs both
+      # a linker and a cross sysroot for ALSA: switch it to `cross` rather than
+      # bolting either onto this job.
       - run: cargo check --target aarch64-unknown-linux-gnu --all-features
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
