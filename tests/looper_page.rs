@@ -67,12 +67,17 @@ fn bar_of(page: &mut LooperPage) -> Bar {
     let bar = drawn
         .iter()
         .map(|row| row.trim_end())
-        .find(|row| row.starts_with('[') && row.ends_with(']'))
-        .unwrap_or_default();
+        .find(|row| row.starts_with('['))
+        .expect("the page draws a loop bar");
+
+    assert!(
+        bar.ends_with(']'),
+        "a bar that runs off the edge of the screen is not a bar: {bar:?}"
+    );
 
     Bar {
         filled: bar.chars().filter(|glyph| *glyph == '#').count(),
-        width: bar.chars().count().saturating_sub(2),
+        width: bar.chars().count() - 2,
     }
 }
 
