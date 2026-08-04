@@ -12,9 +12,11 @@ use crate::ui::{Cell, Frame, RenderError, Renderer};
 
 mod keys;
 mod screen;
+mod viewport;
 
 pub use keys::KeyReader;
-pub use screen::TerminalScreen;
+pub use screen::{CentredScreen, TerminalScreen};
+pub use viewport::Viewport;
 
 /// A [`Renderer`] that writes a frame as escape sequences to anything taking
 /// bytes.
@@ -30,14 +32,30 @@ pub use screen::TerminalScreen;
 pub struct FrameWriter<W: Write> {
     sink: W,
     previous: Option<Frame>,
+    origin_column: usize,
+    origin_row: usize,
 }
 
 impl<W: Write> FrameWriter<W> {
-    /// A writer whose first frame will be written in full.
+    /// A writer whose first frame will be written in full, at the top left of
+    /// the screen.
     pub fn new(sink: W) -> Self {
+        Self::at(sink, 0, 0)
+    }
+
+    /// A writer that puts the frame's top-left cell at `origin_column` and
+    /// `origin_row`, both counted from zero.
+    ///
+    /// The offset is the caller's to state rather than the terminal's to
+    /// report: a frame is the size of the panel wherever it is drawn, so
+    /// nothing here asks how large the terminal is. It exists so that a
+    /// [`Viewport`] can leave room for the border it draws around the frame.
+    pub fn at(sink: W, origin_column: usize, origin_row: usize) -> Self {
         Self {
             sink,
             previous: None,
+            origin_column,
+            origin_row,
         }
     }
 
@@ -92,8 +110,8 @@ impl<W: Write> Renderer for FrameWriter<W> {
                 write!(
                     self.sink,
                     "\u{1b}[{};{}H{}",
-                    row + 1,
-                    run.starts_at + 1,
+                    self.origin_row + row + 1,
+                    self.origin_column + run.starts_at + 1,
                     run.glyphs
                 )
                 .map_err(|_| RenderError::WriteFailed)?;

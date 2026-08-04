@@ -84,11 +84,12 @@ fn a_loop_is_as_many_frames_as_it_is_seconds_of_sample_rate() {
 }
 
 #[test]
-fn the_target_screen_fits_in_a_default_terminal() {
+fn the_target_screen_and_its_border_fit_in_a_default_terminal() {
     let (screen, terminal) = (target().screen, default_terminal());
+    let (bordered_columns, bordered_rows) = (screen.columns + 2, screen.rows + 2);
 
-    assert!(screen.columns <= terminal.columns);
-    assert!(screen.rows <= terminal.rows);
+    assert!(bordered_columns <= terminal.columns);
+    assert!(bordered_rows <= terminal.rows);
 }
 
 #[test]

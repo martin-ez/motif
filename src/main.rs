@@ -44,9 +44,9 @@ impl App for Shell {
 
 fn play() -> Result<(), RenderError> {
     let mut terminal = TerminalScreen::open()?;
-    let (controls, screen) = terminal.split();
+    let (controls, mut screen) = terminal.split();
 
-    EventLoop::new().run(&mut Shell, controls, screen)?;
+    EventLoop::new().run(&mut Shell, controls, &mut screen)?;
 
     Ok(())
 }
