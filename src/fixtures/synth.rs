@@ -135,6 +135,16 @@ impl Fixture {
 /// pairs are the baseline, the waltz denies that a bar is four beats, the ramp
 /// and the rubato passage deny that a tempo is a number, and the syncopated
 /// case denies that a sound implies a beat.
+///
+/// The rubato passage pulls 130 ms against its underlying pulse, which is more
+/// than the +/-70 ms window a beat is scored against: a tracker that fits a
+/// steady tempo to it is then measurably wrong rather than accidentally right.
+///
+/// Every fixture here is a few seconds long, and one that is not is a mistake
+/// rather than a choice. At 16 KB of PCM per second, the 512 KiB the set is
+/// held under divides into roughly half a minute of audio in total, so a
+/// fixture running longer than ten seconds cannot be part of a set that fits.
+/// Rendering rejects one rather than allocating for it.
 pub fn set() -> Vec<Fixture> {
     vec![
         rendered(
@@ -221,11 +231,6 @@ fn ramp(from: f64, to: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
     grid(times.into_iter(), beats_per_bar)
 }
 
-/// The pull a rubato fixture applies to its underlying pulse, in seconds.
-///
-/// Chosen to exceed the +/-70 ms window a beat is scored against, so that a
-/// tracker which fits a steady tempo to this fixture is measurably wrong rather
-/// than accidentally right.
 const RUBATO_PULL: f64 = 0.13;
 
 fn rubato(tempo: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
@@ -301,6 +306,7 @@ fn halfway_past(beat: Duration, interval: Duration) -> Duration {
 }
 
 const TAIL: Duration = Duration::from_millis(300);
+const LONGEST: Duration = Duration::from_secs(10);
 const ACCENT_FREQUENCY: f64 = 60.0;
 const ACCENT_DECAY: f64 = 0.10;
 const ACCENT_LEVEL: f64 = 0.85;
@@ -315,7 +321,12 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i16> {
         .map(|onset| onset.at)
         .max()
         .unwrap_or_default();
-    let mut signal = vec![0.0; frames(last + TAIL)];
+    let length = last + TAIL;
+    assert!(
+        length <= LONGEST,
+        "a fixture running {length:?} cannot belong to a set held under its size ceiling"
+    );
+    let mut signal = vec![0.0; frames(length)];
     let mut noise = Noise::from(seed);
 
     for onset in onsets {

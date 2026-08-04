@@ -91,6 +91,32 @@ fn every_annotation_round_trips_through_the_parser() {
 }
 
 #[test]
+fn an_annotation_is_headed_by_the_fixture_it_describes() {
+    for fixture in synth::set() {
+        let heading = fixture.annotation_text().lines().next().unwrap().to_owned();
+
+        assert_eq!(
+            heading,
+            format!("# {}: {}", fixture.name(), fixture.description())
+        );
+    }
+}
+
+#[test]
+fn every_fixture_is_short_enough_to_belong_to_the_set() {
+    for fixture in synth::set() {
+        let length =
+            Duration::from_secs_f64(fixture.samples().len() as f64 / f64::from(SAMPLE_RATE));
+
+        assert!(
+            length <= Duration::from_secs(10),
+            "{} runs {length:?}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
 fn every_fixture_is_long_enough_to_track() {
     for fixture in synth::set() {
         assert!(
