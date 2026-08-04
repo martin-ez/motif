@@ -33,7 +33,7 @@ mod input;
 mod terminal;
 
 pub use input::{ControlEvent, Controls, ScriptedControls, Turn};
-pub use terminal::{FrameWriter, KeyReader, TerminalScreen};
+pub use terminal::{FrameWriter, KeyReader, TerminalScreen, Viewport};
 
 /// One character cell of the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
