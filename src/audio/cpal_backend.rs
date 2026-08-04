@@ -284,12 +284,9 @@ impl DuplexStream for CpalStream {
         self.levels.read()
     }
 
-    /// Counted against the passthrough path rather than reported by the device:
-    /// a callback is an overrun when the capture end could not take every frame
-    /// the device delivered, and an underrun when the playback end could not
-    /// supply every frame the device asked for. A device that drops a block
-    /// before the callback ever sees it is invisible here, because the callback
-    /// is simply not called.
+    /// Counted against the passthrough path rather than reported by the device,
+    /// so a block the device drops before the callback sees it is invisible
+    /// here — the callback is simply not called.
     fn xruns(&self) -> Xruns {
         self.xruns.read()
     }

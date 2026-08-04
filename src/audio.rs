@@ -10,9 +10,8 @@
 //! changes the other way, and [`level_meter`] sends back the other thing that
 //! crosses the boundary: not the audio itself but how loud it was.
 //!
-//! [`xrun_counter`] carries the news that the boundary failed, which is the one
-//! thing none of the others can report: the samples a dropout costs are gone,
-//! so nothing downstream can tell they were ever due.
+//! [`xrun_counter`] carries the news that the boundary failed, which none of
+//! the others can report: the samples a dropout costs are gone.
 
 use std::fmt;
 
@@ -184,11 +183,8 @@ pub trait DuplexStream {
 
     /// How many callbacks have lost frames in each direction.
     ///
-    /// Counted in the callback as it happens, because a dropout leaves no other
-    /// trace to find afterwards. The counts run from when the stream was opened
-    /// and only grow, so what a caller usually wants is the difference between
-    /// this and a reading it took earlier. Stopping and starting a stream does
-    /// not clear them.
+    /// Counted from when the stream was opened, and never cleared — stopping
+    /// and starting one does not reset them.
     fn xruns(&self) -> Xruns;
 
     /// Start calling back.

@@ -1,11 +1,9 @@
-//! Dropouts counted in the audio callback and read from the application
-//! thread.
+//! Dropouts counted in the audio callback and read from another thread.
 //!
-//! An xrun is a callback that lost frames, and the facts worth stating are the
-//! rule that decides one — a path that handled less than it was given — that
-//! the two directions are told apart, that reading is a look rather than a
-//! take, and that counting allocates nothing. A counter that broke the
-//! real-time invariant to report it breaking would be worse than no counter.
+//! The facts worth stating are the rule that decides an xrun — a path that
+//! handled less than it was given — that the two directions are told apart,
+//! that reading is a look rather than a take, and that counting allocates
+//! nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -51,8 +49,7 @@ fn allocations() -> usize {
     ALLOCATIONS.with(Cell::get)
 }
 
-/// The frames a callback is given, standing in for the block size a device
-/// would hand one.
+/// The frames a callback is given, standing in for a device's block size.
 const BLOCK: usize = 64;
 
 const GRANTED: StreamConfig = StreamConfig {
