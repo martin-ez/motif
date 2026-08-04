@@ -76,10 +76,22 @@ fn four_beats_at_120() -> BeatGrid {
 #[test]
 fn the_allocation_counter_counts_an_allocation() {
     let before = allocations();
-    black_box(vec![0.0_f32; 4]);
+    black_box(Vec::<u64>::with_capacity(4));
     let after = allocations();
 
     assert!(after > before, "the counter is not wired to the allocator");
+}
+
+#[test]
+fn the_allocation_counter_counts_a_zeroed_allocation() {
+    let before = allocations();
+    black_box(vec![0.0_f32; 4]);
+    let after = allocations();
+
+    assert!(
+        after > before,
+        "the counter is not wired to zeroed allocation"
+    );
 }
 
 #[test]
@@ -119,6 +131,13 @@ fn a_beat_that_does_not_come_after_the_last_is_refused() {
 fn a_tempo_needs_two_beats() {
     assert_eq!(BeatGrid::new(SAMPLE_RATE).beats_per_minute(), None);
     assert_eq!(grid_of(&[HALF_SECOND]).beats_per_minute(), None);
+}
+
+#[test]
+fn two_beats_are_enough_for_a_tempo() {
+    let grid = grid_of(&[0, HALF_SECOND]);
+
+    assert_eq!(grid.beats_per_minute(), Some(120.0));
 }
 
 #[test]
@@ -180,6 +199,19 @@ fn a_frame_between_two_beats_reports_how_far_through_it_is() {
 
     assert_eq!(
         grid.position(HALF_SECOND + HALF_SECOND / 4),
+        Position::Within {
+            beat: 1,
+            phase: 0.25
+        }
+    );
+}
+
+#[test]
+fn phase_is_measured_against_the_beats_a_frame_falls_between() {
+    let grid = grid_of(&[0, HALF_SECOND, HALF_SECOND + 36_000]);
+
+    assert_eq!(
+        grid.position(HALF_SECOND + 9_000),
         Position::Within {
             beat: 1,
             phase: 0.25
