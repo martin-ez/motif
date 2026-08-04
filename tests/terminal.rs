@@ -141,6 +141,23 @@ fn a_cell_that_reverts_is_written_back() {
 }
 
 #[test]
+fn a_writer_given_an_origin_offsets_every_position() {
+    let mut writer = FrameWriter::at(Vec::new(), 1, 1);
+    writer
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = writer.sink().len();
+    writer
+        .render(&drawn(&[(0, 0, 'x')]))
+        .expect("a vec accepts every write");
+
+    let output =
+        String::from_utf8(writer.sink()[already_written..].to_vec()).expect("the output is utf-8");
+
+    assert_eq!(output, "\u{1b}[2;2Hx");
+}
+
+#[test]
 fn a_screen_that_refuses_a_write_is_an_error() {
     let mut writer = FrameWriter::new(BrokenSink);
 

@@ -201,12 +201,17 @@ pub struct DeviceProfile {
 impl DeviceProfile {
     /// The device `motif` is built for.
     ///
-    /// The screen is a 320×240 panel drawn with an 8×16 cell, which is 40
-    /// columns by 15 rows — small enough that a default 80×24 terminal can
-    /// always show a whole frame. It refreshes 30 times a second, which is a
-    /// frame every 33 ms: enough for a meter to look continuous, and slow
-    /// enough that redrawing a panel of that size over a serial bus fits in one
-    /// frame. The audio device is the configuration a
+    /// The screen is a 5-inch 800×480 IPS panel drawn with a 12×24 cell, which
+    /// is 66 columns by 20 rows. The cell is what fixes the two numbers: at that
+    /// size and resolution it puts a character at 1.63 × 3.27 mm, which is where
+    /// the instruments this is built after already sit — a Teenage Engineering
+    /// OP-1 is 1.59 × 3.18 mm and a Polyend Tracker 1.52 × 3.05 mm, both from
+    /// panels near 130 PPI rather than dense ones. A whole frame and the border
+    /// a terminal draws around it still fit inside a default 80×24 terminal.
+    ///
+    /// It refreshes 30 times a second, which is a frame every 33 ms: enough for
+    /// a meter to look continuous, and slow enough to leave the cores it shares
+    /// with analysis room to work. The audio device is the configuration a
     /// class-compliant USB interface offers everywhere: 48 kHz in blocks of
     /// 256 frames, which is 5.33 ms of deadline per callback. Four cores is a
     /// quad-core ARM board of the kind this would be built on.
@@ -216,8 +221,8 @@ impl DeviceProfile {
     /// second place to change.
     pub const TARGET: Self = Self {
         screen: ScreenProfile {
-            columns: 40,
-            rows: 15,
+            columns: 66,
+            rows: 20,
             refresh_rate: 30,
         },
         audio: AudioProfile {
