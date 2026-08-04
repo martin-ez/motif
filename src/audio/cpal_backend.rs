@@ -4,8 +4,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, DeviceError, DuplexStream, LevelReader, Levels, StreamConfig, StreamRequest,
-    StreamState, level_meter, passthrough,
+    AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, LevelReader, Levels,
+    StreamConfig, StreamRequest, StreamState, level_meter, passthrough,
 };
 
 /// Audio devices reached through `cpal`.
@@ -39,26 +39,86 @@ fn classify(error: &cpal::Error) -> DeviceError {
     }
 }
 
-/// Whether the device offers `channels` of `f32` at `sample_rate`.
-///
-/// The channel count is taken from the device's own default rather than from
-/// the widest supported range: the ALSA backend enumerates one range per
-/// channel count up to a cap of 64, so the widest range is an artefact of
-/// enumeration rather than a configuration anyone wants opened.
-fn offers(
+fn channel_counts(
     supported: impl Iterator<Item = SupportedStreamConfigRange>,
     sample_rate: u32,
-    channels: u16,
-) -> bool {
-    supported.into_iter().any(|range| {
-        range.sample_format() == SampleFormat::F32
-            && range.channels() == channels
-            && range.contains_rate(sample_rate)
+) -> Vec<u16> {
+    let mut counts: Vec<u16> = supported
+        .filter(|range| {
+            range.sample_format() == SampleFormat::F32 && range.contains_rate(sample_rate)
+        })
+        .map(|range| range.channels())
+        .collect();
+    counts.sort_unstable();
+    counts.dedup();
+    counts
+}
+
+fn named_device(device: &cpal::Device, channels: Vec<u16>) -> Option<AudioDevice> {
+    if channels.is_empty() {
+        return None;
+    }
+    Some(AudioDevice {
+        name: device.to_string(),
+        channels,
     })
+}
+
+fn input_devices(host: &cpal::Host, sample_rate: u32) -> Vec<AudioDevice> {
+    let Ok(devices) = host.input_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|device| {
+            let supported = device.supported_input_configs().ok()?;
+            named_device(&device, channel_counts(supported, sample_rate))
+        })
+        .collect()
+}
+
+fn output_devices(host: &cpal::Host, sample_rate: u32) -> Vec<AudioDevice> {
+    let Ok(devices) = host.output_devices() else {
+        return Vec::new();
+    };
+    devices
+        .filter_map(|device| {
+            let supported = device.supported_output_configs().ok()?;
+            named_device(&device, channel_counts(supported, sample_rate))
+        })
+        .collect()
 }
 
 impl AudioBackend for CpalBackend {
     type Stream = CpalStream;
+
+    /// Every host `cpal` was built with, not just the default one, because the
+    /// default is the guess a settings page exists to replace.
+    ///
+    /// A device's channel counts are the ones it offers `f32` on at
+    /// `sample_rate`, and never the width of a supported range: the ALSA
+    /// backend enumerates one range per channel count up to a cap of 64, so an
+    /// unfiltered list is an artefact of enumeration rather than a set of
+    /// things anyone can open — and on the target board, ALSA is the list a
+    /// player would be reading.
+    fn hosts(&self, sample_rate: u32) -> Vec<AudioHost> {
+        cpal::available_hosts()
+            .into_iter()
+            .filter_map(|id| {
+                let host = cpal::host_from_id(id).ok()?;
+                let inputs = input_devices(&host, sample_rate);
+                let outputs = output_devices(&host, sample_rate);
+
+                if inputs.is_empty() && outputs.is_empty() {
+                    return None;
+                }
+                Some(AudioHost {
+                    name: id.name().to_owned(),
+                    inputs,
+                    outputs,
+                })
+            })
+            .collect()
+    }
 
     /// The two callbacks are joined by a [`passthrough`] path, so audio at the
     /// input is audible at the output. Its slack is one block, which is the
@@ -99,20 +159,18 @@ impl AudioBackend for CpalBackend {
             .map_err(|e| classify(&e))?
             .channels();
 
-        if !offers(
+        let offered_input = channel_counts(
             input.supported_input_configs().map_err(|e| classify(&e))?,
             request.sample_rate,
-            input_channels,
-        ) {
-            return Err(DeviceError::UnsupportedConfig);
-        }
-        if !offers(
+        );
+        let offered_output = channel_counts(
             output
                 .supported_output_configs()
                 .map_err(|e| classify(&e))?,
             request.sample_rate,
-            output_channels,
-        ) {
+        );
+
+        if !offered_input.contains(&input_channels) || !offered_output.contains(&output_channels) {
             return Err(DeviceError::UnsupportedConfig);
         }
 

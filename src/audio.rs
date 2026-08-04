@@ -54,6 +54,27 @@ pub struct StreamConfig {
     pub output_channels: u16,
 }
 
+/// An audio API, and the devices reachable through it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioHost {
+    /// What the backend calls this host.
+    pub name: String,
+    /// Devices that can deliver input.
+    pub inputs: Vec<AudioDevice>,
+    /// Devices that can consume output.
+    pub outputs: Vec<AudioDevice>,
+}
+
+/// A device, and the channel counts it can be opened with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioDevice {
+    /// What the host calls this device.
+    pub name: String,
+    /// Channel counts the device can be opened with, ascending and without
+    /// repeats.
+    pub channels: Vec<u16>,
+}
+
 /// Whether a stream is currently calling back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamState {
@@ -103,10 +124,27 @@ impl fmt::Display for DeviceError {
 
 impl std::error::Error for DeviceError {}
 
-/// A source of duplex audio streams.
+/// A source of duplex audio streams, and a description of what there is to
+/// open.
 pub trait AudioBackend {
     /// The stream this backend opens.
     type Stream: DuplexStream;
+
+    /// Every host with a device that can be opened at `sample_rate`.
+    ///
+    /// Listed means openable: a device that comes back offers `f32` at
+    /// `sample_rate` on every channel count it lists, and one that cannot meet
+    /// that is absent rather than listed and unopenable. A host left with no
+    /// devices is absent too, being a row with nothing behind it. Channel
+    /// counts ascend without repeats.
+    ///
+    /// A host that will not open, or a device that will not answer, drops out
+    /// of the list rather than failing the call. There is nothing a caller can
+    /// do with that distinction it cannot do with a shorter list.
+    ///
+    /// This talks to the host, so it blocks and allocates, and must never be
+    /// reached from the audio callback.
+    fn hosts(&self, sample_rate: u32) -> Vec<AudioHost>;
 
     /// Open an input and an output stream at `request`.
     ///
@@ -177,8 +215,43 @@ impl NullBackend {
     }
 }
 
+const NULL_HOST: &str = "null";
+const NULL_INPUT: &str = "null input";
+const NULL_OUTPUT: &str = "null output";
+
+fn null_device(name: &str, channels: u16) -> Vec<AudioDevice> {
+    if channels == 0 {
+        return Vec::new();
+    }
+    vec![AudioDevice {
+        name: name.to_owned(),
+        channels: vec![channels],
+    }]
+}
+
 impl AudioBackend for NullBackend {
     type Stream = NullStream;
+
+    /// One host carrying one device in each direction the granted
+    /// configuration has channels for, listed only at the rate it was
+    /// granted — so that a caller relying on "listed means openable" can be
+    /// tested where there is no hardware.
+    fn hosts(&self, sample_rate: u32) -> Vec<AudioHost> {
+        if sample_rate != self.granted.sample_rate {
+            return Vec::new();
+        }
+
+        let host = AudioHost {
+            name: NULL_HOST.to_owned(),
+            inputs: null_device(NULL_INPUT, self.granted.input_channels),
+            outputs: null_device(NULL_OUTPUT, self.granted.output_channels),
+        };
+
+        if host.inputs.is_empty() && host.outputs.is_empty() {
+            return Vec::new();
+        }
+        vec![host]
+    }
 
     fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
         let matches_exactly = request.sample_rate == self.granted.sample_rate
