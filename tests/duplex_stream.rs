@@ -138,6 +138,24 @@ fn a_rejecting_device_opens_when_the_request_matches_exactly() {
 }
 
 #[test]
+fn a_stream_whose_device_is_present_reports_no_fault() {
+    let backend = NullBackend::rounding(config());
+    let stream = backend.open(request()).expect("null backend opens");
+
+    assert_eq!(stream.fault(), None);
+}
+
+#[test]
+fn a_stream_whose_device_went_away_reports_the_fault() {
+    let backend = NullBackend::rounding(config());
+    let stream = backend.open(request()).expect("null backend opens");
+
+    stream.fail(DeviceError::DeviceNotAvailable);
+
+    assert_eq!(stream.fault(), Some(DeviceError::DeviceNotAvailable));
+}
+
+#[test]
 fn a_device_error_describes_itself() {
     assert_eq!(
         DeviceError::UnsupportedConfig.to_string(),
