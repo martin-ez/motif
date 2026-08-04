@@ -342,3 +342,47 @@ fn a_viewport_moved_where_it_already_is_writes_nothing() {
 
     assert_eq!(output, "");
 }
+
+#[test]
+fn a_viewport_moved_along_one_axis_still_moves() {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport.place(5, 0);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+
+    assert!(
+        output.contains(&top_border_at(5, 0)),
+        "a move that changed only the column was ignored: {output:?}"
+    );
+}
+
+#[test]
+fn a_moved_viewport_draws_the_frame_inside_its_new_border() {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    viewport.place(5, 1);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+    viewport
+        .render(&drawn(&[(0, 0, 'x')]))
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+
+    assert_eq!(output, "\u{1b}[3;7Hx");
+}
