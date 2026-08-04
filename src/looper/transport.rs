@@ -1,8 +1,10 @@
 //! What the player is doing with the loop, and what that makes of a block.
 //!
-//! An action is the only way between states — nothing here takes a state as an
-//! argument — so a transition the table does not have cannot be written down,
-//! let alone rejected at runtime. Every action is total, so none can fail.
+//! [`Transport::record`], [`Transport::play`] and [`Transport::stop`] are the
+//! only way to change state: each takes the current state and returns the next.
+//! Nothing here accepts a state to move to, so an illegal transition is not
+//! rejected at runtime — there is no way to ask for one. Each action is defined
+//! for all five states, so none of them returns an error.
 //!
 //! The transport says what to do with a block, never how many frames a take
 //! captured: a record and a stop arriving in the same drain leave
