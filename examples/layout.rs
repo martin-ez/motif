@@ -2,9 +2,14 @@
 //! size is enough.
 //!
 //! ```sh
-//! cargo run --example layout        # bordered, in the terminal
+//! cargo run --example layout        # takes the terminal over, centred
 //! cargo run --example layout | cat  # the same grid as plain text
 //! ```
+//!
+//! In a terminal it runs through the same stack the binary does — the terminal
+//! backend, the event loop, and the viewport that centres the panel in the
+//! window — so what is on screen is the page as the application would show it.
+//! Any control leaves.
 //!
 //! This is a ruler, not a screen the application has. Whether 40x15 has room
 //! for a transport, a meter and a position readout at once is the one number in
@@ -32,7 +37,7 @@ use std::io::{self, IsTerminal, Write};
 use motif::audio::Levels;
 use motif::device::{DeviceProfile, Encoder};
 use motif::looper::{LoopBuffer, Transport};
-use motif::ui::{Cell, Frame, RenderError, Renderer, Viewport};
+use motif::ui::{App, Cell, ControlEvent, EventLoop, Flow, Frame, RenderError, TerminalScreen};
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
 
@@ -155,28 +160,53 @@ fn draw_encoders(frame: &mut Frame, row: usize) {
     }
 }
 
-fn representative_page() -> Frame {
-    let transport = Transport::Idle.record().record();
-    let levels = Levels {
-        peak: 0.54,
-        rms: 0.30,
-    };
-    let loop_buffer = captured(8.0);
+struct Layout {
+    transport: Transport,
+    levels: Levels,
+    loop_buffer: LoopBuffer,
+}
 
-    let mut frame = Frame::blank();
+impl Layout {
+    fn new() -> Self {
+        Self {
+            transport: Transport::Idle.record().record(),
+            levels: Levels {
+                peak: 0.54,
+                rms: 0.30,
+            },
+            loop_buffer: captured(8.0),
+        }
+    }
 
-    write_at(&mut frame, 0, 0, "motif");
-    write_right(&mut frame, 0, named(transport));
-    rule(&mut frame, 1);
+    fn draw_into(&self, frame: &mut Frame) {
+        write_at(frame, 0, 0, "motif");
+        write_right(frame, 0, named(self.transport));
+        rule(frame, 1);
 
-    draw_meter(&mut frame, 3, levels);
-    draw_position(&mut frame, 5, &loop_buffer);
-    draw_transport(&mut frame, 8, transport);
+        draw_meter(frame, 3, self.levels);
+        draw_position(frame, 5, &self.loop_buffer);
+        draw_transport(frame, 8, self.transport);
 
-    rule(&mut frame, SCREEN.rows - 3);
-    draw_encoders(&mut frame, SCREEN.rows - 2);
+        rule(frame, SCREEN.rows - 3);
+        draw_encoders(frame, SCREEN.rows - 2);
+    }
 
-    frame
+    fn page(&self) -> Frame {
+        let mut frame = Frame::blank();
+        self.draw_into(&mut frame);
+        frame
+    }
+}
+
+impl App for Layout {
+    fn control(&mut self, _: ControlEvent) -> Flow {
+        Flow::Exit
+    }
+
+    fn draw(&mut self, frame: &mut Frame) -> Flow {
+        self.draw_into(frame);
+        Flow::Continue
+    }
 }
 
 fn print_plain(frame: &Frame) -> io::Result<()> {
@@ -194,25 +224,21 @@ fn print_plain(frame: &Frame) -> io::Result<()> {
     writeln!(out, "\n{} columns x {} rows", SCREEN.columns, SCREEN.rows)
 }
 
-fn show_in_terminal(frame: &Frame) -> Result<(), RenderError> {
-    let mut viewport = Viewport::new(io::stdout());
-    viewport.render(frame)?;
+fn show_in_terminal(layout: &mut Layout) -> Result<(), RenderError> {
+    let mut terminal = TerminalScreen::open()?;
+    let (controls, mut screen) = terminal.split();
 
-    let mut out = io::stdout();
-    let _ = write!(out, "\u{1b}[{};1Hpress enter to leave", SCREEN.rows + 4);
-    let _ = out.flush();
+    EventLoop::new().run(layout, controls, &mut screen)?;
 
-    let mut line = String::new();
-    let _ = io::stdin().read_line(&mut line);
     Ok(())
 }
 
 fn main() -> Result<(), RenderError> {
-    let page = representative_page();
+    let mut layout = Layout::new();
 
     if io::stdout().is_terminal() {
-        return show_in_terminal(&page);
+        return show_in_terminal(&mut layout);
     }
 
-    print_plain(&page).map_err(|_| RenderError::WriteFailed)
+    print_plain(&layout.page()).map_err(|_| RenderError::WriteFailed)
 }
