@@ -4,6 +4,10 @@
 //! is the one thing that has to hold both without either knowing the other. No
 //! key is named here: the panels below hand out glyphs of their own invention,
 //! which is all a legend ever learns about how a control is reached.
+//!
+//! The drawing is checked by where things land rather than by the text of a
+//! row: a key is a border with a glyph inside it and its meaning beneath, and
+//! that is what the assertions look for.
 
 use motif::device::{Button, Control, DeviceProfile, Encoder, ScreenProfile};
 use motif::ui::{ControlEvent, Controls, Frame, Hint, Legend};
@@ -15,17 +19,14 @@ const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 /// Upper case, because every meaning in this file is lower case: a test that a
 /// panel drew no glyphs is only worth anything if a glyph cannot hide inside a
 /// meaning.
-fn glyph_of(control: Control) -> char {
+fn glyph_of(control: impl Into<Control>) -> char {
+    let control = control.into();
     let position = Control::ALL
         .iter()
         .position(|listed| *listed == control)
         .expect("every control is listed in ALL");
 
     char::from(b'A' + position as u8)
-}
-
-fn named(control: Control, meaning: &str) -> String {
-    format!("{} {meaning}", glyph_of(control))
 }
 
 /// A panel reached by glyphs, as a terminal's keyboard is.
@@ -72,13 +73,35 @@ fn text_of(frame: &Frame) -> String {
         .join("\n")
 }
 
-fn place_of(frame: &Frame, glyph: char) -> Option<(usize, usize)> {
-    (0..SCREEN.rows).find_map(|row| {
-        let column = row_of(frame, row)
-            .chars()
-            .position(|drawn| drawn == glyph)?;
-        Some((row, column))
-    })
+fn glyph_at(frame: &Frame, column: usize, row: usize) -> char {
+    frame
+        .get(column, row)
+        .map(|cell| cell.glyph())
+        .unwrap_or_default()
+}
+
+struct At {
+    row: usize,
+    column: usize,
+}
+
+/// Where `text` was drawn, counted in cells rather than bytes: a row of keys is
+/// mostly box-drawing characters, which are three bytes each and one cell each.
+fn found(frame: &Frame, text: &str) -> At {
+    (0..SCREEN.rows)
+        .find_map(|row| {
+            let drawn = row_of(frame, row);
+            let at = drawn.find(text)?;
+            Some(At {
+                row,
+                column: drawn[..at].chars().count(),
+            })
+        })
+        .unwrap_or_else(|| panic!("{text:?} is nowhere on the screen"))
+}
+
+fn key_of(frame: &Frame, control: impl Into<Control>) -> At {
+    found(frame, &String::from(glyph_of(control)))
 }
 
 #[test]
@@ -113,10 +136,58 @@ fn what_a_control_does_is_on_screen() {
 }
 
 #[test]
-fn a_control_is_named_by_the_glyph_that_reaches_it() {
+fn a_control_is_drawn_as_a_key_with_an_edge_around_it() {
     let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
+    let key = key_of(&frame, Button::Play);
 
-    assert!(text_of(&frame).contains(&named(Control::Button(Button::Play), "play")));
+    assert_eq!(glyph_at(&frame, key.column, key.row - 1), '─');
+    assert_eq!(glyph_at(&frame, key.column, key.row + 1), '─');
+    assert_eq!(glyph_at(&frame, key.column - 2, key.row), '│');
+    assert_eq!(glyph_at(&frame, key.column + 2, key.row), '│');
+}
+
+#[test]
+fn what_a_control_does_is_written_under_its_key() {
+    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
+    let key = key_of(&frame, Button::Play);
+    let meaning = found(&frame, "play");
+
+    assert_eq!(meaning.row, key.row + 2);
+    assert!(meaning.column.abs_diff(key.column) <= 2);
+}
+
+#[test]
+fn an_encoder_is_drawn_as_a_key_of_its_own() {
+    let frame = drawn(&Legend::blank().naming(Encoder::Third, "gain"), &Lettered);
+    let key = key_of(&frame, Encoder::Third);
+    let meaning = found(&frame, "gain");
+
+    assert_eq!(glyph_at(&frame, key.column, key.row - 1), '─');
+    assert_eq!(meaning.row, key.row + 2);
+}
+
+#[test]
+fn the_navigation_keys_are_drawn_in_the_pattern_they_sit_in() {
+    let frame = drawn(&Legend::blank(), &Lettered);
+    let (up, down) = (key_of(&frame, Button::Up), key_of(&frame, Button::Down));
+    let (left, right) = (key_of(&frame, Button::Left), key_of(&frame, Button::Right));
+
+    assert_eq!(up.column, down.column);
+    assert!(up.row < down.row);
+    assert_eq!(left.row, down.row);
+    assert_eq!(right.row, down.row);
+    assert!(left.column < down.column);
+    assert!(down.column < right.column);
+}
+
+#[test]
+fn the_key_at_the_top_of_the_cluster_is_named_beside_it() {
+    let frame = drawn(&Legend::blank().naming(Button::Up, "up"), &Lettered);
+    let key = key_of(&frame, Button::Up);
+    let meaning = found(&frame, "up");
+
+    assert_eq!(meaning.row, key.row);
+    assert!(meaning.column > key.column);
 }
 
 #[test]
@@ -135,15 +206,9 @@ fn every_control_on_the_panel_is_on_screen() {
 #[test]
 fn a_control_the_page_does_not_answer_reads_as_unavailable() {
     let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
+    let key = key_of(&frame, Button::Stop);
 
-    assert!(text_of(&frame).contains(&named(Control::Button(Button::Up), "-")));
-}
-
-#[test]
-fn an_encoder_is_on_screen_beside_the_buttons() {
-    let frame = drawn(&Legend::blank().naming(Encoder::Third, "gain"), &Lettered);
-
-    assert!(text_of(&frame).contains(&named(Control::Encoder(Encoder::Third), "gain")));
+    assert_eq!(glyph_at(&frame, key.column, key.row + 2), '-');
 }
 
 #[test]
@@ -170,7 +235,7 @@ fn the_legend_keeps_to_the_rows_it_reserves() {
 }
 
 #[test]
-fn an_entry_keeps_its_place_whatever_the_page_means_by_it() {
+fn a_key_keeps_its_place_whatever_the_page_means_by_it() {
     let bare = drawn(&Legend::blank(), &Lettered);
     let filled = drawn(
         &Legend::blank()
@@ -178,23 +243,23 @@ fn an_entry_keeps_its_place_whatever_the_page_means_by_it() {
             .naming(Encoder::First, "gain"),
         &Lettered,
     );
-    let last = glyph_of(Control::Encoder(Encoder::Fourth));
+    let (before, after) = (
+        key_of(&bare, Encoder::Fourth),
+        key_of(&filled, Encoder::Fourth),
+    );
 
-    assert!(place_of(&bare, last).is_some());
-    assert_eq!(place_of(&bare, last), place_of(&filled, last));
+    assert_eq!((before.row, before.column), (after.row, after.column));
 }
 
 #[test]
-fn a_meaning_too_long_for_its_entry_does_not_reach_the_next_one() {
+fn a_meaning_too_long_for_its_key_does_not_reach_the_next_one() {
     let crowded = drawn(
-        &Legend::blank().naming(Button::Up, "a meaning far longer than one entry holds"),
+        &Legend::blank().naming(Encoder::First, "a meaning far longer than a key is wide"),
         &Lettered,
     );
-    let bare = drawn(&Legend::blank(), &Lettered);
-    let next = glyph_of(Control::Button(Button::Down));
+    let next = key_of(&crowded, Encoder::Second);
 
-    assert!(place_of(&bare, next).is_some());
-    assert_eq!(place_of(&crowded, next), place_of(&bare, next));
+    assert_eq!(glyph_at(&crowded, next.column, next.row + 2), '-');
 }
 
 #[test]
