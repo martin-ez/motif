@@ -2,8 +2,10 @@
 //!
 //! Composition only: it takes the terminal over, runs the event loop against
 //! it, and reports why the run ended. The shell it runs draws the program's
-//! name and quits on a shifted stop, which is the whole of it until there are
-//! pages to put in the frame.
+//! name and the gesture that quits it, and quits on that gesture — which is the
+//! whole of it until there are pages to put in the frame. The gesture is on
+//! screen because the terminal is left in a mode where the shell is the only
+//! way out of it.
 
 use std::process::ExitCode;
 
@@ -11,8 +13,15 @@ use motif::device::Button;
 use motif::ui::{App, Cell, ControlEvent, EventLoop, Flow, Frame, RenderError, TerminalScreen};
 
 const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
+const QUIT: &str = "shift + stop to quit";
 
 struct Shell;
+
+fn write(frame: &mut Frame, row: usize, text: &str) {
+    for (column, glyph) in text.chars().enumerate() {
+        frame.set(column, row, Cell::new(glyph));
+    }
+}
 
 impl App for Shell {
     fn control(&mut self, event: ControlEvent) -> Flow {
@@ -26,9 +35,8 @@ impl App for Shell {
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {
-        for (column, glyph) in NAME.chars().enumerate() {
-            frame.set(column, 0, Cell::new(glyph));
-        }
+        write(frame, 0, NAME);
+        write(frame, 2, QUIT);
 
         Flow::Continue
     }
