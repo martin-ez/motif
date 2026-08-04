@@ -94,6 +94,64 @@ agent_id() {
   printf '%s' "$br"
 }
 
+# Which claims belong to this agent. The id in a claim marker is the branch that
+# recorded it, so ownership is a question about branches: the one checked out
+# here is this agent's, and one that no worktree holds is work a crashed session
+# left behind — the case `mine` exists to answer. A branch checked out in another
+# worktree belongs to the agent working there.
+#
+# Compared by branch name rather than worktree path, because the same worktree
+# reached through a symlink yields a path that compares unequal to itself.
+foreign_branches() {
+  local cur
+  cur="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  git worktree list --porcelain 2>/dev/null | awk -v cur="$cur" '
+    /^branch / { b = substr($0, 8); sub(/^refs\/heads\//, "", b)
+                 if (b != "" && b != cur) print b }'
+  return 0
+}
+
+# MOTIF_AGENT names an agent outright, so it answers alone: a caller asking what
+# another agent holds must not also be told about the branches lying around here.
+held_agent_ids() {
+  if [ -n "${MOTIF_AGENT:-}" ]; then
+    validate_agent "$MOTIF_AGENT"
+    printf '%s\n' "$MOTIF_AGENT"
+    return 0
+  fi
+  { printf 'main\nmaster\n'; foreign_branches; printf -- '--\n'
+    git for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null; } \
+  | awk '/^--$/ { owned = 1; next }
+         !owned    { skip[$0] = 1; next }
+         !($0 in skip)'
+  return 0
+}
+
+# `die` inside a command substitution exits that subshell, so `agent_id || true`
+# never reaches its fallback: the assignment carries the failure out and set -e
+# ends the script with no message to surface. The extra subshell is what makes
+# the failure catchable.
+agent_id_or_empty() {
+  ( agent_id ) 2>/dev/null || true
+}
+
+# Who is acting on a claim. One this checkout owns is settled as the branch that
+# recorded it, so `release` and `done` can act on everything `mine` reports —
+# the skill tells the agent to finish or release exactly that list. Anything else
+# falls back to the branch identity, so taking another agent's claim still needs
+# --force. Prints nothing when neither is available.
+#
+# The id set is computed by the caller, before it takes the lock: deriving it
+# here could die holding the lock and leave it behind.
+acting_agent() {
+  local holder="$1" ids="$2"
+  if [ -n "$holder" ] && printf '%s\n' "$ids" | grep -qxF -- "$holder"; then
+    printf '%s' "$holder"
+    return 0
+  fi
+  agent_id_or_empty
+}
+
 # The claim marker parses the agent with [^ ]+, so whitespace would produce a
 # marker that can never be matched back: the claim would look successful and be
 # invisible to every other command.
@@ -386,20 +444,32 @@ cmd_find() {
 }
 
 cmd_mine() {
-  local me held n
-  me="$(agent_id)"
-  held="$(claimed_issues | jq -sc --arg me "$me" '[.[] | select(.claim.agent == $me)]')"
+  local all held n ids where elsewhere
+  ids="$(held_agent_ids | jq -R . | jq -sc 'unique')"
+  all="$(claimed_issues | jq -sc '.')"
+  held="$(printf '%s' "$all" | jq -c --argjson ids "$ids" \
+          '[.[] | select(.claim.agent as $a | $ids | index($a))]')"
 
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$held"; return 0; fi
 
   n="$(printf '%s' "$held" | jq 'length')"
-  printf 'mine %s held by %s\n' "$n" "$me"
+  where="${MOTIF_AGENT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
+  printf 'mine %s held in %s\n' "$n" "${where:-this checkout}"
   printf '%s' "$held" | jq -r --argjson m "$TITLE_MAX" '
     .[] | [ .num, (.size // ""), (.area // ""), .claim.since,
             (if (.title | length) > $m then (.title[0:$m] + "…") else .title end) ]
         | @tsv' \
   | awk -F'\t' '{ printf "  #%-4s %-1s  %-7s %s  since %s\n",
                   $1, ($2 == "" ? "-" : $2), ($3 == "" ? "-" : $3), $5, $4 }'
+
+  # A claim held from another worktree looks exactly like one held by an agent
+  # that crashed there, and nothing local can tell them apart. Saying where they
+  # are reported beats answering 0 and stopping.
+  elsewhere="$(printf '%s' "$all" | jq --argjson ids "$ids" \
+               '[.[] | select(.claim.agent as $a | $ids | index($a) | not)] | length')"
+  if [ "$n" = 0 ] && [ "$elsewhere" != 0 ]; then
+    printf '  %s claim(s) held elsewhere; doctor lists them with age.\n' "$elsewhere"
+  fi
   return 0
 }
 
@@ -557,7 +627,7 @@ Claimed by \`$me\` via \`scripts/track.sh claim\`." >/dev/null || rc=$?
 }
 
 cmd_release() {
-  local force=0 n="" me holder rc=0
+  local force=0 n="" me holder ids rc=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1; shift ;;
@@ -566,10 +636,16 @@ cmd_release() {
     esac
   done
   [ -n "$n" ] || die "usage: track.sh release <n> [--force]"
-  me="$(agent_id)"
+  ids="$(held_agent_ids)"
 
   lock_acquire
   holder="$(fetch_issue "$n" | jq -r "$JQ_CLAIM"' holder.agent // ""')"
+  me="$(acting_agent "$holder" "$ids")"
+  if [ -z "$me" ]; then
+    lock_release
+    die "#$n is held by ${holder:-nobody}, and no branch here carries that claim.
+Work on a branch, or set MOTIF_AGENT."
+  fi
   if [ -n "$holder" ] && [ "$holder" != "$me" ] && [ "$force" = 0 ]; then
     lock_release
     die "#$n is held by $holder, not $me. Use --force to take it back."
@@ -587,7 +663,7 @@ Released by \`$me\`." >/dev/null || true
 }
 
 cmd_done() {
-  local force=0 n="" msg="" me info state subs holder was rc=0 freed
+  local force=0 n="" msg="" me info state subs holder ids was rc=0 freed
   while [ $# -gt 0 ]; do
     case "$1" in
       --force)      force=1; shift ;;
@@ -597,7 +673,7 @@ cmd_done() {
     esac
   done
   [ -n "$n" ] || die "usage: track.sh done <n> [-m MSG] [--force]"
-  me="$(agent_id)"
+  ids="$(held_agent_ids)"
 
   lock_acquire
   info="$(fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder}')"
@@ -605,6 +681,13 @@ cmd_done() {
   subs="$(  printf '%s' "$info" | jq -r '.subs_open | map("#\(.)") | join(" ")')"
   holder="$(printf '%s' "$info" | jq -r '.claim.agent // ""')"
   was="$(   printf '%s' "$info" | jq -r '.unblocks  | map("#\(.)") | join(" ")')"
+
+  me="$(acting_agent "$holder" "$ids")"
+  if [ -z "$me" ]; then
+    lock_release
+    die "#$n is held by ${holder:-nobody}, and no branch here carries that claim.
+Work on a branch, or set MOTIF_AGENT."
+  fi
 
   [ "$state" = "OPEN" ] || { lock_release; die "#$n is already $state."; }
   if [ -n "$subs" ] && [ "$force" = 0 ]; then
@@ -922,7 +1005,7 @@ cmd_doctor() {
   if [ -z "$missing" ]; then chk ok labels "all $total present"
   else chk FAIL labels "missing:$missing — run: scripts/track.sh labels-init"; fi
 
-  me="$(agent_id 2>/dev/null || true)"
+  me="$(agent_id_or_empty)"
   if [ -n "$me" ]; then chk ok agent "$me"
   else chk warn agent "on main/detached — claim will refuse. Branch, or set MOTIF_AGENT."; fi
 
@@ -967,6 +1050,8 @@ cmd_doctor() {
 # --------------------------------------------------------------- selftest ---
 ST_PASS=0
 ST_FAIL=0
+ST_SCRATCH=""
+ST_ORPHAN_BRANCH=""
 st_ok()   { ST_PASS=$((ST_PASS + 1)); note "  ok    $*"; return 0; }
 st_bad()  { ST_FAIL=$((ST_FAIL + 1)); note "  FAIL  $*"; return 0; }
 st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
@@ -974,6 +1059,13 @@ st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
 st_cleanup() {
   local nums n deleted=0
   note "  cleaning up …"
+  # Both outlive a failed assertion, and an abandoned orphan branch is one this
+  # very change would then read as work this checkout holds.
+  if [ -n "$ST_SCRATCH" ]; then rm -rf "$ST_SCRATCH"; ST_SCRATCH=""; fi
+  if [ -n "$ST_ORPHAN_BRANCH" ]; then
+    git branch -D "$ST_ORPHAN_BRANCH" >/dev/null 2>&1 || true
+    ST_ORPHAN_BRANCH=""
+  fi
   nums="$(gh issue list --state all --label track:selftest --limit 100 \
           --json number --jq '.[].number' 2>/dev/null || true)"
   for n in $nums; do
@@ -991,11 +1083,24 @@ st_cleanup() {
 
 st_num() { printf '%s' "$1" | awk '{print $2}' | tr -d '#'; }
 
+# main checked out, one branch held by a second worktree, one held by nothing.
+st_scratch_repo() {
+  local d="$1"
+  git init -q -b main "$d"
+  git -C "$d" -c user.email=selftest@motif -c user.name=selftest \
+      commit -q --allow-empty -m "root"
+  git -C "$d" branch held/orphan
+  git -C "$d" branch held/foreign
+  git -C "$d" worktree add -q "$d/.wt-foreign" held/foreign
+  git -C "$d" switch -q -c held/current
+  return 0
+}
+
 cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J out rc loc adv dt bn
+  local t0 A B C D E F G H I J K out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1044,6 +1149,78 @@ Re-run with:  scripts/track.sh selftest --yes"
   out="$(MOTIF_AGENT=selftest-2 AS_JSON=1 cmd_mine)"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "mine excludes #$C for a different agent"
+
+  # Branch ownership is asserted in a scratch repository: the real one cannot
+  # have main checked out twice, and must not have branches appear and vanish
+  # under another agent working in a sibling worktree.
+  scratch="$(mktemp -d)"
+  ST_SCRATCH="$scratch"
+  st_scratch_repo "$scratch"
+  ids="$( cd "$scratch" && held_agent_ids )"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/current' || rc=1
+  st_assert "$rc" "held_agent_ids includes the branch checked out here"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/orphan' || rc=1
+  st_assert "$rc" "held_agent_ids includes a branch no worktree holds"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/foreign' && rc=1
+  st_assert "$rc" "held_agent_ids excludes a branch another worktree holds"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'main' && rc=1
+  st_assert "$rc" "held_agent_ids excludes main"
+
+  # `next` runs `mine` on the line after `git switch main`, which exits 1 today.
+  rc=0; ( cd "$scratch" && git switch -q main && held_agent_ids ) >/dev/null 2>&1 || rc=1
+  st_assert "$rc" "held_agent_ids succeeds on main"
+
+  # The failure mode this pair exists for takes the whole script down silently,
+  # so `doctor` and `release` stop on main with nothing on stderr to report.
+  rc=0; out="$( cd "$scratch" && agent_id_or_empty )" || rc=$?
+  st_assert "$([ "$rc" = 0 ] && [ -z "$out" ] && echo 0 || echo 1)" \
+    "agent_id_or_empty yields nothing on main rather than exiting"
+  rc=0; out="$( cd "$scratch" && acting_agent nobody "" )" || rc=$?
+  st_assert "$([ "$rc" = 0 ] && [ -z "$out" ] && echo 0 || echo 1)" \
+    "acting_agent yields nothing on main rather than exiting"
+
+  # Detached HEAD holds no branch, so every worktree branch belongs to someone
+  # else and only orphaned work is left.
+  ids="$( cd "$scratch" && git switch -q --detach && held_agent_ids )"
+  rc=0; printf '%s\n' "$ids" | grep -qx 'held/orphan' || rc=1
+  st_assert "$rc" "held_agent_ids still finds orphaned work on a detached HEAD"
+
+  # `git branch` names the detached state as though it were a branch.
+  rc=0; printf '%s\n' "$ids" | grep -q '^(' && rc=1
+  st_assert "$rc" "held_agent_ids reports no pseudo-branch on a detached HEAD"
+  rm -rf "$scratch"; ST_SCRATCH=""
+
+  # The crash-recovery case end to end: the branch that recorded the claim is
+  # not checked out, so an id taken from HEAD can never match it.
+  K="$(st_num "$(AS_JSON=0 cmd_add -t "selftest orphan claim" --area infra --kind chore --size s --selftest)")"
+  ob="selftest-orphan-$$"
+  ST_ORPHAN_BRANCH="$ob"
+  git branch "$ob"
+  MOTIF_AGENT="$ob" cmd_claim "$K" >/dev/null
+  out="$(AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$K" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "mine finds #$K claimed by a local branch that is not checked out"
+
+  # `next` tells the agent to finish or release whatever `mine` lists, so a
+  # claim this checkout owns has to be settleable without --force.
+  rc=0; ( cmd_release "$K" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$rc" "release settles #$K held by a local branch, without --force"
+  git branch -D "$ob"; ST_ORPHAN_BRANCH=""
+
+  # A claim whose branch is gone entirely is somebody else's, or nobody's.
+  MOTIF_AGENT=selftest-vanished cmd_claim "$K" >/dev/null
+  out="$(AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$K" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "mine excludes #$K once no local branch carries its claim"
+  rc=0; ( cmd_release "$K" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "release still refuses #$K held elsewhere (got $rc)"
+
+  # Holding nothing while claims exist elsewhere is the answer that reads as a
+  # dead end, so it has to say where those claims are reported.
+  out="$(MOTIF_AGENT=selftest-nobody AS_JSON=0 cmd_mine)"
+  rc=0; printf '%s' "$out" | grep -q "held elsewhere" || rc=1
+  st_assert "$rc" "mine points at doctor when it holds nothing but claims exist"
+  MOTIF_AGENT=selftest-vanished cmd_release "$K" >/dev/null
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes claimed #$C"
