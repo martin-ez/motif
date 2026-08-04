@@ -9,6 +9,10 @@
 //! what a duplex stream's two callbacks do with one, [`command_channel`] carries
 //! changes the other way, and [`level_meter`] sends back the other thing that
 //! crosses the boundary: not the audio itself but how loud it was.
+//!
+//! [`xrun_counter`] carries the news that the boundary failed, which is the one
+//! thing none of the others can report: the samples a dropout costs are gone,
+//! so nothing downstream can tell they were ever due.
 
 use std::fmt;
 
@@ -17,12 +21,14 @@ mod cpal_backend;
 mod level;
 mod passthrough;
 mod ring;
+mod xrun;
 
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
+pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};
 
 /// The sample rate and block size a stream is asked to run at.
 ///
@@ -176,6 +182,15 @@ pub trait DuplexStream {
     /// next one does. A stopped stream keeps reporting the block it stopped on.
     fn levels(&self) -> Levels;
 
+    /// How many blocks the stream has lost in each direction.
+    ///
+    /// Counted in the callback as it happens, because a dropout leaves no other
+    /// trace to find afterwards. The counts run from when the stream was opened
+    /// and only grow, so what a caller usually wants is the difference between
+    /// this and a reading it took earlier. Stopping and starting a stream does
+    /// not clear them.
+    fn xruns(&self) -> Xruns;
+
     /// Start calling back.
     ///
     /// # Errors
@@ -291,6 +306,12 @@ impl DuplexStream for NullStream {
     /// [`Levels::SILENT`].
     fn levels(&self) -> Levels {
         Levels::SILENT
+    }
+
+    /// A stream that moves no samples can lose none, so this is always
+    /// [`Xruns::NONE`].
+    fn xruns(&self) -> Xruns {
+        Xruns::NONE
     }
 
     fn start(&mut self) -> Result<(), DeviceError> {
