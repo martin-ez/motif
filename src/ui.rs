@@ -12,6 +12,9 @@
 //! [`DeviceProfile::TARGET`], so it is a fixed-size array rather than an
 //! allocation that grows with whatever the host reports.
 //!
+//! [`ListPage`] is here too, being the one screen that belongs to no feature:
+//! anything with rows to move a selection through embeds it.
+//!
 //! ```
 //! use motif::ui::{Cell, Frame, NullRenderer, RenderError, Renderer};
 //!
@@ -32,11 +35,13 @@ use crate::device::DeviceProfile;
 mod clock;
 mod events;
 mod input;
+mod list;
 mod terminal;
 
 pub use clock::{Clock, ScriptedClock, SystemClock};
 pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, ScriptedControls, Turn};
+pub use list::ListPage;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 
 /// One character cell of the screen.
