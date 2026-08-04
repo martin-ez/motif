@@ -1,9 +1,7 @@
 //! What the player is doing with the loop, and where the loop is kept.
 //!
-//! [`Transport`] is the state machine a player drives — record, play, overdub —
-//! and it decides what each block of audio becomes. It holds no audio itself:
-//! the states are what the callback consults, and the samples they govern are
-//! in the buffer beside it.
+//! [`Transport`] is the state a player drives with record, play and stop;
+//! [`LoopBuffer`] holds the samples those states govern.
 //!
 //! [`LoopBuffer`] is sized from the device profile and allocated before the
 //! stream starts, so the longest loop a player can capture is a constraint the

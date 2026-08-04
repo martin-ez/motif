@@ -1,11 +1,9 @@
 //! What the looper's transport does when a player presses a button.
 //!
-//! Every state gets a test for each of the three actions, so the transition
-//! table is stated here in full: fifteen facts, one per test, and a table with
-//! a gap in it is a table missing a test. The rest are the two questions the
-//! callback asks of a state — whether this block is captured, and whether it is
-//! played — and the transitions being computable at compile time, which is what
-//! allocation-free means when it is a proof rather than a measurement.
+//! Every state gets a test for each of the three actions, so the table is
+//! stated here in full and a gap in it is a missing test. The rest are the two
+//! questions the callback asks of a state, and that a transition is computable
+//! at compile time.
 
 use motif::looper::Transport;
 
