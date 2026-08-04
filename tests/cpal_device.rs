@@ -4,7 +4,9 @@
 //! these are run deliberately with `cargo test -- --ignored` on a machine that
 //! has one.
 
-use motif::audio::{AudioBackend, CpalBackend, DuplexStream, StreamRequest, StreamState};
+use motif::audio::{
+    AudioBackend, AudioDevice, CpalBackend, DuplexStream, StreamRequest, StreamState,
+};
 
 fn request() -> StreamRequest {
     StreamRequest {
@@ -63,4 +65,49 @@ fn a_sample_rate_no_device_supports_is_an_error() {
     });
 
     assert!(opened.is_err());
+}
+
+fn listed_devices(sample_rate: u32) -> Vec<AudioDevice> {
+    CpalBackend::new()
+        .hosts(sample_rate)
+        .into_iter()
+        .flat_map(|host| host.inputs.into_iter().chain(host.outputs))
+        .collect()
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_machine_with_a_device_lists_a_host_to_reach_it_through() {
+    let hosts = CpalBackend::new().hosts(48_000);
+
+    assert!(!hosts.is_empty());
+    assert!(hosts.iter().all(|host| !host.name.is_empty()));
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn every_listed_device_offers_a_channel_count() {
+    for device in listed_devices(48_000) {
+        assert!(!device.name.is_empty());
+        assert!(!device.channels.is_empty(), "{} lists none", device.name);
+    }
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn channel_counts_ascend_without_repeats() {
+    for device in listed_devices(48_000) {
+        assert!(
+            device.channels.windows(2).all(|pair| pair[0] < pair[1]),
+            "{} lists {:?}",
+            device.name,
+            device.channels
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_sample_rate_no_device_supports_lists_no_hosts() {
+    assert_eq!(CpalBackend::new().hosts(1), Vec::new());
 }
