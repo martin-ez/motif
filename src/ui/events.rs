@@ -50,6 +50,17 @@ use std::time::Duration;
 use crate::device::DeviceProfile;
 use crate::ui::{Clock, ControlEvent, Controls, Frame, RenderError, Renderer, SystemClock};
 
+/// The most control events one frame will take.
+///
+/// A bound rather than "whatever is waiting", because a panel is not obliged to
+/// run dry: a terminal handed a pasted page of text produces a control per
+/// character for as long as the paste lasts, and a drain that read until it
+/// stopped would spend the frame reading instead of drawing. The panel has
+/// eleven controls and a player has two hands, so this is far more than one
+/// frame of playing; reaching it means the source is not a player, and what is
+/// left over waits for the next frame rather than being dropped.
+pub const EVENTS_PER_FRAME: usize = 32;
+
 /// Whether the application is still running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -111,8 +122,11 @@ impl RunReport {
 
 /// The loop an application runs inside.
 ///
-/// It owns the [`Frame`] every draw goes into, so a running loop allocates
-/// nothing per frame; the frame is blanked between draws rather than replaced.
+/// It owns the [`Frame`] every draw goes into and overwrites it with a blank
+/// one between draws, so the loop itself allocates nothing per frame. What a
+/// backend does with the frame it is handed is its own affair: the terminal's
+/// [`FrameWriter`](crate::ui::FrameWriter) does allocate per frame, and the
+/// bound this loop keeps is on its own work.
 pub struct EventLoop<K: Clock = SystemClock> {
     clock: K,
     budget: Duration,
@@ -150,7 +164,7 @@ impl<K: Clock> EventLoop<K> {
     /// Run `app` until it asks to stop, taking controls from `controls` and
     /// drawing to `screen`.
     ///
-    /// A frame takes every control event that was already waiting, draws once,
+    /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws once,
     /// renders, and then waits out the rest of its budget. An event arriving
     /// mid-frame is handled by the next one: the frame boundary is what makes a
     /// draw see one state rather than a state that changed underneath it.
@@ -159,7 +173,9 @@ impl<K: Clock> EventLoop<K> {
     /// application has just said there is nothing further to show. An exit from
     /// [`App::draw`] renders that frame first — it is the one the application
     /// wants left on the screen — and neither waits out a budget nobody is
-    /// going to use.
+    /// going to use. A last frame that ran over is still reported as an
+    /// overrun: it is the run's timing that the report describes, not the
+    /// waiting the loop did about it.
     ///
     /// # Errors
     ///
@@ -186,21 +202,29 @@ impl<K: Clock> EventLoop<K> {
             screen.render(&self.frame)?;
             report.frames += 1;
 
+            let spent = self.clock.now().duration_since(started);
+            let spare = self.budget.checked_sub(spent);
+            if spare.is_none() {
+                report.overruns += 1;
+            }
+
             if flow.is_exit() {
                 return Ok(report);
             }
 
-            let spent = self.clock.now().duration_since(started);
-            match self.budget.checked_sub(spent) {
-                Some(spare) => self.clock.sleep(spare),
-                None => report.overruns += 1,
+            if let Some(spare) = spare {
+                self.clock.sleep(spare);
             }
         }
     }
 }
 
 fn drain(app: &mut impl App, controls: &mut impl Controls) -> Flow {
-    while let Some(event) = controls.poll() {
+    for _ in 0..EVENTS_PER_FRAME {
+        let Some(event) = controls.poll() else {
+            break;
+        };
+
         if app.control(event).is_exit() {
             return Flow::Exit;
         }

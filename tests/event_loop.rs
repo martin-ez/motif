@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use motif::device::{Button, DeviceProfile};
 use motif::ui::{
-    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, NullRenderer, RenderError, Renderer,
-    ScriptedClock, ScriptedControls,
+    App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, NullRenderer,
+    RenderError, Renderer, ScriptedClock, ScriptedControls,
 };
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
@@ -65,6 +65,16 @@ impl App for Page {
         } else {
             Flow::Continue
         }
+    }
+}
+
+/// A panel that always has one more event, as a terminal handed a pasted page
+/// of text does.
+struct Endless(ControlEvent);
+
+impl Controls for Endless {
+    fn poll(&mut self) -> Option<ControlEvent> {
+        Some(self.0)
     }
 }
 
@@ -144,6 +154,46 @@ fn every_event_waiting_reaches_the_application_in_one_frame() {
         .expect("the null screen accepts every frame");
 
     assert_eq!(app.seen, [pressed(Button::Play), pressed(Button::Record)]);
+}
+
+#[test]
+fn a_frame_takes_no_more_events_than_the_bound_allows() {
+    let mut app = Page::lasting(1);
+    let mut controls = Endless(pressed(Button::Play));
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(app.seen.len(), EVENTS_PER_FRAME);
+}
+
+#[test]
+fn a_panel_that_never_runs_dry_still_reaches_the_screen() {
+    let mut app = Page::lasting(1);
+    let mut controls = Endless(pressed(Button::Play));
+    let mut screen = NullRenderer::new();
+
+    let report = still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(report.frames(), 1);
+}
+
+#[test]
+fn events_past_the_bound_wait_for_the_next_frame() {
+    let mut app = Page::lasting(1);
+    let waiting = std::iter::repeat_n(pressed(Button::Play), EVENTS_PER_FRAME + 1);
+    let mut controls = ScriptedControls::new(waiting);
+    let mut screen = NullRenderer::new();
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(controls.poll(), Some(pressed(Button::Play)));
 }
 
 #[test]
@@ -260,6 +310,21 @@ fn the_last_frame_of_a_run_is_not_paced() {
         .run(&mut app, &mut controls, &mut screen)
         .expect("the null screen accepts every frame");
 
+    assert!(loops.clock().slept().is_empty());
+}
+
+#[test]
+fn the_last_frame_of_a_run_is_counted_when_it_runs_over() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = NullRenderer::new();
+    let mut loops = scripted([Duration::ZERO, BUDGET + Duration::from_millis(1)]);
+
+    let report = loops
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the null screen accepts every frame");
+
+    assert_eq!(report.overruns(), 1);
     assert!(loops.clock().slept().is_empty());
 }
 
