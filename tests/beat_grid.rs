@@ -104,6 +104,14 @@ fn a_new_grid_has_no_beats() {
 }
 
 #[test]
+fn a_grid_with_a_beat_in_it_is_not_empty() {
+    let grid = grid_of(&[HALF_SECOND]);
+
+    assert!(!grid.is_empty());
+    assert_eq!(grid.len(), 1);
+}
+
+#[test]
 fn a_grid_keeps_the_sample_rate_its_beats_were_timed_against() {
     let grid = BeatGrid::new(SAMPLE_RATE);
 
@@ -143,6 +151,13 @@ fn two_beats_are_enough_for_a_tempo() {
 #[test]
 fn tempo_is_derived_from_the_beats() {
     let grid = four_beats_at_120();
+
+    assert_eq!(grid.beats_per_minute(), Some(120.0));
+}
+
+#[test]
+fn a_grid_that_starts_late_reports_the_same_tempo() {
+    let grid = grid_of(&[10 * HALF_SECOND, 11 * HALF_SECOND, 12 * HALF_SECOND]);
 
     assert_eq!(grid.beats_per_minute(), Some(120.0));
 }
