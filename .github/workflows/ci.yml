@@ -15,19 +15,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: fmt + clippy
+  checks:
+    name: static checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # cpal's Linux backend links against ALSA, so every job that compiles
-      # this crate for a Linux host needs its development headers. The aarch64
-      # job is the exception: it cross-checks, and .cargo/config.toml points it
-      # at a stub .pc instead.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --all-features
+        with:
+          fetch-depth: 0
+      # Every job runs on every push, and the ones below skip their own steps.
+      # Gating the job instead would stop it reporting, and a required check
+      # that never reports blocks a pull request rather than passing it.
+      - id: changed
+        uses: ./.github/actions/rust-changed
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        uses: Swatinem/rust-cache@v2
+      # cpal's Linux backend links against ALSA, and alsa-sys resolves it
+      # through pkg-config from a build script, which runs even under `cargo
+      # check`. The aarch64 job is the exception: it cross-checks, and
+      # .cargo/config.toml points it at a stub .pc instead.
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # These share a job because each is a second or two of work behind ~29s of
+      # cache restore and apt. `!cancelled()` keeps every check reporting after
+      # an earlier one fails, so one run still says what separate jobs did.
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        run: cargo fmt --all -- --check
+      # Every feature configuration is linted rather than merely checked: clippy
+      # subsumes what `cargo check` would do, and one rustc wrapper across all
+      # three keeps them off each other's build fingerprints. Building each way
+      # catches a feature that only compiles when it is switched on, the failure
+      # mode that makes flag-gated merging unsafe.
+      - if: ${{ !cancelled() && steps.changed.outputs.rust != 'false' }}
+        run: cargo clippy --all-targets --all-features
+      - if: ${{ !cancelled() && steps.changed.outputs.rust != 'false' }}
+        run: cargo clippy --all-targets
+      - if: ${{ !cancelled() && steps.changed.outputs.rust != 'false' }}
+        run: cargo clippy --all-targets --no-default-features
+      # Undocumented public items fail via missing_docs; broken intra-doc links
+      # fail via RUSTDOCFLAGS. The examples themselves are compiled and run by
+      # the test job, where plain `cargo test` covers doctests on both hosts.
+      - if: ${{ !cancelled() && steps.changed.outputs.rust != 'false' }}
+        run: cargo doc --no-deps --all-features
 
   style:
     name: house style
@@ -39,23 +67,6 @@ jobs:
       # the code beyond a folder README, no documentation of unbuilt features.
       - run: scripts/check-style.sh
 
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # cpal's Linux backend links against ALSA, so every job that compiles
-      # this crate for a Linux host needs its development headers. The aarch64
-      # job is the exception: it cross-checks, and .cargo/config.toml points it
-      # at a stub .pc instead.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # Undocumented public items fail via missing_docs; broken intra-doc links
-      # fail via RUSTDOCFLAGS. Doc examples are compiled and run, which is what
-      # keeps documentation in the code from going quietly stale.
-      - run: cargo doc --no-deps --all-features
-      - run: cargo test --doc --all-features
-
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -65,29 +76,18 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+        with:
+          fetch-depth: 0
+      - id: changed
+        uses: ./.github/actions/rust-changed
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        uses: Swatinem/rust-cache@v2
       # cpal's Linux backend links against ALSA. The macOS runner uses
       # CoreAudio and needs nothing installed.
-      - if: runner.os == 'Linux'
+      - if: ${{ runner.os == 'Linux' && steps.changed.outputs.rust != 'false' }}
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      - run: cargo test --all-features
-
-  features:
-    name: feature flags
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # cpal's Linux backend links against ALSA, so every job that compiles
-      # this crate for a Linux host needs its development headers. The aarch64
-      # job is the exception: it cross-checks, and .cargo/config.toml points it
-      # at a stub .pc instead.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # Building both ways catches a feature that only compiles when it is
-      # switched on, which is the failure mode that makes flag-gated merging
-      # unsafe.
-      - run: cargo check --all-targets
-      - run: cargo check --all-targets --no-default-features
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        run: cargo test --all-features
 
   mutants:
     name: mutation coverage
@@ -97,22 +97,32 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
+      - id: changed
+        uses: ./.github/actions/rust-changed
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
       # cpal's Linux backend links against ALSA, so every job that compiles
       # this crate for a Linux host needs its development headers. The aarch64
       # job is the exception: it cross-checks, and .cargo/config.toml points it
       # at a stub .pc instead.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       # Test-first ordering is not observable in a diff, but its purpose is:
       # tests that genuinely constrain behaviour. cargo-mutants alters the code
       # and fails when no test notices. Scoped to the diff so the runtime stays
       # proportional to the change.
-      - run: |
+      #
+      # One job per core: a standard runner has four, and the sweep is the
+      # longest job in this workflow, so it sets the wall clock for the whole
+      # pull request.
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        run: |
           git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
-          cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 2
+          cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 4
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -124,14 +134,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+        with:
+          fetch-depth: 0
+      - id: changed
+        uses: ./.github/actions/rust-changed
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        uses: Swatinem/rust-cache@v2
       # The long-term target is a standalone aarch64 device. This job exists to
       # fail loudly the first time a dependency does not cross-compile, rather
       # than letting that be discovered once it is expensive to undo.
       #
-      # When a dependency needs system libraries (ALSA, for instance), this
-      # needs a cross sysroot — switch it to `cross` rather than deleting it.
-      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - run: cargo check --target aarch64-unknown-linux-gnu --all-features
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+      # `cargo check` never links, so it needs no cross linker and none is
+      # installed. A step that does link — `cargo build`, or a test — needs both
+      # a linker and a cross sysroot for ALSA: switch it to `cross` rather than
+      # bolting either onto this job.
+      - if: ${{ steps.changed.outputs.rust != 'false' }}
+        run: cargo check --target aarch64-unknown-linux-gnu --all-features
