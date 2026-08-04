@@ -2,13 +2,14 @@
 //!
 //! A shell over `libc`: switching modes is three calls into the C library and
 //! no decision of our own. The behaviour that is ours — which cells to write,
-//! and which control a key stands for — is in [`FrameWriter`](super::FrameWriter)
-//! and [`KeyReader`](super::KeyReader), where a test can reach it.
+//! where the screen's edges fall, and which control a key stands for — is in
+//! [`FrameWriter`](super::FrameWriter), [`Viewport`](super::Viewport) and
+//! [`KeyReader`](super::KeyReader), where a test can reach it.
 
 use std::io::{self, Stdin, Stdout, Write};
 use std::mem::MaybeUninit;
 
-use super::{FrameWriter, KeyReader};
+use super::{KeyReader, Viewport};
 use crate::ui::{ControlEvent, Controls, Frame, RenderError, Renderer};
 
 const ENTER_ALTERNATE_SCREEN: &str = "\u{1b}[?1049h";
@@ -71,8 +72,14 @@ fn begin_drawing() -> Result<(), RenderError> {
 /// screen; dropping it puts both back. Drop runs when a caller returns early
 /// with `?` and while a panic unwinds, which is what makes the restore hold on
 /// the paths that are easiest to forget.
+///
+/// Frames go out through a [`Viewport`], so what a player sees is the panel's
+/// screen with its edges drawn rather than a frame in the corner of a window.
+/// A terminal is nearly always larger than the device, and a layout judged in
+/// the space a terminal happens to have is a layout judged against the wrong
+/// screen.
 pub struct TerminalScreen {
-    writer: FrameWriter<Stdout>,
+    writer: Viewport<Stdout>,
     reader: KeyReader<Stdin>,
     entry_mode: libc::termios,
 }
@@ -99,7 +106,7 @@ impl TerminalScreen {
         }
 
         Ok(Self {
-            writer: FrameWriter::new(io::stdout()),
+            writer: Viewport::new(io::stdout()),
             reader: KeyReader::new(io::stdin()),
             entry_mode,
         })
@@ -112,7 +119,7 @@ impl TerminalScreen {
     /// where the keys and the screen are separate devices. Splitting is what
     /// lets the terminal be both without the loop having to assume they always
     /// arrive together.
-    pub fn split(&mut self) -> (&mut KeyReader<Stdin>, &mut FrameWriter<Stdout>) {
+    pub fn split(&mut self) -> (&mut KeyReader<Stdin>, &mut Viewport<Stdout>) {
         (&mut self.reader, &mut self.writer)
     }
 }
