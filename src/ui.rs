@@ -29,9 +29,13 @@ use std::fmt;
 
 use crate::device::DeviceProfile;
 
+mod clock;
+mod events;
 mod input;
 mod terminal;
 
+pub use clock::{Clock, ScriptedClock, SystemClock};
+pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, ScriptedControls, Turn};
 pub use terminal::{FrameWriter, KeyReader, TerminalScreen};
 

@@ -32,6 +32,8 @@
 //! parameters[Encoder::Third as usize] = 0.5;
 //! ```
 
+use std::time::Duration;
+
 /// The screen the UI draws into, measured in character cells.
 ///
 /// Cells rather than pixels, so that a terminal and a panel are describable by
@@ -42,6 +44,12 @@ pub struct ScreenProfile {
     pub columns: usize,
     /// Cells down.
     pub rows: usize,
+    /// Frames drawn per second.
+    ///
+    /// A stated rate rather than as fast as the machine manages, because the
+    /// screen shares a machine with analysis: a UI allowed to be greedy on a
+    /// laptop takes time from work that has a deadline on the target.
+    pub refresh_rate: u32,
 }
 
 impl ScreenProfile {
@@ -49,7 +57,21 @@ impl ScreenProfile {
     pub const fn cells(self) -> usize {
         self.columns.saturating_mul(self.rows)
     }
+
+    /// How long one frame gets at [`refresh_rate`](Self::refresh_rate).
+    ///
+    /// A screen that never refreshes has no budget rather than a division by
+    /// zero: a profile is data, and one that is wrong should size something
+    /// useless instead of failing to build.
+    pub const fn frame_budget(self) -> Duration {
+        if self.refresh_rate == 0 {
+            return Duration::ZERO;
+        }
+        Duration::from_nanos(NANOSECONDS_PER_SECOND / self.refresh_rate as u64)
+    }
 }
+
+const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
 macro_rules! panel_control {
     (
@@ -181,7 +203,10 @@ impl DeviceProfile {
     ///
     /// The screen is a 320×240 panel drawn with an 8×16 cell, which is 40
     /// columns by 15 rows — small enough that a default 80×24 terminal can
-    /// always show a whole frame. The audio device is the configuration a
+    /// always show a whole frame. It refreshes 30 times a second, which is a
+    /// frame every 33 ms: enough for a meter to look continuous, and slow
+    /// enough that redrawing a panel of that size over a serial bus fits in one
+    /// frame. The audio device is the configuration a
     /// class-compliant USB interface offers everywhere: 48 kHz in blocks of
     /// 256 frames, which is 5.33 ms of deadline per callback. Four cores is a
     /// quad-core ARM board of the kind this would be built on.
@@ -193,6 +218,7 @@ impl DeviceProfile {
         screen: ScreenProfile {
             columns: 40,
             rows: 15,
+            refresh_rate: 30,
         },
         audio: AudioProfile {
             sample_rate: 48_000,
