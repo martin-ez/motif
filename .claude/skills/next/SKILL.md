@@ -26,9 +26,16 @@ that before taking new work. A dirty tree means the same thing.
 scripts/track.sh ready
 ```
 
-Top row. Anything under `SPLIT:` is `size:l` and unclaimable — use the `refine`
-skill, or take the next row. If the user named an issue, still run `ready`, and
-say why if it is absent rather than forcing it.
+The list is sorted by how much each row unblocks, so the top row frees the most
+work. Take the top three rows and put them to the user with `AskUserQuestion` —
+one option per issue, labelled `#74`, described by its title, size and what it
+unblocks, top row first and marked `(Recommended)`. Their pick is the one to
+claim; claim nothing before they answer.
+
+Offer fewer than three if `ready` lists fewer. Anything under `SPLIT:` is
+`size:l` and unclaimable — leave it out of the options and say so, or use the
+`refine` skill. If the user named an issue, still run `ready`: take it without
+asking if it is there, and say why rather than forcing it if it is not.
 
 ## 3. Take
 
@@ -36,8 +43,9 @@ say why if it is absent rather than forcing it.
 scripts/track.sh start 74
 ```
 
-Claims first, then branches onto `feat/74-…`. Exit 2 means someone else has it:
-take the next row, never `--force`.
+The issue the user picked. Claims first, then branches onto `feat/74-…`. Exit 2
+means someone else took it in the meantime: say so and ask again with the rows
+that are left, never `--force`.
 
 ## 4. Read it whole
 
