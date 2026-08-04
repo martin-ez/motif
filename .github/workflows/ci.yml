@@ -15,19 +15,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: fmt + clippy
+  checks:
+    name: static checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      # cpal's Linux backend links against ALSA, so every job that compiles
-      # this crate for a Linux host needs its development headers. The aarch64
-      # job is the exception: it cross-checks, and .cargo/config.toml points it
-      # at a stub .pc instead.
+      # cpal's Linux backend links against ALSA, and alsa-sys resolves it
+      # through pkg-config from a build script, which runs even under `cargo
+      # check`. The aarch64 job is the exception: it cross-checks, and
+      # .cargo/config.toml points it at a stub .pc instead.
       - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      # These share a job because each is a second or two of work behind ~29s of
+      # cache restore and apt. `!cancelled()` keeps every check reporting after
+      # an earlier one fails, so one run still says what separate jobs did.
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --all-features
+      # Every feature configuration is linted rather than merely checked: clippy
+      # subsumes what `cargo check` would do, and one rustc wrapper across all
+      # three keeps them off each other's build fingerprints. Building each way
+      # catches a feature that only compiles when it is switched on, the failure
+      # mode that makes flag-gated merging unsafe.
+      - if: '!cancelled()'
+        run: cargo clippy --all-targets --all-features
+      - if: '!cancelled()'
+        run: cargo clippy --all-targets
+      - if: '!cancelled()'
+        run: cargo clippy --all-targets --no-default-features
+      # Undocumented public items fail via missing_docs; broken intra-doc links
+      # fail via RUSTDOCFLAGS. The examples themselves are compiled and run by
+      # the test job, where plain `cargo test` covers doctests on both hosts.
+      - if: '!cancelled()'
+        run: cargo doc --no-deps --all-features
 
   style:
     name: house style
@@ -38,22 +56,6 @@ jobs:
       # comments, no test modules under src/, no TODO markers, no prose outside
       # the code beyond a folder README, no documentation of unbuilt features.
       - run: scripts/check-style.sh
-
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # cpal's Linux backend links against ALSA, so every job that compiles
-      # this crate for a Linux host needs its development headers. The aarch64
-      # job is the exception: it cross-checks, and .cargo/config.toml points it
-      # at a stub .pc instead.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # Undocumented public items fail via missing_docs; broken intra-doc links
-      # fail via RUSTDOCFLAGS. The examples themselves are compiled and run by
-      # the test job, where plain `cargo test` covers doctests on both hosts.
-      - run: cargo doc --no-deps --all-features
 
   test:
     name: test (${{ matrix.os }})
@@ -70,23 +72,6 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - run: cargo test --all-features
-
-  features:
-    name: feature flags
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # cpal's Linux backend links against ALSA, so every job that compiles
-      # this crate for a Linux host needs its development headers. The aarch64
-      # job is the exception: it cross-checks, and .cargo/config.toml points it
-      # at a stub .pc instead.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
-      # Building both ways catches a feature that only compiles when it is
-      # switched on, which is the failure mode that makes flag-gated merging
-      # unsafe.
-      - run: cargo check --all-targets
-      - run: cargo check --all-targets --no-default-features
 
   mutants:
     name: mutation coverage
