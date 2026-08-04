@@ -11,6 +11,10 @@ to stay simple.
 > screen, draws the program's name 30 times a second, and quits on shift and
 > stop. What exists today is the design, the build, and the shell around them.
 >
+> It wants a real terminal, since it switches one into raw mode and onto its
+> alternate screen. Run from an editor's output pane it will exit with `the
+> screen is not available` instead, which is the same path as a piped stdin.
+>
 > This README describes what is here now. Work that has not happened lives in
 > [issues](https://github.com/martin-ez/motif/issues), not in prose.
 
