@@ -1,4 +1,7 @@
-//! Where a captured loop is kept.
+//! What the player is doing with the loop, and where the loop is kept.
+//!
+//! [`Transport`] is the state a player drives with record, play and stop;
+//! [`LoopBuffer`] holds the samples those states govern.
 //!
 //! [`LoopBuffer`] is sized from the device profile and allocated before the
 //! stream starts, so the longest loop a player can capture is a constraint the
@@ -11,6 +14,10 @@
 //! should have to know one.
 
 use crate::device::AudioProfile;
+
+mod transport;
+
+pub use transport::Transport;
 
 /// The samples of a loop, in storage that is allocated once and never grows.
 pub struct LoopBuffer {
