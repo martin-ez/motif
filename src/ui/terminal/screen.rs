@@ -1,14 +1,15 @@
-//! Taking a terminal over for drawing, and giving it back.
+//! Taking a terminal over for drawing and typing, and giving it back.
 //!
 //! A shell over `libc`: switching modes is three calls into the C library and
-//! no decision of our own. The behaviour that is ours — which cells to write —
-//! is in [`FrameWriter`](super::FrameWriter), where a test can reach it.
+//! no decision of our own. The behaviour that is ours — which cells to write,
+//! and which control a key stands for — is in [`FrameWriter`](super::FrameWriter)
+//! and [`KeyReader`](super::KeyReader), where a test can reach it.
 
-use std::io::{self, Stdout, Write};
+use std::io::{self, Stdin, Stdout, Write};
 use std::mem::MaybeUninit;
 
-use super::FrameWriter;
-use crate::ui::{Frame, RenderError, Renderer};
+use super::{FrameWriter, KeyReader};
+use crate::ui::{ControlEvent, Controls, Frame, RenderError, Renderer};
 
 const ENTER_ALTERNATE_SCREEN: &str = "\u{1b}[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\u{1b}[?1049l";
@@ -31,12 +32,15 @@ fn current_mode() -> Result<libc::termios, RenderError> {
     Ok(unsafe { mode.assume_init() })
 }
 
-fn raw_from(mode: libc::termios) -> libc::termios {
+fn polling_raw_from(mode: libc::termios) -> libc::termios {
     let mut raw = mode;
 
     /* SAFETY: cfmakeraw only writes through the pointer it is given, which is
     a local copy owned by this function and valid for the call. */
     unsafe { libc::cfmakeraw(&raw mut raw) };
+
+    raw.c_cc[libc::VMIN] = 0;
+    raw.c_cc[libc::VTIME] = 0;
 
     raw
 }
@@ -57,7 +61,11 @@ fn begin_drawing() -> Result<(), RenderError> {
     out.flush().map_err(|_| RenderError::WriteFailed)
 }
 
-/// The screen a terminal presents, given back as it was found.
+/// The terminal a player has, given back as it was found.
+///
+/// The screen and the panel are one object because the mode they need is one
+/// setting: raw mode is what stops the terminal echoing keys and buffering them
+/// until a newline, and it belongs to the terminal rather than to either half.
 ///
 /// Opening one switches the terminal into raw mode and onto its alternate
 /// screen; dropping it puts both back. Drop runs when a caller returns early
@@ -65,11 +73,16 @@ fn begin_drawing() -> Result<(), RenderError> {
 /// the paths that are easiest to forget.
 pub struct TerminalScreen {
     writer: FrameWriter<Stdout>,
+    reader: KeyReader<Stdin>,
     entry_mode: libc::termios,
 }
 
 impl TerminalScreen {
-    /// Take the terminal over for drawing.
+    /// Take the terminal over for drawing and typing.
+    ///
+    /// Keys are read without waiting: the raw mode applied here hands back
+    /// whatever has been typed and returns immediately, so a frame is never
+    /// spent waiting for the player.
     ///
     /// # Errors
     ///
@@ -78,7 +91,7 @@ impl TerminalScreen {
     /// switch to its alternate screen. Neither leaves the terminal altered.
     pub fn open() -> Result<Self, RenderError> {
         let entry_mode = current_mode()?;
-        apply_mode(&raw_from(entry_mode))?;
+        apply_mode(&polling_raw_from(entry_mode))?;
 
         if let Err(failed) = begin_drawing() {
             let _ = apply_mode(&entry_mode);
@@ -87,8 +100,15 @@ impl TerminalScreen {
 
         Ok(Self {
             writer: FrameWriter::new(io::stdout()),
+            reader: KeyReader::new(io::stdin()),
             entry_mode,
         })
+    }
+}
+
+impl Controls for TerminalScreen {
+    fn poll(&mut self) -> Option<ControlEvent> {
+        self.reader.poll()
     }
 }
 

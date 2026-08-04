@@ -1,16 +1,19 @@
-//! The terminal implementation of [`Renderer`].
+//! The terminal implementation of [`Renderer`] and [`Controls`](super::Controls).
 //!
 //! The only place in the project that knows what a terminal is. Everything
-//! above draws into a [`Frame`] and never learns where that frame went, which
-//! is what makes swapping this for a hardware screen a change to one directory.
+//! above draws into a [`Frame`], never learns where that frame went, and is
+//! handed controls rather than keys — which is what makes swapping this for a
+//! hardware panel a change to one directory.
 
 use std::io::Write;
 
 use crate::device::DeviceProfile;
 use crate::ui::{Cell, Frame, RenderError, Renderer};
 
+mod keys;
 mod screen;
 
+pub use keys::KeyReader;
 pub use screen::TerminalScreen;
 
 /// A [`Renderer`] that writes a frame as escape sequences to anything taking
