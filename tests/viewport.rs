@@ -126,8 +126,17 @@ fn drawn(cells: &[(usize, usize, char)]) -> Frame {
     frame
 }
 
+fn top_border_at(column: usize, row: usize) -> String {
+    format!(
+        "\u{1b}[{};{}H┌{}┐",
+        row + 1,
+        column + 1,
+        "─".repeat(SCREEN.columns)
+    )
+}
+
 fn top_border() -> String {
-    format!("\u{1b}[1;1H┌{}┐", "─".repeat(SCREEN.columns))
+    top_border_at(0, 0)
 }
 
 fn bottom_border() -> String {
@@ -237,4 +246,99 @@ fn the_border_is_drawn_again_after_a_frame_failed_under_it() {
         output.contains(&top_border()),
         "the border was not redrawn after the frame under it failed: {output:?}"
     );
+}
+
+#[test]
+fn a_placed_viewport_draws_its_border_at_the_origin_it_was_given() {
+    let mut viewport = Viewport::at(Vec::new(), 3, 2);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink().clone()).expect("the output is utf-8");
+
+    assert!(
+        output.contains(&top_border_at(3, 2)),
+        "the border was not drawn where it was placed: {output:?}"
+    );
+}
+
+#[test]
+fn a_placed_viewport_draws_the_frame_inside_its_border() {
+    let mut viewport = Viewport::at(Vec::new(), 3, 2);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+    viewport
+        .render(&drawn(&[(0, 0, 'x')]))
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+
+    assert_eq!(output, "\u{1b}[4;5Hx");
+}
+
+#[test]
+fn moving_a_viewport_draws_its_border_again_where_it_now_is() {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport.place(5, 1);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+
+    assert!(
+        output.contains(&top_border_at(5, 1)),
+        "the border did not move: {output:?}"
+    );
+}
+
+#[test]
+fn moving_a_viewport_wipes_the_screen_it_left_behind() {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport.place(5, 1);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+
+    assert!(
+        output.contains("\u{1b}[2J"),
+        "the old border was left on the screen: {output:?}"
+    );
+}
+
+#[test]
+fn a_viewport_moved_where_it_already_is_writes_nothing() {
+    let mut viewport = Viewport::at(Vec::new(), 5, 1);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport.place(5, 1);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+
+    assert_eq!(output, "");
 }

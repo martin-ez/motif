@@ -37,7 +37,7 @@ mod terminal;
 pub use clock::{Clock, ScriptedClock, SystemClock};
 pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, ScriptedControls, Turn};
-pub use terminal::{FrameWriter, KeyReader, TerminalScreen, Viewport};
+pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 
 /// One character cell of the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

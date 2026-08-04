@@ -15,7 +15,7 @@ mod screen;
 mod viewport;
 
 pub use keys::KeyReader;
-pub use screen::TerminalScreen;
+pub use screen::{CentredScreen, TerminalScreen};
 pub use viewport::Viewport;
 
 /// A [`Renderer`] that writes a frame as escape sequences to anything taking

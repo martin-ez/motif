@@ -10,12 +10,14 @@ use std::io::{self, Stdin, Stdout, Write};
 use std::mem::MaybeUninit;
 
 use super::{KeyReader, Viewport};
+use crate::device::DeviceProfile;
 use crate::ui::{ControlEvent, Controls, Frame, RenderError, Renderer};
 
 const ENTER_ALTERNATE_SCREEN: &str = "\u{1b}[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\u{1b}[?1049l";
 const HIDE_CURSOR: &str = "\u{1b}[?25l";
 const SHOW_CURSOR: &str = "\u{1b}[?25h";
+const WIPE_SCREEN: &str = "\u{1b}[2J";
 
 fn current_mode() -> Result<libc::termios, RenderError> {
     let mut mode = MaybeUninit::<libc::termios>::uninit();
@@ -58,8 +60,39 @@ fn apply_mode(mode: &libc::termios) -> Result<(), RenderError> {
 
 fn begin_drawing() -> Result<(), RenderError> {
     let mut out = io::stdout();
-    write!(out, "{ENTER_ALTERNATE_SCREEN}{HIDE_CURSOR}").map_err(|_| RenderError::WriteFailed)?;
+    write!(out, "{ENTER_ALTERNATE_SCREEN}{HIDE_CURSOR}{WIPE_SCREEN}")
+        .map_err(|_| RenderError::WriteFailed)?;
     out.flush().map_err(|_| RenderError::WriteFailed)
+}
+
+fn window_size() -> Option<(usize, usize)> {
+    let mut size = MaybeUninit::<libc::winsize>::uninit();
+
+    /* SAFETY: TIOCGWINSZ either fills the winsize behind the pointer and
+    returns zero, or returns non-zero having written nothing. The pointer is to
+    local storage that outlives the call, and the value below is only read once
+    the call has reported success. */
+    let outcome = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, size.as_mut_ptr()) };
+    if outcome != 0 {
+        return None;
+    }
+
+    /* SAFETY: the ioctl reported success, so it initialised every field. */
+    let size = unsafe { size.assume_init() };
+
+    Some((size.ws_col as usize, size.ws_row as usize))
+}
+
+fn centred_origin() -> (usize, usize) {
+    let screen = DeviceProfile::TARGET.screen;
+    let Some((columns, rows)) = window_size() else {
+        return (0, 0);
+    };
+
+    (
+        columns.saturating_sub(screen.columns + 2) / 2,
+        rows.saturating_sub(screen.rows + 2) / 2,
+    )
 }
 
 /// The terminal a player has, given back as it was found.
@@ -105,8 +138,10 @@ impl TerminalScreen {
             return Err(failed);
         }
 
+        let origin = centred_origin();
+
         Ok(Self {
-            writer: Viewport::new(io::stdout()),
+            writer: Viewport::at(io::stdout(), origin.0, origin.1),
             reader: KeyReader::new(io::stdin()),
             entry_mode,
         })
@@ -119,8 +154,35 @@ impl TerminalScreen {
     /// where the keys and the screen are separate devices. Splitting is what
     /// lets the terminal be both without the loop having to assume they always
     /// arrive together.
-    pub fn split(&mut self) -> (&mut KeyReader<Stdin>, &mut Viewport<Stdout>) {
-        (&mut self.reader, &mut self.writer)
+    pub fn split(&mut self) -> (&mut KeyReader<Stdin>, CentredScreen<'_>) {
+        (
+            &mut self.reader,
+            CentredScreen {
+                viewport: &mut self.writer,
+            },
+        )
+    }
+}
+
+/// The screen half of a [`TerminalScreen`], kept in the middle of the window.
+///
+/// Where the box sits is measured again every frame, so dragging the window to
+/// another size puts the panel back in the middle of it rather than leaving it
+/// where the terminal used to end. The measurement is one `ioctl` against a
+/// frame budget of tens of milliseconds, and a frame whose window has not moved
+/// writes nothing extra at all.
+///
+/// A window too small to hold the box puts it at the top left instead, where as
+/// much of it as fits can be seen.
+pub struct CentredScreen<'a> {
+    viewport: &'a mut Viewport<Stdout>,
+}
+
+impl Renderer for CentredScreen<'_> {
+    fn render(&mut self, frame: &Frame) -> Result<(), RenderError> {
+        let (column, row) = centred_origin();
+        self.viewport.place(column, row);
+        self.viewport.render(frame)
     }
 }
 
