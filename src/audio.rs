@@ -12,11 +12,14 @@
 //!
 //! [`xrun_counter`] carries the news that the boundary failed, which none of
 //! the others can report: the samples a dropout costs are gone.
+//! [`headroom_meter`] carries how close it came to failing, which is the reading
+//! that is still useful once a count has stopped rising.
 
 use std::fmt;
 
 mod command;
 mod cpal_backend;
+mod headroom;
 mod level;
 mod passthrough;
 mod ring;
@@ -24,6 +27,7 @@ mod xrun;
 
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
+pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
@@ -187,6 +191,12 @@ pub trait DuplexStream {
     /// and starting one does not reset them.
     fn xruns(&self) -> Xruns;
 
+    /// How much of its deadline the callback used, over the recent window.
+    ///
+    /// A stream with a callback in each direction reports the tighter of the
+    /// two, since either one missing its deadline is the stream missing it.
+    fn headroom(&self) -> Headroom;
+
     /// Start calling back.
     ///
     /// # Errors
@@ -308,6 +318,12 @@ impl DuplexStream for NullStream {
     /// [`Xruns::NONE`].
     fn xruns(&self) -> Xruns {
         Xruns::NONE
+    }
+
+    /// A stream that moves no samples does no work, so this is always
+    /// [`Headroom::IDLE`].
+    fn headroom(&self) -> Headroom {
+        Headroom::IDLE
     }
 
     fn start(&mut self) -> Result<(), DeviceError> {
