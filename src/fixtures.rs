@@ -6,6 +6,8 @@
 //! request rather than taken on trust. [`Score`] is what turns an accuracy
 //! claim into a number a reviewer can check.
 
+pub mod synth;
+
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
