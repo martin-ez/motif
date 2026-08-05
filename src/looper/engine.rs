@@ -122,6 +122,7 @@ impl LoopEngine {
                 self.playhead = self.buffer.len();
             }
         }
+        self.buffer.resummarise(frames);
 
         for (played, level) in playing.iter_mut().zip(gained) {
             *played += level;
@@ -154,6 +155,9 @@ impl AudioPath for LoopEngine {
     ///
     /// Two lengths become the shorter of them, and a block longer than the
     /// scratch is worked in chunks: neither is a panic on the audio thread.
+    ///
+    /// A block also carries the loop's summary forward where an undo left it
+    /// behind, so the shape heals within a lap.
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
         let frames = captured.len().min(playing.len());
         let chunk = self.gained.len();

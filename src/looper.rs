@@ -37,6 +37,7 @@ pub struct LoopBuffer {
     depth: usize,
     open: Option<usize>,
     waveform: LoopWaveform,
+    stale: Option<usize>,
 }
 
 impl LoopBuffer {
@@ -85,6 +86,7 @@ impl LoopBuffer {
             depth: 0,
             open: Some(0),
             waveform: LoopWaveform::EMPTY,
+            stale: None,
         }
     }
 
@@ -184,8 +186,8 @@ impl LoopBuffer {
     /// afterwards, so blocks still arriving from a player who has not let go of
     /// the button are taken nowhere.
     ///
-    /// An undone layer keeps its samples and loses its length, so undo is a
-    /// couple of stores wherever it is called from.
+    /// A couple of stores wherever it is called from: the summary is left to
+    /// [`resummarise`](Self::resummarise).
     pub fn undo(&mut self) -> bool {
         if self.depth < 2 {
             return false;
@@ -194,8 +196,30 @@ impl LoopBuffer {
         self.depth -= 1;
         self.written[self.depth] = 0;
         self.open = None;
+        self.stale = Some(0);
 
         true
+    }
+
+    /// Repaint up to `frames` of the summary from the layers that remain, and
+    /// report whether any of the loop is still to cover.
+    ///
+    /// [`undo`](Self::undo) drops a layer without sweeping the loop again, so
+    /// the summary keeps showing it until a cursor walking the loop reaches
+    /// each bucket. Stepping that cursor a block at a time is what keeps the
+    /// caller bounded, which is what the audio thread needs; a loop with
+    /// nothing undone has nothing to cover and answers `false`.
+    pub fn resummarise(&mut self, frames: usize) -> bool {
+        let Some(from) = self.stale else {
+            return false;
+        };
+
+        let taken = frames.min(self.len() - from);
+        self.summarise(from, taken);
+        let covered = from + taken;
+        self.stale = (covered < self.len()).then_some(covered);
+
+        self.stale.is_some()
     }
 
     /// Empty the loop, back to what [`for_profile`](Self::for_profile) returned.
@@ -207,13 +231,16 @@ impl LoopBuffer {
         self.depth = 0;
         self.open = Some(0);
         self.waveform = LoopWaveform::EMPTY;
+        self.stale = None;
     }
 
     /// The shape of the loop, as the thread that draws it is given it.
     ///
     /// Kept as the loop is recorded rather than measured on demand: summarising
     /// the whole of a long loop is a pass the callback has no room for, and
-    /// folding each block in as it arrives is one it already makes.
+    /// folding each block in as it arrives is one it already makes. An undone
+    /// layer is swept out by [`resummarise`](Self::resummarise), so this trails
+    /// an undo by up to a lap of the loop.
     pub const fn waveform(&self) -> &LoopWaveform {
         &self.waveform
     }

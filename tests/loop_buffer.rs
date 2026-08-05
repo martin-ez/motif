@@ -779,3 +779,126 @@ fn a_take_longer_than_the_buckets_still_spans_the_loop() {
     assert!(buckets.len() <= LoopWaveform::BUCKETS);
     assert_eq!(buckets.last().map(|bucket| bucket.peak), Some(0.5));
 }
+
+#[test]
+fn a_resweep_leaves_a_waveform_of_the_layers_that_remain() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125]);
+    buffer.undo();
+
+    while buffer.resummarise(buffer.len()) {}
+
+    assert_eq!(buffer.waveform().buckets()[0].peak, 0.25);
+    assert_eq!(buffer.waveform().buckets()[1].peak, 0.5);
+}
+
+#[test]
+fn an_undone_layer_stays_in_the_waveform_until_the_resweep_reaches_it() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125, 0.125, 0.125]);
+    buffer.undo();
+
+    buffer.resummarise(2);
+
+    assert_eq!(buffer.waveform().buckets()[1].peak, 0.5);
+    assert_eq!(buffer.waveform().buckets()[2].peak, 0.875);
+}
+
+#[test]
+fn a_resweep_covers_no_more_than_the_frames_it_is_given() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125, 0.125, 0.125]);
+    buffer.undo();
+
+    assert!(buffer.resummarise(3));
+    assert!(!buffer.resummarise(3));
+    assert_eq!(buffer.waveform().buckets().len(), 4);
+}
+
+#[test]
+fn a_resweep_of_the_whole_loop_reports_nothing_left_to_cover() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125]);
+    buffer.undo();
+
+    assert!(!buffer.resummarise(2));
+}
+
+#[test]
+fn a_loop_with_nothing_undone_has_nothing_to_resweep() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125]);
+
+    assert!(!buffer.resummarise(2));
+    assert_eq!(buffer.waveform().buckets()[0].peak, 0.375);
+}
+
+#[test]
+fn a_refused_undo_leaves_nothing_to_resweep() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+
+    assert!(!buffer.undo());
+    assert!(!buffer.resummarise(2));
+}
+
+#[test]
+fn clearing_leaves_nothing_to_resweep() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125]);
+    buffer.undo();
+
+    buffer.clear();
+
+    assert!(!buffer.resummarise(2));
+    assert!(buffer.waveform().buckets().is_empty());
+}
+
+#[test]
+fn a_second_undo_sends_the_resweep_back_to_the_start_of_the_loop() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125, 0.125, 0.125]);
+    buffer.overdub();
+    buffer.record(&[0.5, 0.5, 0.5, 0.5]);
+    buffer.undo();
+    buffer.resummarise(4);
+
+    buffer.undo();
+    while buffer.resummarise(1) {}
+
+    assert_eq!(buffer.waveform().buckets()[0].peak, 0.25);
+    assert_eq!(buffer.waveform().buckets()[3].peak, 1.0);
+}
+
+#[test]
+fn resweeping_does_not_allocate() {
+    let profile = DeviceProfile::TARGET.audio;
+    let mut buffer = LoopBuffer::for_profile(profile);
+    let block = vec![0.5; profile.block_size as usize];
+    for _ in 0..LoopWaveform::BUCKETS {
+        buffer.record(&block);
+    }
+    buffer.overdub();
+    buffer.record(&block);
+    buffer.undo();
+
+    let before = allocations();
+    while buffer.resummarise(block.len()) {}
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
