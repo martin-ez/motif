@@ -16,7 +16,9 @@
 
 use crate::audio::{Command, CommandSender, Commanded, SampleClockReader, command_channel};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
-use crate::looper::{LoopEngine, PositionReader, Transport, position_meter};
+use crate::looper::{
+    LoopEngine, PositionReader, Transport, WaveformReader, position_meter, waveform_meter,
+};
 use crate::seq::{BeatGrid, TapTempo};
 use crate::ui::{ControlEvent, Legend, Page, Region, Turn};
 
@@ -26,7 +28,9 @@ const ARMED_COLUMN: usize = 14;
 const TEMPO_ROW: usize = 1;
 const READOUT_ROW: usize = 2;
 const BAR_ROW: usize = 3;
-const GAIN_ROW: usize = 4;
+const WAVEFORM_ROW: usize = 4;
+const WAVEFORM_ROWS: usize = 4;
+const GAIN_ROW: usize = WAVEFORM_ROW + WAVEFORM_ROWS;
 const MUTE_COLUMN: usize = 12;
 const ARMED: &str = "ARMED";
 const MUTED: &str = "MUTE";
@@ -95,11 +99,12 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 /// ```
 /// use motif::audio::{command_channel, sample_clock};
 /// use motif::device::Button;
-/// use motif::looper::{LooperPage, Transport, position_meter};
+/// use motif::looper::{LooperPage, Transport, position_meter, waveform_meter};
 /// use motif::ui::{ControlEvent, Page};
 ///
 /// let (_writer, reader) = position_meter();
-/// let mut page = LooperPage::new(reader, sample_clock(48_000).1, command_channel(8).0);
+/// let shape = waveform_meter().1;
+/// let mut page = LooperPage::new(reader, shape, sample_clock(48_000).1, command_channel(8).0);
 ///
 /// page.control(ControlEvent::Pressed { button: Button::Record, shifted: false });
 ///
@@ -112,6 +117,7 @@ pub struct LooperPage {
     ordered_muted: bool,
     commands: CommandSender,
     position: PositionReader,
+    waveform: WaveformReader,
     elapsed: SampleClockReader,
     taps: TapTempo,
     decibels: f32,
@@ -119,13 +125,15 @@ pub struct LooperPage {
 }
 
 impl LooperPage {
-    /// A page over an idle transport, reading its playhead from `position`,
-    /// timing its taps by `elapsed`, and ordering the engine over `commands`.
+    /// A page over an idle transport, reading its playhead from `position` and
+    /// the shape of the loop from `waveform`, timing its taps by `elapsed`, and
+    /// ordering the engine over `commands`.
     ///
     /// A tap is stamped with the frame the device had reached, so the grid it
     /// makes lines up with the audio captured around it.
     pub fn new(
         position: PositionReader,
+        waveform: WaveformReader,
         elapsed: SampleClockReader,
         commands: CommandSender,
     ) -> Self {
@@ -137,6 +145,7 @@ impl LooperPage {
             taps: TapTempo::new(elapsed.sample_rate()),
             commands,
             position,
+            waveform,
             elapsed,
             decibels: UNITY_DECIBELS,
             muted: false,
@@ -145,9 +154,10 @@ impl LooperPage {
 
     /// A page and the engine it drives, wired to each other.
     ///
-    /// The page holds the reading end of the playhead and the sending end of
-    /// the command queue; the engine holds the other end of each and the loop
-    /// itself, sized from `profile`. Taps are timed by `elapsed`.
+    /// The page holds the reading end of the playhead and of the loop's shape,
+    /// and the sending end of the command queue; the engine holds the other end
+    /// of each and the loop itself, sized from `profile`. Taps are timed by
+    /// `elapsed`.
     ///
     /// Both ends are allocated here and never again, so this belongs in setup,
     /// before the stream starts. The engine is what a stream plays, so it goes
@@ -158,10 +168,11 @@ impl LooperPage {
     ) -> (Self, Commanded<LoopEngine>) {
         let (commands, orders) = command_channel(QUEUED_COMMANDS);
         let (publishing, playhead) = position_meter();
+        let (drawing, shape) = waveform_meter();
 
         (
-            Self::new(playhead, elapsed, commands),
-            Commanded::new(orders, LoopEngine::new(profile, publishing)),
+            Self::new(playhead, shape, elapsed, commands),
+            Commanded::new(orders, LoopEngine::new(profile, publishing, drawing)),
         )
     }
 
@@ -343,6 +354,11 @@ impl Page for LooperPage {
             BAR_ROW,
             &bar(position.playhead(), position.recorded(), region.columns()),
         );
+
+        let shape = self.waveform.read().drawn(region.columns(), WAVEFORM_ROWS);
+        for (offset, drawn) in shape.iter().enumerate() {
+            region.write(0, WAVEFORM_ROW + offset, drawn);
+        }
 
         region.write(0, GAIN_ROW, &format!("IN {:>5.1} dB", self.decibels));
         if self.muted {

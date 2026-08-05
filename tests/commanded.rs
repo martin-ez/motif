@@ -14,7 +14,7 @@ use motif::audio::{
     AudioPath, Command, CommandSender, Commanded, InputMonitor, StreamConfig, command_channel,
 };
 use motif::device::AudioProfile;
-use motif::looper::{LoopEngine, PositionReader, Transport, position_meter};
+use motif::looper::{LoopEngine, PositionReader, Transport, position_meter, waveform_meter};
 
 const GAIN: f32 = 0.5;
 const UNITY: f32 = 1.0;
@@ -93,7 +93,7 @@ fn both(answers: First, renders: First) -> (Commanded<Both>, CommandSender, Posi
         receiver,
         Both {
             monitor: InputMonitor::new(),
-            engine: LoopEngine::new(eight_frame_profile(), writer),
+            engine: LoopEngine::new(eight_frame_profile(), writer, waveform_meter().0),
             answers,
             renders,
         },

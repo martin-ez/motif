@@ -20,11 +20,13 @@ mod engine;
 mod page;
 mod position;
 mod transport;
+mod waveform;
 
 pub use engine::LoopEngine;
 pub use page::LooperPage;
 pub use position::{LoopPosition, PositionReader, PositionWriter, position_meter};
 pub use transport::Transport;
+pub use waveform::{Extremes, LoopWaveform, WaveformReader, WaveformWriter, waveform_meter};
 
 const LAYER_COUNT: usize = 8;
 
@@ -34,6 +36,7 @@ pub struct LoopBuffer {
     written: [usize; LAYER_COUNT],
     depth: usize,
     open: Option<usize>,
+    waveform: LoopWaveform,
 }
 
 impl LoopBuffer {
@@ -81,6 +84,7 @@ impl LoopBuffer {
             written: [0; LAYER_COUNT],
             depth: 0,
             open: Some(0),
+            waveform: LoopWaveform::EMPTY,
         }
     }
 
@@ -99,12 +103,43 @@ impl LoopBuffer {
         };
 
         let taken = captured.len().min(self.vacant());
-        let at = open * self.capacity() + self.written[open];
+        let from = self.written[open];
+        let at = open * self.capacity() + from;
         self.layers[at..at + taken].copy_from_slice(&captured[..taken]);
         self.written[open] += taken;
         self.depth = self.depth.max(open + 1);
+        self.summarise(from, taken);
 
         taken
+    }
+
+    fn summarise(&mut self, from: usize, taken: usize) {
+        let Self {
+            layers,
+            written,
+            depth,
+            waveform,
+            ..
+        } = self;
+        let capacity = layers.len() / LAYER_COUNT;
+        let (written, depth) = (*written, *depth);
+
+        waveform.take(
+            from,
+            (0..taken).map(|offset| {
+                layers
+                    .chunks_exact(capacity)
+                    .zip(written)
+                    .take(depth)
+                    .map(|(layer, recorded)| {
+                        layer[..recorded]
+                            .get(from + offset)
+                            .copied()
+                            .unwrap_or_default()
+                    })
+                    .sum::<f32>()
+            }),
+        );
     }
 
     /// Open a layer over the loop, and report whether there was one to open.
@@ -171,6 +206,16 @@ impl LoopBuffer {
         self.written = [0; LAYER_COUNT];
         self.depth = 0;
         self.open = Some(0);
+        self.waveform = LoopWaveform::EMPTY;
+    }
+
+    /// The shape of the loop, as the thread that draws it is given it.
+    ///
+    /// Kept as the loop is recorded rather than measured on demand: summarising
+    /// the whole of a long loop is a pass the callback has no room for, and
+    /// folding each block in as it arrives is one it already makes.
+    pub const fn waveform(&self) -> &LoopWaveform {
+        &self.waveform
     }
 
     /// Add the loop, from frame `from`, into `block`, and report how many
