@@ -7,7 +7,7 @@
 
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{LoopPosition, LooperPage, Transport, position_meter};
-use motif::ui::{App, ControlEvent, Flow, Frame, Turn};
+use motif::ui::{ControlEvent, Frame, Page, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const SECOND: u32 = DeviceProfile::TARGET.audio.sample_rate;
@@ -137,20 +137,6 @@ fn an_encoder_leaves_the_transport_alone() {
     });
 
     assert_eq!(page.transport(), Transport::Recording);
-}
-
-#[test]
-fn a_control_never_ends_the_run() {
-    let mut page = page();
-
-    for button in Button::ALL {
-        assert_eq!(page.control(pressed(button)), Flow::Continue);
-    }
-}
-
-#[test]
-fn a_draw_never_ends_the_run() {
-    assert_eq!(page().draw(&mut Frame::blank()), Flow::Continue);
 }
 
 #[test]

@@ -1,37 +1,29 @@
 //! Entry point for the `motif` binary.
 //!
-//! Composition only: it takes the terminal over, runs the event loop against
-//! it, and reports why the run ended. The shell it runs owns the looper page,
-//! keeps shift + stop to quit — the terminal is left in a mode where the shell
-//! is the only way out of it — and hands every other control and the whole
-//! frame to the page.
+//! Composition only: it builds the pages, hands them to the shell, takes the
+//! terminal over, runs the event loop against it, and reports why the run
+//! ended. The shell owns the pages and quitting — the terminal is left in a
+//! mode where the shell is the only way out of it.
 //!
-//! The shell's own chrome is right-aligned, so that it lands beside what a page
-//! draws from the left rather than on top of it. That is a convention holding
-//! one shell and one page together, and it is what #216 replaces with a page
-//! system that hands a page a region of its own.
+//! What is left here is chrome the shell has no notion of, drawn over the frame
+//! after a page has had it. It is right-aligned, so that it lands beside what a
+//! page draws from the left rather than on top of it. That is a convention
+//! holding one shell and one page together, and it is what #216 replaces with a
+//! page system that hands a page a region of its own.
 
 use std::process::ExitCode;
 
-use motif::device::{Button, DeviceProfile};
-use motif::looper::{LooperPage, PositionReader, position_meter};
+use motif::device::DeviceProfile;
+use motif::looper::{LooperPage, position_meter};
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, TerminalScreen,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, Shell, TerminalScreen,
 };
 
 const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
 const QUIT: &str = "shift + stop to quit";
 
-struct Shell {
-    looper: LooperPage,
-}
-
-impl Shell {
-    fn new(position: PositionReader) -> Self {
-        Self {
-            looper: LooperPage::new(position),
-        }
-    }
+struct Chrome {
+    shell: Shell,
 }
 
 fn last_row_above_the_legend() -> usize {
@@ -50,23 +42,17 @@ fn write_right(frame: &mut Frame, row: usize, text: &str) {
     }
 }
 
-impl App for Shell {
+impl App for Chrome {
     fn control(&mut self, event: ControlEvent) -> Flow {
-        match event {
-            ControlEvent::Pressed {
-                button: Button::Stop,
-                shifted: true,
-            } => Flow::Exit,
-            _ => self.looper.control(event),
-        }
+        self.shell.control(event)
     }
 
     fn legend(&self) -> Legend {
-        self.looper.legend().answering(Button::Shift)
+        self.shell.legend()
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {
-        let flow = self.looper.draw(frame);
+        let flow = self.shell.draw(frame);
 
         write_right(frame, 0, NAME);
         write_right(frame, last_row_above_the_legend(), QUIT);
@@ -78,9 +64,12 @@ impl App for Shell {
 fn play() -> Result<(), RenderError> {
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();
-    let mut shell = Shell::new(position_meter().1);
+    let looper = LooperPage::new(position_meter().1);
+    let mut chrome = Chrome {
+        shell: Shell::new([Box::new(looper)]),
+    };
 
-    EventLoop::new().run(&mut shell, controls, &mut screen)?;
+    EventLoop::new().run(&mut chrome, controls, &mut screen)?;
 
     Ok(())
 }

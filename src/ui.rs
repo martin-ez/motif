@@ -12,6 +12,10 @@
 //! [`DeviceProfile::TARGET`], so it is a fixed-size array rather than an
 //! allocation that grows with whatever the host reports.
 //!
+//! A [`Page`] is one screen and a [`Shell`] is the application around them: it
+//! holds a page per [`Mode`] and forwards to whichever is showing, so an `App`
+//! is implemented once rather than once per screen.
+//!
 //! [`ListPage`] is here too, being the one screen that belongs to no feature:
 //! anything with rows to move a selection through embeds it. So is [`Mode`],
 //! which names the screens the application has and so belongs to no one of them.
@@ -39,6 +43,8 @@ mod input;
 mod legend;
 mod list;
 mod mode;
+mod page;
+mod shell;
 mod terminal;
 
 pub use clock::{Clock, ScriptedClock, SystemClock};
@@ -47,6 +53,8 @@ pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
 pub use legend::Legend;
 pub use list::ListPage;
 pub use mode::Mode;
+pub use page::Page;
+pub use shell::Shell;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 
 /// One character cell of the screen.
