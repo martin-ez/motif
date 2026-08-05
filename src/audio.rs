@@ -324,7 +324,8 @@ pub trait DuplexStream {
     /// Whether the callback is running.
     fn state(&self) -> StreamState;
 
-    /// How loud the most recent block of input was.
+    /// How loud the most recent block of input was, over the channels the
+    /// stream captures and no others.
     ///
     /// Measured in the callback and published without a lock, so this reads
     /// whatever the last block to arrive measured, and reads it again until the
