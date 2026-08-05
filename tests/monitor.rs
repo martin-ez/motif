@@ -59,6 +59,14 @@ fn deaf() -> StreamConfig {
 
 const FILL: char = '#';
 
+/// How wide the monitor draws the level meter, and where its left edge lands.
+///
+/// The monitor keeps it against the right margin so that the state it writes
+/// from column zero has the rest of the row, which is what these say.
+const METER_COLUMNS: usize = 24;
+const METER_COLUMN: usize = DeviceProfile::TARGET.screen.columns - METER_COLUMNS;
+const METER_SCALE: usize = METER_COLUMNS - 2;
+
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
         button,
@@ -180,6 +188,30 @@ impl Asked {
     }
 }
 
+fn hosts_named(name: &str) -> Vec<AudioHost> {
+    vec![AudioHost {
+        name: name.to_owned(),
+        inputs: vec![AudioDevice {
+            id: DeviceId::named("in"),
+            channels: vec![2],
+        }],
+        outputs: vec![AudioDevice {
+            id: DeviceId::named("out"),
+            channels: vec![2],
+        }],
+    }]
+}
+
+fn selection_on(name: &str) -> DeviceSelection {
+    DeviceSelection {
+        host: name.to_owned(),
+        input: DeviceId::named("in"),
+        input_channels: ChannelSelection::all(2),
+        output: DeviceId::named("out"),
+        output_channels: ChannelSelection::all(2),
+    }
+}
+
 struct RecordingBackend(Asked);
 
 struct RecordingStream(Asked);
@@ -188,27 +220,11 @@ impl AudioBackend for RecordingBackend {
     type Stream = RecordingStream;
 
     fn hosts(&self, _sample_rate: u32) -> Vec<AudioHost> {
-        vec![AudioHost {
-            name: "recording".to_owned(),
-            inputs: vec![AudioDevice {
-                id: DeviceId::named("in"),
-                channels: vec![2],
-            }],
-            outputs: vec![AudioDevice {
-                id: DeviceId::named("out"),
-                channels: vec![2],
-            }],
-        }]
+        hosts_named("recording")
     }
 
     fn defaults(&self, _sample_rate: u32) -> Option<DeviceSelection> {
-        Some(DeviceSelection {
-            host: "recording".to_owned(),
-            input: DeviceId::named("in"),
-            input_channels: ChannelSelection::all(2),
-            output: DeviceId::named("out"),
-            output_channels: ChannelSelection::all(2),
-        })
+        Some(selection_on("recording"))
     }
 
     fn open<P: AudioPath>(
@@ -261,8 +277,81 @@ impl DuplexStream for RecordingStream {
     }
 }
 
+/// A backend whose stream reports a level the test chose.
+///
+/// The stream with no hardware behind it meters nothing, so it can only ever
+/// say the input is silent. This one stands in for a device with signal on it,
+/// which is what says a level reaches the screen rather than merely a bar.
+struct LoudBackend(Levels);
+
+struct LoudStream(Levels);
+
+impl AudioBackend for LoudBackend {
+    type Stream = LoudStream;
+
+    fn hosts(&self, _sample_rate: u32) -> Vec<AudioHost> {
+        hosts_named("loud")
+    }
+
+    fn defaults(&self, _sample_rate: u32) -> Option<DeviceSelection> {
+        Some(selection_on("loud"))
+    }
+
+    fn open<P: AudioPath>(
+        &self,
+        _selection: &DeviceSelection,
+        _request: StreamRequest,
+        _path: P,
+    ) -> Result<Self::Stream, DeviceError> {
+        Ok(LoudStream(self.0))
+    }
+}
+
+impl DuplexStream for LoudStream {
+    fn config(&self) -> StreamConfig {
+        config()
+    }
+
+    fn state(&self) -> StreamState {
+        StreamState::Running
+    }
+
+    fn levels(&self) -> Levels {
+        self.0
+    }
+
+    fn xruns(&self) -> Xruns {
+        Xruns::NONE
+    }
+
+    fn headroom(&self) -> Headroom {
+        Headroom::IDLE
+    }
+
+    fn fault(&self) -> Option<DeviceError> {
+        None
+    }
+
+    fn start(&mut self) -> Result<(), DeviceError> {
+        Ok(())
+    }
+
+    fn stop(&mut self) -> Result<(), DeviceError> {
+        Ok(())
+    }
+}
+
 /// A monitor over the null backend, playing what it captures.
 type Monitoring<A> = Monitor<A, NullBackend, fn() -> Passthrough>;
+
+fn hearing_a(levels: Levels) -> Monitor<Counted, LoudBackend, fn() -> Passthrough> {
+    Monitor::opened(
+        Counted::default(),
+        LoudBackend(levels),
+        request(),
+        Passthrough::new,
+    )
+}
 
 /// A monitor over `backend` whose streams run a path the test can read back.
 fn hearing(
@@ -304,29 +393,30 @@ fn unplug(monitor: &Monitoring<Counted>) {
         .fail(DeviceError::DeviceNotAvailable);
 }
 
-fn drawn(monitor: &mut Monitoring<Counted>) -> Frame {
+fn drawn<A: App, B: AudioBackend, F>(monitor: &mut Monitor<A, B, F>) -> Frame {
     let mut frame = Frame::blank();
     monitor.draw(frame.region());
 
     frame
 }
 
-fn covering(monitor: &mut Monitoring<Filling>) -> Frame {
-    let mut frame = Frame::blank();
-    monitor.draw(frame.region());
-
-    frame
-}
-
-fn status(frame: &Frame) -> String {
+fn bottom_row(frame: &Frame, columns: impl Iterator<Item = usize>) -> String {
     let row = DeviceProfile::TARGET.screen.rows - 1;
 
-    (0..DeviceProfile::TARGET.screen.columns)
+    columns
         .filter_map(|column| frame.get(column, row))
         .map(Cell::glyph)
         .collect::<String>()
         .trim_end()
         .to_owned()
+}
+
+fn status(frame: &Frame) -> String {
+    bottom_row(frame, 0..METER_COLUMN)
+}
+
+fn meter(frame: &Frame) -> String {
+    bottom_row(frame, METER_COLUMN..DeviceProfile::TARGET.screen.columns)
 }
 
 fn run(monitor: &mut Monitoring<Counted>) -> RunReport {
@@ -448,6 +538,39 @@ fn a_lost_device_says_on_screen_why_it_was_lost() {
 }
 
 #[test]
+fn a_silent_input_draws_an_empty_meter() {
+    let mut monitor = playing();
+
+    assert_eq!(
+        meter(&drawn(&mut monitor)),
+        format!("[{}]", "-".repeat(METER_SCALE))
+    );
+}
+
+#[test]
+fn the_input_level_reaches_the_screen() {
+    let mut monitor = hearing_a(Levels {
+        peak: 1.0,
+        rms: 1.0,
+    });
+
+    assert_eq!(
+        meter(&drawn(&mut monitor)),
+        format!("[{}|]", "#".repeat(METER_SCALE - 1))
+    );
+}
+
+#[test]
+fn a_meter_leaves_the_state_beside_it_alone() {
+    let mut monitor = hearing_a(Levels {
+        peak: 1.0,
+        rms: 1.0,
+    });
+
+    assert_eq!(status(&drawn(&mut monitor)), "audio playing");
+}
+
+#[test]
 fn the_wrapped_application_still_draws() {
     let mut monitor = playing();
 
@@ -458,13 +581,13 @@ fn the_wrapped_application_still_draws() {
 fn an_application_filling_its_region_leaves_the_status_row_alone() {
     let mut monitor = filling();
 
-    assert_eq!(status(&covering(&mut monitor)), "audio playing");
+    assert_eq!(status(&drawn(&mut monitor)), "audio playing");
 }
 
 #[test]
 fn an_application_filling_its_region_keeps_every_row_it_was_given() {
     let mut monitor = filling();
-    let frame = covering(&mut monitor);
+    let frame = drawn(&mut monitor);
     let screen = DeviceProfile::TARGET.screen;
 
     let filled = (0..screen.rows)

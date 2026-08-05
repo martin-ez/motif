@@ -5,19 +5,23 @@
 //! keeps it for the run and stops it on the way out, while what its streams play
 //! is the caller's to say. It wraps an [`App`] rather than being one, so the
 //! pages under it neither know nor need to know that a device is open — the
-//! bottom row is taken for the state before the pages are handed the rest, and
-//! every cell they are given stays theirs.
+//! bottom row is taken for the state and the input level before the pages are
+//! handed the rest, and every cell they are given stays theirs.
 //!
 //! A device that is not there is drawn, never fatal. An instrument that quit
 //! because an interface was unplugged would be wrong, and one that drew a
 //! plausible idle screen over a dead audio path would be worse, so the state
 //! goes on the frame and the run carries on.
 
-use crate::audio::{AudioBackend, AudioPath, AudioState, DeviceError, DeviceLink, StreamRequest};
-use crate::ui::{App, ControlEvent, Flow, Legend, Region};
+use crate::audio::{
+    AudioBackend, AudioPath, AudioState, DeviceError, DeviceLink, DuplexStream, Levels,
+    StreamRequest,
+};
+use crate::ui::{App, ControlEvent, Flow, Legend, LevelMeter, Region};
 
 const LABEL: &str = "audio ";
 const STATUS_ROWS: usize = 1;
+const METER_COLUMNS: usize = 24;
 
 /// An application with an audio device held open behind it.
 ///
@@ -71,6 +75,7 @@ const STATUS_ROWS: usize = 1;
 pub struct Monitor<A: App, B: AudioBackend, F> {
     app: A,
     link: Option<DeviceLink<B, F>>,
+    meter: LevelMeter,
 }
 
 impl<A: App, B: AudioBackend, F, P> Monitor<A, B, F>
@@ -88,7 +93,11 @@ where
     /// path: there is no stream for one to play through.
     pub fn opened(app: A, backend: B, request: StreamRequest, path: F) -> Self {
         let Some(selection) = backend.defaults(request.sample_rate) else {
-            return Self { app, link: None };
+            return Self {
+                app,
+                link: None,
+                meter: LevelMeter::new(),
+            };
         };
 
         let mut link = DeviceLink::new(backend, request, selection, path);
@@ -99,6 +108,7 @@ where
         Self {
             app,
             link: Some(link),
+            meter: LevelMeter::new(),
         }
     }
 }
@@ -136,6 +146,13 @@ impl<A: App, B: AudioBackend, F> Monitor<A, B, F> {
         }
     }
 
+    fn heard(&self) -> Levels {
+        self.link
+            .as_ref()
+            .and_then(DeviceLink::stream)
+            .map_or(Levels::SILENT, DuplexStream::levels)
+    }
+
     fn polled(&mut self) -> AudioState {
         if let Some(link) = self.link.as_mut() {
             link.poll();
@@ -154,18 +171,21 @@ impl<A: App, B: AudioBackend, F> App for Monitor<A, B, F> {
         self.app.legend()
     }
 
-    /// The bottom row is taken for the state before the wrapped application is
-    /// handed the rest, so a page filling what it was given cannot land on it.
-    /// The application's [`Flow`] is the one that comes back, so nothing about
-    /// the audio path can end a run. The device is polled once here, which is
-    /// where a fault the callback latched is noticed.
+    /// The bottom row is taken for the state and the input level before the
+    /// wrapped application is handed the rest, so a page filling what it was
+    /// given cannot land on it. The application's [`Flow`] is the one that comes
+    /// back, so nothing about the audio path can end a run. The device is polled
+    /// once here, which is where a fault the callback latched is noticed.
     fn draw(&mut self, region: Region<'_>) -> Flow {
         let (above, mut status) = region.split_bottom(STATUS_ROWS);
 
         let flow = self.app.draw(above);
         let state = self.polled();
+        let heard = self.heard();
+        let margin = status.columns().saturating_sub(METER_COLUMNS);
 
         status.write(0, 0, &format!("{LABEL}{state}"));
+        status.write(margin, 0, &self.meter.bar(heard, METER_COLUMNS));
 
         flow
     }
