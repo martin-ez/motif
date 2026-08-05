@@ -151,11 +151,11 @@ impl LooperPage {
     /// to whatever opens one.
     pub fn driving(profile: AudioProfile, elapsed: SampleClockReader) -> (Self, LoopEngine) {
         let (commands, orders) = command_channel(QUEUED_COMMANDS);
-        let (position, playhead) = position_meter();
+        let (publishing, playhead) = position_meter();
 
         (
             Self::new(playhead, elapsed, commands),
-            LoopEngine::new(profile, orders, position),
+            LoopEngine::new(profile, orders, publishing),
         )
     }
 
