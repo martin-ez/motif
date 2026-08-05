@@ -23,6 +23,14 @@ const HALF_SECOND: usize = SECOND as usize / 2;
 /// about the page rather than about the queue.
 const ROOM: usize = 8;
 
+/// More detents than the gain has decibels to climb, so the turns past the top
+/// of the range are turns the page has already refused.
+const TURNS_PAST_THE_CEILING: usize = 24;
+
+/// Room for a command per detent, so a gain that goes unordered is the page
+/// declining to send it rather than the queue refusing to take it.
+const ROOM_FOR_THE_WHOLE_RANGE: usize = TURNS_PAST_THE_CEILING;
+
 fn sending() -> CommandSender {
     command_channel(ROOM).0
 }
@@ -49,13 +57,17 @@ fn page() -> LooperPage {
     LooperPage::new(position_meter().1, sample_clock(SECOND).1, sending())
 }
 
-fn page_ordering() -> (LooperPage, CommandReceiver) {
-    let (commands, orders) = command_channel(ROOM);
+fn page_ordering_with_room_for(commands: usize) -> (LooperPage, CommandReceiver) {
+    let (sending, orders) = command_channel(commands);
 
     (
-        LooperPage::new(position_meter().1, sample_clock(SECOND).1, commands),
+        LooperPage::new(position_meter().1, sample_clock(SECOND).1, sending),
         orders,
     )
+}
+
+fn page_ordering() -> (LooperPage, CommandReceiver) {
+    page_ordering_with_room_for(ROOM)
 }
 
 fn page_showing(position: LoopPosition) -> LooperPage {
@@ -273,8 +285,7 @@ fn a_transport_the_engine_already_has_is_not_ordered_again() {
 
 #[test]
 fn a_press_the_queue_had_no_room_for_is_ordered_on_the_next_frame() {
-    let (commands, mut orders) = command_channel(1);
-    let mut page = LooperPage::new(position_meter().1, sample_clock(SECOND).1, commands);
+    let (mut page, mut orders) = page_ordering_with_room_for(1);
 
     page.control(pressed(Button::Record));
     page.control(pressed(Button::Play));
@@ -604,6 +615,113 @@ fn a_muted_input_says_so_on_screen() {
 #[test]
 fn an_unmuted_input_says_nothing_about_muting() {
     assert!(!screen_of(&mut page()).contains("MUTE"));
+}
+
+#[test]
+fn turning_the_encoder_orders_the_gain_it_reached() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(turned(Turn::Clockwise));
+
+    assert_eq!(ordered(&mut orders), [Command::SetGain(page.gain())]);
+}
+
+#[test]
+fn every_turn_that_moves_the_gain_is_ordered() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(turned(Turn::Clockwise));
+    page.control(turned(Turn::Clockwise));
+    page.control(turned(Turn::Anticlockwise));
+
+    assert_eq!(ordered(&mut orders).len(), 3);
+}
+
+#[test]
+fn a_gain_the_engine_already_has_is_not_ordered_again() {
+    let (mut page, mut orders) = page_ordering();
+    page.control(turned(Turn::Clockwise));
+    ordered(&mut orders);
+
+    drawn(&mut page);
+    drawn(&mut page);
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_turn_against_the_end_of_the_range_orders_nothing() {
+    let (mut page, mut orders) = page_ordering_with_room_for(ROOM_FOR_THE_WHOLE_RANGE);
+    for _ in 0..TURNS_PAST_THE_CEILING {
+        page.control(turned(Turn::Clockwise));
+    }
+    ordered(&mut orders);
+
+    page.control(turned(Turn::Clockwise));
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_turn_the_queue_had_no_room_for_is_ordered_on_the_next_frame() {
+    let (mut page, mut orders) = page_ordering_with_room_for(1);
+
+    page.control(pressed(Button::Record));
+    page.control(turned(Turn::Clockwise));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+    drawn(&mut page);
+    assert_eq!(ordered(&mut orders), [Command::SetGain(page.gain())]);
+}
+
+#[test]
+fn shift_and_record_orders_the_mute() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(shifted(Button::Record));
+
+    assert_eq!(ordered(&mut orders), [Command::SetMuted(true)]);
+}
+
+#[test]
+fn unmuting_is_ordered_too() {
+    let (mut page, mut orders) = page_ordering();
+    page.control(shifted(Button::Record));
+    ordered(&mut orders);
+
+    page.control(shifted(Button::Record));
+
+    assert_eq!(ordered(&mut orders), [Command::SetMuted(false)]);
+}
+
+#[test]
+fn a_mute_the_engine_already_has_is_not_ordered_again() {
+    let (mut page, mut orders) = page_ordering();
+    page.control(shifted(Button::Record));
+    ordered(&mut orders);
+
+    drawn(&mut page);
+    drawn(&mut page);
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_mute_the_queue_had_no_room_for_is_ordered_on_the_next_frame() {
+    let (mut page, mut orders) = page_ordering_with_room_for(1);
+
+    page.control(pressed(Button::Record));
+    page.control(shifted(Button::Record));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+    drawn(&mut page);
+    assert_eq!(ordered(&mut orders), [Command::SetMuted(true)]);
 }
 
 #[test]
