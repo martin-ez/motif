@@ -10,9 +10,8 @@
 //! The playhead, the length and the depth travel packed into a single
 //! [`AtomicU64`]. Read as separate atomics they can straddle two blocks and come
 //! back as a set no block ever had — a playhead beyond the end of its own loop,
-//! or a depth of layers over a loop that was just cleared. Two frame counts and
-//! a depth fill the word exactly, so nothing is stolen from any of them to tag
-//! it, and the whole crossing stays one store against one load.
+//! or layers over a loop that was just cleared. Two frame counts and a depth
+//! fill the word exactly, so nothing is stolen from any of them to tag it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
