@@ -86,7 +86,7 @@ fn row_of(frame: &Frame, row: usize) -> String {
 
 fn drawn(page: &mut LooperPage) -> Vec<String> {
     let mut frame = Frame::blank();
-    page.draw(&mut frame);
+    page.draw(frame.region());
 
     (0..SCREEN.rows).map(|row| row_of(&frame, row)).collect()
 }

@@ -4,6 +4,10 @@
 //! The page is driven through [`ScriptedControls`], so every test states what
 //! the player did to the panel. Nothing here names a key or a terminal, and the
 //! result is read back off the frame the page drew.
+//!
+//! The page is handed a region shorter than the screen, because that is what a
+//! page under chrome gets: a test that gave it the whole frame could not tell a
+//! viewport from a screen height.
 
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::ui::{
@@ -13,6 +17,7 @@ use motif::ui::{
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const MARKER: char = '>';
 const WIDE_LABEL: &str = "オーディオ";
+const VIEWPORT: usize = 6;
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -63,13 +68,18 @@ fn row_of(frame: &Frame, row: usize) -> String {
         .collect()
 }
 
-fn drawn(page: &mut ListPage) -> Vec<String> {
+fn drawn_into(page: &mut ListPage, rows: usize) -> Vec<String> {
     let mut frame = Frame::blank();
-    page.draw(&mut frame);
+    let (region, _below) = frame.region().split_top(rows);
+    page.draw(region);
 
     (0..SCREEN.rows)
         .map(|row| row_of(&frame, row).trim_end().to_string())
         .collect()
+}
+
+fn drawn(page: &mut ListPage) -> Vec<String> {
+    drawn_into(page, VIEWPORT)
 }
 
 fn listed(page: &mut ListPage) -> Vec<String> {
@@ -238,14 +248,43 @@ fn a_row_wider_than_the_screen_is_clipped() {
 
 #[test]
 fn a_list_longer_than_the_viewport_draws_a_viewport() {
-    let mut page = page_of(ListPage::VISIBLE_ROWS * 2);
+    let mut page = page_of(VIEWPORT * 2);
 
-    assert_eq!(listed(&mut page).len(), ListPage::VISIBLE_ROWS);
+    assert_eq!(listed(&mut page).len(), VIEWPORT);
 }
 
 #[test]
-fn the_viewport_is_the_whole_screen() {
-    assert_eq!(ListPage::VISIBLE_ROWS, SCREEN.rows);
+fn the_viewport_is_the_region_the_page_was_given() {
+    let mut page = page_of(SCREEN.rows * 2);
+
+    assert_eq!(listed(&mut page).len(), VIEWPORT);
+    assert_eq!(
+        drawn_into(&mut page, 3)
+            .iter()
+            .filter(|row| !row.is_empty())
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn a_list_longer_than_its_region_draws_nothing_below_it() {
+    let mut page = page_of(SCREEN.rows * 2);
+
+    let rows = drawn_into(&mut page, VIEWPORT);
+
+    assert!(rows[VIEWPORT..].iter().all(String::is_empty));
+}
+
+#[test]
+fn a_page_given_one_row_draws_the_selected_row_in_it() {
+    let mut page = page_of(SCREEN.rows);
+    driven_by(&mut page, repeated(pressed(Button::Down), SCREEN.rows));
+
+    let rows = drawn_into(&mut page, 1);
+
+    assert_eq!(rows[0], format!("> row {}", SCREEN.rows - 1));
+    assert!(rows[1..].iter().all(String::is_empty));
 }
 
 #[test]
@@ -268,7 +307,7 @@ fn a_list_shorter_than_the_viewport_never_scrolls() {
 
 #[test]
 fn moving_below_the_viewport_scrolls_the_next_row_into_view() {
-    let last = ListPage::VISIBLE_ROWS;
+    let last = VIEWPORT;
     let mut page = page_of(last + 4);
     driven_by(&mut page, repeated(pressed(Button::Down), last));
 
@@ -280,8 +319,8 @@ fn moving_below_the_viewport_scrolls_the_next_row_into_view() {
 
 #[test]
 fn moving_back_above_it_scrolls_the_first_row_back() {
-    let reach = ListPage::VISIBLE_ROWS + 3;
-    let mut page = page_of(ListPage::VISIBLE_ROWS + 4);
+    let reach = VIEWPORT + 3;
+    let mut page = page_of(VIEWPORT + 4);
     driven_by(&mut page, repeated(pressed(Button::Down), reach));
     driven_by(&mut page, repeated(pressed(Button::Up), reach));
 
@@ -293,7 +332,7 @@ fn moving_back_above_it_scrolls_the_first_row_back() {
 
 #[test]
 fn the_selection_is_always_on_screen() {
-    let count = ListPage::VISIBLE_ROWS + 7;
+    let count = VIEWPORT + 7;
     let mut page = page_of(count);
 
     for _ in 0..count {

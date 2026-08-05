@@ -1,15 +1,15 @@
 //! The frame the UI draws into, and the traits a panel is reached through.
 //!
 //! The application fills a [`Frame`], hands it to a [`Renderer`], and takes
-//! [`ControlEvent`]s back from [`Controls`]. Nothing that crosses those traits
-//! may name a terminal, an escape sequence, a key, or a crate that implies any
-//! of them, and nor may anything above them (invariant 4). The backends are
-//! re-exported here so a program can construct one, which is the only thing it
-//! does that reveals which it picked.
+//! [`ControlEvent`]s back from [`Controls`]. Nothing crossing those traits may
+//! name a terminal, an escape sequence, a key, or a crate implying one, and nor
+//! may anything above them (invariant 4). The backends are re-exported here so
+//! a program can construct one, the only thing it does that reveals its pick.
 //!
 //! A frame is the size of the device's screen, taken from
-//! [`DeviceProfile::TARGET`], so it is a fixed-size array. [`ListPage`] and
-//! [`Mode`] are here too, belonging to no one screen.
+//! [`DeviceProfile::TARGET`]. What draws into it is handed a [`Region`] of it
+//! rather than the whole thing, so chrome and a page cannot claim the same
+//! cell. [`ListPage`] and [`Mode`] are here too, belonging to no one screen.
 //!
 //! A [`Page`] is one screen and a [`Shell`] holds one per [`Mode`], forwarding
 //! to whichever is showing, so an `App` is implemented once and not per screen.
@@ -42,6 +42,7 @@ mod mode;
 #[cfg(feature = "frame-pace")]
 mod pace;
 mod page;
+mod region;
 mod shell;
 mod terminal;
 
@@ -54,6 +55,7 @@ pub use mode::Mode;
 #[cfg(feature = "frame-pace")]
 pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
 pub use page::Page;
+pub use region::Region;
 pub use shell::Shell;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 
@@ -156,53 +158,26 @@ impl Frame {
         }
     }
 
+    /// The whole frame, as the region a run starts from.
+    ///
+    /// Whoever draws first is handed this and passes on what is left of it, so
+    /// every row of the screen belongs to exactly one region.
+    pub fn region(&mut self) -> Region<'_> {
+        Region::new(&mut self.cells, DeviceProfile::TARGET.screen.columns)
+    }
+
     /// Put `cell` at `column` and `row`.
     ///
-    /// A position off the screen is dropped, and so is a wide cell with no
-    /// column beside it to take its other half. Drawing clips at the edge
-    /// rather than failing: a widget past the margin is a layout to fix, not a
-    /// reason to stop rendering the frame.
-    ///
-    /// A wide cell claims the column beside it, and either half is cleared when
-    /// the other is written over. A backend drawing half a glyph would move its
-    /// cursor out of step with the frame and shift the rest of the row.
+    /// [`Region::set`]'s rules, applied to the whole screen.
     pub fn set(&mut self, column: usize, row: usize, cell: Cell) {
-        let Some(position) = Self::position(column, row) else {
-            return;
-        };
-        let wide = cell.columns() == 2;
-        if wide && Self::position(column + 1, row).is_none() {
-            return;
-        }
-
-        self.separate(column, row);
-        if wide {
-            self.separate(column + 1, row);
-        }
-
-        self.cells[position] = cell;
-        if wide {
-            self.cells[position + 1] = cell.continuing();
-        }
+        self.region().set(column, row, cell);
     }
 
     /// Write `text` from `column` on `row`.
     ///
-    /// Each glyph starts where the one before it ended, so a wide glyph moves
-    /// what follows two columns on rather than one. The row stops at the margin
-    /// — the glyph that would cross it is dropped, along with the rest.
-    ///
-    /// The one place text becomes cells, so that the width of a glyph is
-    /// accounted for wherever a page draws a label rather than in each page
-    /// that remembers to.
+    /// [`Region::write`]'s rules, applied to the whole screen.
     pub fn write(&mut self, column: usize, row: usize, text: &str) {
-        let mut at = column;
-
-        for glyph in text.chars() {
-            let cell = Cell::new(glyph);
-            self.set(at, row, cell);
-            at += cell.columns();
-        }
+        self.region().write(column, row, text);
     }
 
     /// The cell at `column` and `row`, or `None` if that is off the screen.
@@ -210,32 +185,17 @@ impl Frame {
     /// The column beside a wide glyph answers that glyph, costing no columns of
     /// its own.
     pub fn get(&self, column: usize, row: usize) -> Option<Cell> {
-        Self::position(column, row).map(|position| self.cells[position])
+        let screen = DeviceProfile::TARGET.screen;
+        if column >= screen.columns || row >= screen.rows {
+            return None;
+        }
+
+        self.cells.get(row * screen.columns + column).copied()
     }
 
     /// Every cell, row by row from the top.
     pub fn cells(&self) -> &[Cell] {
         &self.cells
-    }
-
-    fn separate(&mut self, column: usize, row: usize) {
-        let Some(position) = Self::position(column, row) else {
-            return;
-        };
-
-        match self.cells[position].columns() {
-            2 => self.cells[position + 1] = Cell::BLANK,
-            0 => self.cells[position - 1] = Cell::BLANK,
-            _ => {}
-        }
-    }
-
-    fn position(column: usize, row: usize) -> Option<usize> {
-        let screen = DeviceProfile::TARGET.screen;
-        if column >= screen.columns || row >= screen.rows {
-            return None;
-        }
-        Some(row * screen.columns + column)
     }
 }
 

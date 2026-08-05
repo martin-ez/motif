@@ -4,7 +4,8 @@
 //! opens whatever a backend would open if nobody chose, starts it, keeps it for
 //! the run and stops it on the way out. It wraps an [`App`] rather than being
 //! one, so the pages under it neither know nor need to know that a device is
-//! open — what they draw is theirs, and the state is added beneath it.
+//! open — the bottom row is taken for the state before the pages are handed the
+//! rest, and every cell they are given stays theirs.
 //!
 //! A device that is not there is drawn, never fatal. An instrument that quit
 //! because an interface was unplugged would be wrong, and one that drew a
@@ -12,22 +13,12 @@
 //! goes on the frame and the run carries on.
 
 use crate::audio::{AudioBackend, AudioState, DeviceError, DeviceLink, Passthrough, StreamRequest};
-use crate::device::DeviceProfile;
-use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Legend};
+use crate::ui::{App, ControlEvent, Flow, Legend, Region};
 
 const LABEL: &str = "audio ";
+const STATUS_ROWS: usize = 1;
 
 type MonitorLink<B> = DeviceLink<B, fn() -> Passthrough>;
-
-fn status_row() -> usize {
-    DeviceProfile::TARGET.screen.rows.saturating_sub(2)
-}
-
-fn write(frame: &mut Frame, row: usize, text: &str) {
-    for (column, glyph) in text.chars().enumerate() {
-        frame.set(column, row, Cell::new(glyph));
-    }
-}
 
 /// An application with an audio device held open behind it.
 ///
@@ -40,7 +31,7 @@ fn write(frame: &mut Frame, row: usize, text: &str) {
 /// use motif::audio::{AudioState, NullBackend, StreamConfig, StreamRequest};
 /// use motif::device::Button;
 /// use motif::monitor::Monitor;
-/// use motif::ui::{App, ControlEvent, Flow, Frame, Legend};
+/// use motif::ui::{App, ControlEvent, Flow, Legend, Region};
 ///
 /// struct Quiet;
 ///
@@ -53,7 +44,7 @@ fn write(frame: &mut Frame, row: usize, text: &str) {
 ///         Legend::blank().answering(Button::Play)
 ///     }
 ///
-///     fn draw(&mut self, _frame: &mut Frame) -> Flow {
+///     fn draw(&mut self, _region: Region<'_>) -> Flow {
 ///         Flow::Continue
 ///     }
 /// }
@@ -152,15 +143,18 @@ impl<A: App, B: AudioBackend> App for Monitor<A, B> {
         self.app.legend()
     }
 
-    /// The wrapped application draws first and its [`Flow`] is the one that
-    /// comes back, so nothing about the audio path can end a run. The device is
-    /// polled once here, which is where a fault the callback latched is
-    /// noticed, and the state lands beneath whatever was drawn.
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
-        let flow = self.app.draw(frame);
+    /// The bottom row is taken for the state before the wrapped application is
+    /// handed the rest, so a page filling what it was given cannot land on it.
+    /// The application's [`Flow`] is the one that comes back, so nothing about
+    /// the audio path can end a run. The device is polled once here, which is
+    /// where a fault the callback latched is noticed.
+    fn draw(&mut self, region: Region<'_>) -> Flow {
+        let (above, mut status) = region.split_bottom(STATUS_ROWS);
+
+        let flow = self.app.draw(above);
         let state = self.polled();
 
-        write(frame, status_row(), &format!("{LABEL}{state}"));
+        status.write(0, 0, &format!("{LABEL}{state}"));
 
         flow
     }

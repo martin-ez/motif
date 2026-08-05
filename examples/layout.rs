@@ -25,7 +25,7 @@ use motif::audio::Levels;
 use motif::device::{Button, DeviceProfile, Encoder};
 use motif::looper::{LoopBuffer, Transport};
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, Panel, RenderError,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, Panel, Region, RenderError,
     TerminalScreen,
 };
 
@@ -38,19 +38,19 @@ const EMPTY: char = '░';
 const PEAK: char = '┃';
 const RULE: char = '─';
 
-fn write_at(frame: &mut Frame, column: usize, row: usize, text: &str) {
+fn write_at(region: &mut Region<'_>, column: usize, row: usize, text: &str) {
     for (offset, glyph) in text.chars().enumerate() {
-        frame.set(column + offset, row, Cell::new(glyph));
+        region.set(column + offset, row, Cell::new(glyph));
     }
 }
 
-fn write_right(frame: &mut Frame, row: usize, text: &str) {
+fn write_right(region: &mut Region<'_>, row: usize, text: &str) {
     let width = text.chars().count();
-    write_at(frame, SCREEN.columns.saturating_sub(width), row, text);
+    write_at(region, SCREEN.columns.saturating_sub(width), row, text);
 }
 
-fn rule(frame: &mut Frame, row: usize) {
-    write_at(frame, 0, row, &String::from(RULE).repeat(SCREEN.columns));
+fn rule(region: &mut Region<'_>, row: usize) {
+    write_at(region, 0, row, &String::from(RULE).repeat(SCREEN.columns));
 }
 
 fn decibels(amplitude: f32) -> f32 {
@@ -101,7 +101,7 @@ fn captured(wanted: f32) -> LoopBuffer {
     buffer
 }
 
-fn draw_meter(frame: &mut Frame, row: usize, levels: Levels) {
+fn draw_meter(region: &mut Region<'_>, row: usize, levels: Levels) {
     let readout = format!("{:>5.1} dB", decibels(levels.peak));
     let label = "IN";
     let gap = 2;
@@ -111,23 +111,23 @@ fn draw_meter(frame: &mut Frame, row: usize, levels: Levels) {
     let peak_cell = ((meter_fraction(levels.peak) * width as f32).round() as usize)
         .min(width.saturating_sub(1));
 
-    write_at(frame, 0, row, label);
-    write_at(frame, bar_at, row, &bar(meter_fraction(levels.rms), width));
-    frame.set(bar_at + peak_cell, row, Cell::new(PEAK));
-    write_right(frame, row, &readout);
+    write_at(region, 0, row, label);
+    write_at(region, bar_at, row, &bar(meter_fraction(levels.rms), width));
+    region.set(bar_at + peak_cell, row, Cell::new(PEAK));
+    write_right(region, row, &readout);
 }
 
-fn draw_position(frame: &mut Frame, row: usize, loop_buffer: &LoopBuffer) {
+fn draw_position(region: &mut Region<'_>, row: usize, loop_buffer: &LoopBuffer) {
     let elapsed = seconds(loop_buffer.len());
     let length = seconds(loop_buffer.capacity());
 
-    write_at(frame, 0, row, "LOOP");
-    write_at(frame, 6, row, &format!("{elapsed:>6.2} / {length:>6.2} s"));
-    write_right(frame, row, &format!("{:>3.0}%", 100.0 * elapsed / length));
-    write_at(frame, 0, row + 1, &bar(elapsed / length, SCREEN.columns));
+    write_at(region, 0, row, "LOOP");
+    write_at(region, 6, row, &format!("{elapsed:>6.2} / {length:>6.2} s"));
+    write_right(region, row, &format!("{:>3.0}%", 100.0 * elapsed / length));
+    write_at(region, 0, row + 1, &bar(elapsed / length, SCREEN.columns));
 }
 
-fn draw_transport(frame: &mut Frame, row: usize, transport: Transport) {
+fn draw_transport(region: &mut Region<'_>, row: usize, transport: Transport) {
     let stopped = matches!(transport, Transport::Stopped);
     let indicators = format!(
         "{} REC     {} PLAY     {} STOP",
@@ -136,7 +136,7 @@ fn draw_transport(frame: &mut Frame, row: usize, transport: Transport) {
         lamp(stopped),
     );
 
-    write_at(frame, 0, row, &indicators);
+    write_at(region, 0, row, &indicators);
 }
 
 struct Layout {
@@ -157,19 +157,19 @@ impl Layout {
         }
     }
 
-    fn draw_into(&self, frame: &mut Frame) {
-        write_at(frame, 0, 0, "motif");
-        write_right(frame, 0, named(self.transport));
-        rule(frame, 1);
+    fn draw_into(&self, region: &mut Region<'_>) {
+        write_at(region, 0, 0, "motif");
+        write_right(region, 0, named(self.transport));
+        rule(region, 1);
 
-        draw_meter(frame, 3, self.levels);
-        draw_position(frame, 5, &self.loop_buffer);
-        draw_transport(frame, 8, self.transport);
+        draw_meter(region, 3, self.levels);
+        draw_position(region, 5, &self.loop_buffer);
+        draw_transport(region, 8, self.transport);
     }
 
     fn page(&self) -> Frame {
         let mut frame = Frame::blank();
-        self.draw_into(&mut frame);
+        self.draw_into(&mut frame.region());
         frame
     }
 
@@ -191,8 +191,8 @@ impl App for Layout {
             .answering(Encoder::Main)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
-        self.draw_into(frame);
+    fn draw(&mut self, mut region: Region<'_>) -> Flow {
+        self.draw_into(&mut region);
         Flow::Continue
     }
 }

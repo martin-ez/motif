@@ -7,11 +7,10 @@
 //! screen rather than over the drawn frame. The shell owns the pages and
 //! quitting, and is the only way out of the mode the terminal is left in.
 //!
-//! What is left here is chrome the shell has no notion of, drawn over the frame
-//! after a page has had it. It is right-aligned, so that it lands beside what a
-//! page draws from the left rather than on top of it. That is a convention
-//! holding one shell and one page together, and it is what #216 replaces with a
-//! page system that hands a page a region of its own.
+//! What is left here is chrome the shell has no notion of. It takes the top row
+//! and the bottom one off the region it was handed and gives the shell the rest,
+//! so the pages beneath it cannot be drawn over and the chrome cannot land on a
+//! row a page is using.
 
 use std::process::ExitCode;
 
@@ -20,26 +19,22 @@ use motif::device::DeviceProfile;
 use motif::looper::{LooperPage, position_meter};
 use motif::monitor::Monitor;
 use motif::ui::{
-    App, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, Shell, TerminalScreen,
+    App, ControlEvent, EventLoop, Flow, Legend, Region, RenderError, Shell, TerminalScreen,
     columns_of,
 };
 
 const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
 const QUIT: &str = "shift + stop to quit";
+const CHROME_ROWS: usize = 1;
 
 struct Chrome {
     shell: Shell,
 }
 
-fn last_row() -> usize {
-    DeviceProfile::TARGET.screen.rows.saturating_sub(1)
-}
+fn write_right(region: &mut Region<'_>, text: &str) {
+    let column = region.columns().saturating_sub(columns_of(text));
 
-fn write_right(frame: &mut Frame, row: usize, text: &str) {
-    let screen = DeviceProfile::TARGET.screen;
-    let column = screen.columns.saturating_sub(columns_of(text));
-
-    frame.write(column, row, text);
+    region.write(column, 0, text);
 }
 
 impl App for Chrome {
@@ -51,13 +46,14 @@ impl App for Chrome {
         self.shell.legend()
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
-        let flow = self.shell.draw(frame);
+    fn draw(&mut self, region: Region<'_>) -> Flow {
+        let (mut name, below) = region.split_top(CHROME_ROWS);
+        let (pages, mut quit) = below.split_bottom(CHROME_ROWS);
 
-        write_right(frame, 0, NAME);
-        write_right(frame, last_row(), QUIT);
+        write_right(&mut name, NAME);
+        write_right(&mut quit, QUIT);
 
-        flow
+        self.shell.draw(pages)
     }
 }
 

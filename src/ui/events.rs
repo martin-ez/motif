@@ -5,7 +5,7 @@
 //! nothing and costs the target the time analysis needs, so a frame that
 //! finishes early gives the rest back.
 //!
-//! An [`App`] is handed controls and a blank [`Frame`], and says whether it is
+//! An [`App`] is handed controls and a blank [`Region`], and says whether it is
 //! still running. It never learns what the frame is drawn on or what the player
 //! touched to produce a control, which is what keeps a terminal one backend
 //! among others.
@@ -13,7 +13,7 @@
 //! ```
 //! use motif::device::Button;
 //! use motif::ui::{
-//!     App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, NullRenderer, ScriptedControls,
+//!     App, Cell, ControlEvent, EventLoop, Flow, Legend, NullRenderer, Region, ScriptedControls,
 //! };
 //!
 //! struct Splash;
@@ -30,8 +30,8 @@
 //!         Legend::blank().answering(Button::Stop)
 //!     }
 //!
-//!     fn draw(&mut self, frame: &mut Frame) -> Flow {
-//!         frame.set(0, 0, Cell::new('m'));
+//!     fn draw(&mut self, mut region: Region<'_>) -> Flow {
+//!         region.set(0, 0, Cell::new('m'));
 //!         Flow::Continue
 //!     }
 //! }
@@ -54,7 +54,9 @@ use std::time::Duration;
 use crate::device::DeviceProfile;
 #[cfg(feature = "frame-pace")]
 use crate::ui::PaceWriter;
-use crate::ui::{Clock, ControlEvent, Controls, Frame, Legend, RenderError, Renderer, SystemClock};
+use crate::ui::{
+    Clock, ControlEvent, Controls, Frame, Legend, Region, RenderError, Renderer, SystemClock,
+};
 
 /// The most control events one frame will take.
 ///
@@ -101,16 +103,16 @@ pub trait App {
     /// nothing has decided to say nothing, instead of having forgotten to.
     fn legend(&self) -> Legend;
 
-    /// Put the application's state on `frame`.
+    /// Put the application's state on `region`.
     ///
-    /// The frame arrives blank. Drawing is what the frame budget is for, so
+    /// The region arrives blank. Drawing is what the frame budget is for, so
     /// this is the one place in a frame where an application is expected to
     /// spend it.
     ///
-    /// The whole frame is the application's to draw into, and nothing is drawn
-    /// over it afterwards: what [`legend`](Self::legend) declares goes to the
-    /// screen as a picture of its own.
-    fn draw(&mut self, frame: &mut Frame) -> Flow;
+    /// Every cell of the region is the application's, and nothing is drawn over
+    /// it afterwards: an application adding chrome takes rows off the region
+    /// first and hands the rest to whatever it wraps.
+    fn draw(&mut self, region: Region<'_>) -> Flow;
 }
 
 /// What a run of the loop did.
@@ -225,7 +227,7 @@ impl<K: Clock> EventLoop<K> {
             }
 
             self.frame = Frame::blank();
-            let flow = app.draw(&mut self.frame);
+            let flow = app.draw(self.frame.region());
             screen.render(&self.frame)?;
             screen.show_panel(&app.legend().picture(controls))?;
             report.frames += 1;
