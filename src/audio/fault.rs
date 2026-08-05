@@ -3,20 +3,15 @@
 //!
 //! A host reports device loss by calling a stream's error callback, which runs
 //! under the same rules as the data callback: no allocation, no lock, no
-//! panicking path. So the fault crosses as one atomic compare-exchange, the way
-//! [`level_meter`](super::level_meter) and [`xrun_counter`](super::xrun_counter)
-//! cross as one store.
+//! panicking path. So the fault crosses as one atomic compare-exchange.
 //!
 //! The first fault wins, rather than the most recent. A device that goes away
 //! reports again on every callback that follows, and each of those is a
-//! consequence of the first — a stream reporting `BackendFailure` forty times
-//! after the unplug that caused it has not told anyone anything the unplug did
-//! not. Latching the first keeps the cause.
+//! consequence of the first; latching the first keeps the cause.
 //!
-//! This is the one crossing with no single writer: a duplex stream is two
-//! streams with two error callbacks, and either may be the one to notice. That
-//! is why reporting takes `&self` where publishing a level takes `&mut self` —
-//! there is no exclusive end here to hand out.
+//! This is the one crossing with no single writer — a duplex stream has two
+//! error callbacks, and either may notice — so reporting takes `&self` where
+//! publishing a level takes `&mut self`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};

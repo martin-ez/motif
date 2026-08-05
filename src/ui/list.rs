@@ -13,7 +13,7 @@
 //! stays open.
 
 use crate::device::{Button, DeviceProfile, Encoder};
-use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Legend, Turn};
+use crate::ui::{Cell, ControlEvent, Frame, Legend, Page, Turn};
 
 const MARKER: char = '>';
 const MARKER_COLUMN: usize = 0;
@@ -36,7 +36,7 @@ fn write(frame: &mut Frame, column: usize, row: usize, text: &str) {
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{App, ControlEvent, ListPage};
+/// use motif::ui::{ControlEvent, ListPage, Page};
 ///
 /// let mut page = ListPage::new(["CoreAudio", "JACK"]);
 /// assert_eq!(page.selected_row(), Some("CoreAudio"));
@@ -112,8 +112,8 @@ impl ListPage {
     }
 }
 
-impl App for ListPage {
-    fn control(&mut self, event: ControlEvent) -> Flow {
+impl Page for ListPage {
+    fn control(&mut self, event: ControlEvent) {
         match event {
             ControlEvent::Pressed {
                 button: Button::Down,
@@ -134,8 +134,6 @@ impl App for ListPage {
             } => self.towards_the_start(),
             _ => {}
         }
-
-        Flow::Continue
     }
 
     fn legend(&self) -> Legend {
@@ -145,7 +143,7 @@ impl App for ListPage {
             .answering(Encoder::Main)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
+    fn draw(&mut self, frame: &mut Frame) {
         let visible = self.rows.iter().enumerate().skip(self.offset);
 
         for (row, (index, label)) in visible.take(Self::VISIBLE_ROWS).enumerate() {
@@ -154,7 +152,5 @@ impl App for ListPage {
             }
             write(frame, LABEL_COLUMN, row, label);
         }
-
-        Flow::Continue
     }
 }

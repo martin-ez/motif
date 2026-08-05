@@ -4,8 +4,10 @@
 //! A wrong annotation is a silent source of wrong accuracy numbers, so the
 //! format is line-oriented text meant to be read and corrected in a pull
 //! request rather than taken on trust. [`Score`] is what turns an accuracy
-//! claim into a number a reviewer can check.
+//! claim into a number a reviewer can check, and [`harness`] is what runs one
+//! over the whole set.
 
+pub mod harness;
 pub mod synth;
 
 use std::fmt;
@@ -25,26 +27,17 @@ pub struct Beat {
     pub is_downbeat: bool,
 }
 
-/// A fixture's ground truth: every beat it contains, in order, with the
-/// downbeats identified.
+/// A fixture's ground truth: every beat, in order, with the downbeats marked.
 ///
 /// # Format
 ///
-/// One beat per line, a timestamp and a kind separated by any run of
-/// whitespace. The timestamp is decimal seconds from the start of the audio,
-/// and the kind is `beat` or `downbeat` — a downbeat being a beat that begins a
-/// bar, so it is counted as both. Timestamps strictly increase and none is
-/// negative. A line whose first non-blank character is `#` is a comment, and
-/// blank lines are ignored; both still count towards the line number an
-/// [`AnnotationError`] reports.
+/// One beat per line: decimal seconds from the start of the audio, then `beat`
+/// or `downbeat`. Timestamps strictly increase and are never negative, and a
+/// downbeat counts as both kinds. `#` comments a line; blank and comment lines
+/// still count towards the line an [`AnnotationError`] reports.
 ///
-/// At least one beat is annotated, and at least one of them is a downbeat: an
-/// annotation that identifies neither scores against nothing, which raises an
-/// aggregate rather than failing.
-///
-/// Positions are stored, never a tempo. A tempo with a start offset cannot
-/// express a fixture whose timing drifts, which is the case an analyser most
-/// needs to be measured against.
+/// At least one beat is annotated and one is a downbeat. Positions are stored,
+/// never a tempo, which could not express a fixture that drifts.
 ///
 /// ```
 /// use motif::fixtures::Annotation;

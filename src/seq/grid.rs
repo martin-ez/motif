@@ -9,14 +9,12 @@
 /// The beats of a loop, as the frames they fall on.
 ///
 /// Beats are frame indices against the sample clock they were timed by, which
-/// the grid keeps so that a tempo can be worked out from them. That is a clock,
-/// not a tempo: nothing here stores how fast the beats are going, and
-/// [`beats_per_minute`](Self::beats_per_minute) recomputes it from the
+/// the grid keeps so a tempo can be worked out from them. That is a clock, not a
+/// tempo: [`beats_per_minute`](Self::beats_per_minute) recomputes it from the
 /// timestamps every time it is asked.
 ///
-/// Timestamps strictly increase. [`push`](Self::push) refuses one that does
-/// not, so the beats are always in order and the interval a tempo is derived
-/// from is never empty.
+/// Timestamps strictly increase — [`push`](Self::push) refuses one that does not
+/// — so the interval a tempo is derived from is never empty.
 ///
 /// ```
 /// use motif::seq::{BeatGrid, Position};
@@ -107,15 +105,11 @@ impl BeatGrid {
     /// intervals divide it, so a grid that speeds up or slows down says so
     /// without anything being updated.
     ///
-    /// `None` below two beats, which describe no interval, and for a grid with
-    /// no sample rate, whose frames are not a duration. The span itself cannot
-    /// be zero: two beats are strictly ordered, so they are at least one frame
-    /// apart.
-    ///
     /// The average is over the whole grid rather than its last interval, which
-    /// makes it steady under a beat that lands a little early or late. A
-    /// reading that follows the playing more closely is a different view, and
-    /// the grid holds what either needs.
+    /// keeps it steady under a beat that lands early or late.
+    ///
+    /// `None` below two beats, which describe no interval, and for a grid with
+    /// no sample rate, whose frames are not a duration.
     pub fn beats_per_minute(&self) -> Option<f64> {
         let intervals = self.beats.len().checked_sub(1).filter(|&count| count > 0)?;
         if self.sample_rate == 0 {

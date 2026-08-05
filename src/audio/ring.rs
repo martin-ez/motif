@@ -6,18 +6,12 @@
 //! and an empty one on the consuming end are ordinary results, not conditions
 //! to retry until they clear.
 //!
-//! Samples are held as [`AtomicU32`] bit patterns rather than as `f32` behind a
-//! cell, which is what keeps the whole ring in safe code: the two ends
-//! genuinely do touch the same slots without synchronising on them, and only an
-//! atomic makes that defined. Reads and writes of the slots themselves are
-//! relaxed; the index publication either side of them is what orders the data.
-//!
-//! Each end counts the samples it has moved since the ring was built, and the
-//! difference between the two counts is what the ring is holding. The counts
-//! only ever grow, which is what tells a full ring from an empty one where the
-//! slot indices alone cannot. Neither end handles a count that wraps, because
-//! a 64-bit count advanced at an audio sample rate takes longer to exhaust than
-//! the hardware will exist.
+//! Samples are held as [`AtomicU32`] bit patterns rather than `f32` behind a
+//! cell, which is what keeps the whole ring in safe code. The slots are read and
+//! written relaxed; the index publication either side of them orders the data,
+//! and the indices only ever grow, which is what tells a full ring from an empty
+//! one. Neither end handles a count that wraps: 64 bits at an audio sample rate
+//! outlast the hardware.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};

@@ -98,19 +98,14 @@ fn centred_origin() -> (usize, usize) {
 /// The terminal a player has, given back as it was found.
 ///
 /// The screen and the panel are one object because the mode they need is one
-/// setting: raw mode is what stops the terminal echoing keys and buffering them
-/// until a newline, and it belongs to the terminal rather than to either half.
+/// setting: raw mode stops the terminal echoing keys and buffering them until a
+/// newline, and it belongs to the terminal rather than to either half.
 ///
 /// Opening one switches the terminal into raw mode and onto its alternate
-/// screen; dropping it puts both back. Drop runs when a caller returns early
-/// with `?` and while a panic unwinds, which is what makes the restore hold on
-/// the paths that are easiest to forget.
+/// screen; dropping it puts both back, including while a panic unwinds.
 ///
-/// Frames go out through a [`Viewport`], so what a player sees is the panel's
-/// screen with its edges drawn rather than a frame in the corner of a window.
-/// A terminal is nearly always larger than the device, and a layout judged in
-/// the space a terminal happens to have is a layout judged against the wrong
-/// screen.
+/// Frames go out through a [`Viewport`], so a player sees the panel's screen
+/// with its edges drawn rather than a frame in the corner of a window.
 pub struct TerminalScreen {
     writer: Viewport<Stdout>,
     reader: KeyReader<Stdin>,

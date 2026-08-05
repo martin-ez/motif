@@ -197,39 +197,14 @@ fn next_press(bytes: &[u8]) -> Step {
 
 /// The keys a terminal sends, reported as the panel's controls.
 ///
-/// The scene buttons are the number row, `1` to `4`, left to right in panel
-/// order. Transport sits on `z`, `x` and `c`, in the panel's order of play,
-/// stop and record; navigation is on the arrow keys; the encoder turns with
-/// `,` and `.`, which sit under the right hand beside them, anticlockwise on
-/// the left. Holding shift is an upper case letter, or an arrow whose escape
-/// sequence carries modifier 2, and it is resolved here rather than reported as
-/// a control of its own. A shifted digit is whatever glyph the player's layout
-/// puts there, so it reaches nothing.
+/// Scenes are `1`–`4`; transport `z`, `x`, `c` for play, stop and record;
+/// navigation the arrow keys; the encoder turns with `,` and `.`. Shift is an
+/// upper case letter or an arrow carrying modifier 2, resolved here rather than
+/// reported as a press; the same mapping is what names a control for the legend.
 ///
-/// Shift is the one button on the panel that never leaves here as a press. A
-/// terminal does not report the key at all — it reports what was typed while it
-/// was held — so there is nothing to send until the control it modifies
-/// arrives, and then it is that control's event carrying it.
-///
-/// The same mapping is what the reader hands the screen to name a control by,
-/// so the legend a player reads cannot disagree with the keys that work. A key
-/// that has no glyph of its own is named by the shape it points in — `^`, `v`,
-/// `<`, `>`, `⇧` — and the encoder by its pair, as `,/.`.
-///
-/// Reads are never waited on: a read that hands back nothing ends the poll, so
-/// a source that blocks until a key is pressed will spend the frame budget. The
-/// terminal is put into a mode that returns immediately by
-/// [`TerminalScreen`](super::TerminalScreen).
-///
-/// A poll is bounded work for the same reason. It gives up after a bufferful of
-/// bytes that yield no control, so a source that never runs dry — a pasted page
-/// of text arriving as keystrokes — costs one frame rather than hanging in one,
-/// and what it did not reach is still there for the next poll.
-///
-/// A key that arrives split across reads — an escape sequence is several bytes,
-/// and a terminal is under no obligation to deliver them together — is held
-/// until the rest of it turns up. A byte that begins nothing the panel has is
-/// dropped, and the bytes after it are still read.
+/// Reads are never waited on, and a poll gives up after a bufferful of bytes
+/// yielding no control. A split key is held until the rest arrives; a byte that
+/// begins nothing is dropped.
 pub struct KeyReader<R: Read> {
     source: R,
     pending: [u8; PENDING_CAPACITY],

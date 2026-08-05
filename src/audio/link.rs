@@ -2,21 +2,16 @@
 //! player sees when it does.
 //!
 //! A stream is the wrong thing to hand the rest of the application, because a
-//! device that vanishes takes it with it. What survives is the intent to be
-//! playing through a chosen device — the backend, the choice, the configuration
-//! asked of it, and whichever stream is currently serving that intent. That is
-//! [`DeviceLink`], and [`AudioState`] is what it looks like from outside.
+//! device that vanishes takes it with it. What survives is the intent to play
+//! through a chosen device — the backend, the choice, the configuration asked
+//! of it, and whichever stream serves that intent. That is [`DeviceLink`], and
+//! [`AudioState`] is what it looks like from outside.
 //!
-//! Recovery is a replacement, never a repair. A faulted stream is stopped and
-//! dropped, and a new one is opened in its place: dropping is what joins the
-//! callback threads, and it happens here on the application thread, where
-//! dropping is allowed. Repairing in place would mean reaching into structures
-//! a callback might still be touching.
-//!
-//! [`open`](DeviceLink::open) replaces the stream whatever the reason, and
-//! [`select`](DeviceLink::select) is that same call after changing the choice —
-//! so a device that disappeared and a player who chose a different one are the
-//! same mechanism rather than two.
+//! Recovery is a replacement, never a repair: a faulted stream is stopped and
+//! dropped on the application thread, where dropping is allowed and is what
+//! joins the callback threads. [`open`](DeviceLink::open) replaces the stream
+//! whatever the reason and [`select`](DeviceLink::select) is that call after
+//! changing the choice, so a lost device and a changed one are one mechanism.
 
 use std::fmt;
 
@@ -120,14 +115,12 @@ impl<B: AudioBackend> DeviceLink<B> {
     /// The replaced stream is stopped and dropped before the new one is opened,
     /// so no two streams are ever live on one link and the old callbacks have
     /// finished before the new ones begin. This is the way out of
-    /// [`AudioState::Lost`], and it is also what replacing a working device
-    /// with a different one comes down to.
+    /// [`AudioState::Lost`], and also what changing device comes down to.
     ///
     /// # Errors
     ///
-    /// Returns [`DeviceError`] when the backend will not open the request. The
-    /// link is left in [`AudioState::Lost`] carrying that error, which is the
-    /// honest reading: there is no stream, and it took a device to say why.
+    /// Returns [`DeviceError`] when the backend will not open the request, and
+    /// leaves the link in [`AudioState::Lost`] carrying it.
     pub fn open(&mut self) -> Result<(), DeviceError> {
         self.close();
 
@@ -143,18 +136,14 @@ impl<B: AudioBackend> DeviceLink<B> {
 
     /// Take `selection` as the choice to serve, and open it.
     ///
-    /// This is the whole of changing device: the link keeps the new choice and
-    /// opens it the way it opens any other, so a player who changed their mind
-    /// travels the path a device that vanished already travels. The link holds
-    /// one stream at a time, so the one that was running stops and is dropped
-    /// before the new one is opened — a device serving both cannot be opened
-    /// twice, and a moment of silence is the price of the change.
+    /// The link holds one stream at a time, so the one that was running stops
+    /// and is dropped before the new one opens: a device serving both cannot be
+    /// opened twice, and a moment of silence is the price of the change.
     ///
     /// # Errors
     ///
     /// As [`open`](Self::open). The refused selection is kept, so a link left
-    /// in [`AudioState::Lost`] reports what the player asked for rather than
-    /// what they had before.
+    /// in [`AudioState::Lost`] reports what was asked for, not what came before.
     pub fn select(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
         self.selection = selection;
         self.open()

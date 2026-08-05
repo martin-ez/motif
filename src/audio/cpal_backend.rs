@@ -171,24 +171,14 @@ impl AudioBackend for CpalBackend {
             .collect()
     }
 
-    /// The default host's default devices, each across the width its own
-    /// default configuration uses.
+    /// The default host's default devices across the width their own default
+    /// configuration uses, falling back to the first device listed.
     ///
-    /// Named out of [`hosts`](Self::hosts) rather than straight off the default
-    /// device, because those two are not always the same name for the same
-    /// thing: ALSA's default device describes itself as `Default Audio Device`,
-    /// while enumerating the same PCM gives whatever its hint says. Taking the
-    /// name from the listing that [`open`](Self::open) searches is what makes a
-    /// default selection one it can find; a default device the listing does not
-    /// carry falls back to the first device listed.
-    ///
-    /// The device's default width rather than the narrowest it offers: a
-    /// two-channel interface defaulting to stereo is a player with a stereo
-    /// source, and narrowing that to one channel unasked would throw half of it
-    /// away. The width is what the selection *covers*, not what the device is
-    /// opened at — `open` decides that — so a device offering only counts wider
-    /// than its default is still selected across its default width rather than
-    /// folded across everything it has.
+    /// Named out of [`hosts`](Self::hosts) rather than off the default device,
+    /// which are not always the same name for one thing: ALSA's default device
+    /// describes itself as `Default Audio Device` while enumerating that PCM
+    /// gives whatever its hint says, so a name taken from the device is one
+    /// [`open`](Self::open) cannot find.
     fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection> {
         let host = cpal::default_host();
         let default_input = host.default_input_device();
@@ -222,23 +212,16 @@ impl AudioBackend for CpalBackend {
         })
     }
 
-    /// The two callbacks are joined by a [`passthrough`] path, so audio at the
-    /// input is audible at the output. Its slack is one block, which is the
-    /// least give that keeps a playback callback from reading a ring the
-    /// capture callback has not reached yet — the two are separate streams, and
-    /// nothing orders one against the other.
+    /// The two callbacks are joined by a [`passthrough`] path with one block of
+    /// slack, the least that keeps playback from outrunning capture.
     ///
-    /// The path has to be sized before either stream exists, because a stream
-    /// wants its callback at the moment it is built and only reports the block
-    /// size it was granted afterwards. It is sized from the request, so a
-    /// device that grants a larger block than it was asked for is refused here
-    /// rather than run against a path too small to feed it — which would be
-    /// audible on every callback for the life of the stream.
+    /// The path is sized from the request, not from what was granted: a stream
+    /// wants its callback as it is built and reports its block size only
+    /// afterwards, so a device granting a larger block is refused rather than
+    /// run against a path too small to feed it.
     ///
-    /// The capture callback also meters what the device handed it, before the
-    /// passthrough path folds the channels together. A meter is there to catch
-    /// clipping, and a channel at full scale disappears into the mean of a
-    /// frame it shares with a quiet one.
+    /// Metering happens before the path folds the channels together, so a
+    /// channel at full scale cannot hide in the mean of its frame.
     fn open(
         &self,
         selection: &DeviceSelection,
