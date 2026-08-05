@@ -39,6 +39,7 @@ pub struct LoopBuffer {
     layers: Box<[f32]>,
     written: [usize; LAYER_COUNT],
     depth: usize,
+    open: Option<usize>,
 }
 
 impl LoopBuffer {
@@ -85,14 +86,19 @@ impl LoopBuffer {
             layers: vec![0.0; capacity.saturating_mul(Self::LAYERS)].into_boxed_slice(),
             written: [0; LAYER_COUNT],
             depth: 0,
+            open: Some(0),
         }
     }
 
     /// Append as much of `captured` as there is room for in the open layer, and
     /// report how many frames that was.
     ///
-    /// Recording into an empty buffer opens the take, so a buffer that is only
-    /// ever recorded into is a single layer.
+    /// Frames land in the open layer, and only there. An empty buffer has the
+    /// take open, so a buffer that is only ever recorded into is a single
+    /// layer; every later layer is opened by [`overdub`](Self::overdub), and
+    /// [`undo`](Self::undo) leaves none open. Nothing is taken while none is,
+    /// which is what keeps a take from growing past the loop the player heard
+    /// when they undid a layer over it.
     ///
     /// A result below the length of `captured` means the layer is full and the
     /// rest were dropped: a take has reached the length the profile allows, or
@@ -101,25 +107,27 @@ impl LoopBuffer {
     /// block later — it never grows to fit the rest, and never panics for being
     /// asked.
     pub fn record(&mut self, captured: &[f32]) -> usize {
-        if self.depth == 0 {
-            self.depth = 1;
-        }
+        let Some(open) = self.open else {
+            return 0;
+        };
 
-        let open = self.open();
         let taken = captured.len().min(self.vacant());
         let at = open * self.capacity() + self.written[open];
         self.layers[at..at + taken].copy_from_slice(&captured[..taken]);
         self.written[open] += taken;
+        self.depth = self.depth.max(open + 1);
 
         taken
     }
 
     /// Open a layer over the loop, and report whether there was one to open.
     ///
-    /// A refusal means the stack is [`LAYERS`](Self::LAYERS) deep. What was
-    /// recorded is left alone and the layer that was open stays open, so a
-    /// caller that ignores the answer keeps overdubbing the topmost layer
-    /// rather than losing the block.
+    /// A refusal means the stack is [`LAYERS`](Self::LAYERS) deep, or there is
+    /// no loop yet to lie over — an overdub of nothing would be a layer the
+    /// loop's length holds at no frames, which takes every block a player gives
+    /// it and keeps none. What was recorded is left alone and the layer that
+    /// was open stays open, so a caller that ignores the answer keeps recording
+    /// where it was rather than losing the block.
     ///
     /// ```
     /// use motif::device::DeviceProfile;
@@ -137,11 +145,12 @@ impl LoopBuffer {
     /// assert_eq!(heard, [0.375, 0.625]);
     /// ```
     pub fn overdub(&mut self) -> bool {
-        if self.depth == Self::LAYERS {
+        if self.depth == Self::LAYERS || self.is_empty() {
             return false;
         }
 
         self.written[self.depth] = 0;
+        self.open = Some(self.depth);
         self.depth += 1;
 
         true
@@ -154,6 +163,10 @@ impl LoopBuffer {
     /// the point of undo is to lose a mistake while the loop plays on, so
     /// emptying a loop is [`clear`](Self::clear)'s to do and nothing else's.
     ///
+    /// No layer is left open, so the blocks still arriving from a player who
+    /// has not yet let go of the button are taken nowhere rather than appended
+    /// to the take. Recording again means opening a layer again.
+    ///
     /// The samples of an undone layer are not overwritten, only its length is
     /// dropped to nothing. Nothing reads past a layer's length, so they are
     /// unreachable rather than stale, and undo is a couple of stores wherever
@@ -165,6 +178,7 @@ impl LoopBuffer {
 
         self.depth -= 1;
         self.written[self.depth] = 0;
+        self.open = None;
 
         true
     }
@@ -176,16 +190,21 @@ impl LoopBuffer {
     pub fn clear(&mut self) {
         self.written = [0; LAYER_COUNT];
         self.depth = 0;
+        self.open = Some(0);
     }
 
-    /// Write the loop from frame `from` into `block`, and report how many
+    /// Add the loop, from frame `from`, into `block`, and report how many
     /// frames that was.
     ///
-    /// Every layer is summed into each frame, so this is the loop as it is
-    /// heard. Fewer frames than `block` holds means the loop ended inside it,
-    /// and the rest of `block` is left as it was — the loop does not repeat
-    /// here, and a caller wanting the frames after the end asks for them from
-    /// the position they start at.
+    /// Every layer is summed into what `block` already holds, so a caller
+    /// mixing the loop over live input passes the block it rendered and gets
+    /// both. It follows that a caller wanting the loop alone passes silence:
+    /// zeroing here would make the loop the only thing that could be heard.
+    ///
+    /// Fewer frames than `block` holds means the loop ended inside it, and the
+    /// rest of `block` is left as it was — the loop does not repeat here, and a
+    /// caller wanting the frames after the end asks for them from the position
+    /// they start at.
     pub fn mix_into(&self, block: &mut [f32], from: usize) -> usize {
         let wanted = block.len().min(self.len().saturating_sub(from));
         if wanted == 0 {
@@ -193,7 +212,6 @@ impl LoopBuffer {
         }
 
         let block = &mut block[..wanted];
-        block.fill(0.0);
 
         for (layer, recorded) in self
             .layers
@@ -228,9 +246,14 @@ impl LoopBuffer {
     /// How many frames the next [`record`](Self::record) can take.
     ///
     /// That is the room left in the open layer: what is left of the buffer
-    /// while the take is open, and what is left of the loop under an overdub.
+    /// while the take is open, what is left of the loop under an overdub, and
+    /// nothing at all while no layer is open. It answers what the next block
+    /// will do rather than how much of the buffer is spent, so a caller after
+    /// the length of the loop wants [`len`](Self::len).
     pub fn vacant(&self) -> usize {
-        let open = self.open();
+        let Some(open) = self.open else {
+            return 0;
+        };
         let room = if open == 0 {
             self.capacity()
         } else {
@@ -243,9 +266,5 @@ impl LoopBuffer {
     /// The most frames a layer can ever hold.
     pub fn capacity(&self) -> usize {
         self.layers.len() / Self::LAYERS
-    }
-
-    fn open(&self) -> usize {
-        self.depth.saturating_sub(1)
     }
 }

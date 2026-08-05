@@ -343,6 +343,56 @@ fn undo_keeps_the_take() {
 }
 
 #[test]
+fn an_overdub_over_an_empty_buffer_is_refused() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+
+    assert!(!buffer.overdub());
+    assert_eq!(buffer.depth(), 0);
+}
+
+#[test]
+fn an_empty_buffer_that_refused_an_overdub_still_takes_a_take() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.overdub();
+
+    let recorded = buffer.record(&[0.25, 0.5]);
+
+    assert_eq!(recorded, 2);
+    assert_eq!(heard(&buffer), [0.25, 0.5]);
+}
+
+#[test]
+fn recording_after_an_undo_takes_nothing_until_a_layer_is_opened() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125]);
+    buffer.undo();
+
+    let recorded = buffer.record(&[0.75]);
+
+    assert_eq!(recorded, 0);
+    assert_eq!(buffer.len(), 2);
+    assert_eq!(heard(&buffer), [0.25, 0.5]);
+}
+
+#[test]
+fn a_refused_overdub_leaves_the_top_layer_open() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    for _ in 1..LoopBuffer::LAYERS {
+        buffer.overdub();
+    }
+    buffer.record(&[0.125]);
+
+    buffer.overdub();
+    let recorded = buffer.record(&[0.125]);
+
+    assert_eq!(recorded, 1);
+    assert_eq!(heard(&buffer), [0.375, 0.625]);
+}
+
+#[test]
 fn undo_makes_room_for_another_layer() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25]);
@@ -413,12 +463,37 @@ fn mixing_reports_the_frames_it_wrote() {
 fn mixing_stops_at_the_end_of_the_loop() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    let mut block = [9.0; 4];
+    let mut block = [0.0; 4];
 
     let mixed = buffer.mix_into(&mut block, 0);
 
     assert_eq!(mixed, 2);
-    assert_eq!(block, [0.25, 0.5, 9.0, 9.0]);
+    assert_eq!(block, [0.25, 0.5, 0.0, 0.0]);
+}
+
+#[test]
+fn mixing_adds_to_what_the_block_already_holds() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    let mut block = [1.0; 3];
+
+    buffer.mix_into(&mut block, 0);
+
+    assert_eq!(block, [1.25, 1.5, 1.0]);
+}
+
+#[test]
+fn mixing_reads_on_past_a_layer_that_ended_early() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75]);
+    buffer.overdub();
+    buffer.record(&[0.125]);
+    let mut block = [0.0; 2];
+
+    let mixed = buffer.mix_into(&mut block, 1);
+
+    assert_eq!(mixed, 2);
+    assert_eq!(block, [0.5, 0.75]);
 }
 
 #[test]
