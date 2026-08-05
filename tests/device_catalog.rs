@@ -85,6 +85,14 @@ fn without_the_interface() -> Vec<AudioHost> {
     }]
 }
 
+fn without_the_interface_output() -> Vec<AudioHost> {
+    vec![AudioHost {
+        name: "alsa".to_owned(),
+        inputs: vec![device("interface", vec![2, 4]), device("webcam", vec![1])],
+        outputs: Vec::new(),
+    }]
+}
+
 fn held() -> DeviceSelection {
     DeviceSelection {
         host: "alsa".to_owned(),
@@ -237,6 +245,48 @@ fn a_held_device_that_goes_missing_stays_listed_in_both_directions() {
         catalog.hosts()[0].outputs,
         vec![device("interface", vec![2])]
     );
+}
+
+#[test]
+fn a_held_device_lost_in_one_direction_is_carried_into_that_one() {
+    let backend = CountingBackend::new(one_host());
+    let mut catalog = DeviceCatalog::new(48_000);
+    catalog.refresh(&backend, None);
+
+    backend.now_lists(without_the_interface_output());
+    catalog.refresh(&backend, Some(&held()));
+
+    assert_eq!(
+        catalog.hosts()[0].outputs,
+        vec![device("interface", vec![2])]
+    );
+}
+
+#[test]
+fn a_held_device_lost_in_one_direction_is_not_doubled_in_the_other() {
+    let backend = CountingBackend::new(one_host());
+    let mut catalog = DeviceCatalog::new(48_000);
+    catalog.refresh(&backend, None);
+
+    backend.now_lists(without_the_interface_output());
+    catalog.refresh(&backend, Some(&held()));
+
+    assert_eq!(
+        input_names(&catalog),
+        vec!["interface".to_owned(), "webcam".to_owned()]
+    );
+}
+
+#[test]
+fn carrying_into_a_host_that_is_still_listed_adds_no_second_one() {
+    let backend = CountingBackend::new(one_host());
+    let mut catalog = DeviceCatalog::new(48_000);
+    catalog.refresh(&backend, None);
+
+    backend.now_lists(without_the_interface_output());
+    catalog.refresh(&backend, Some(&held()));
+
+    assert_eq!(catalog.hosts().len(), 1);
 }
 
 #[test]
