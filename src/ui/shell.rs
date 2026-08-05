@@ -6,25 +6,15 @@ use crate::ui::{App, ControlEvent, Flow, Frame, Legend, Mode, Page};
 
 /// The pages the instrument has, and the one it is showing.
 ///
-/// A page per [`Mode`], held in an array the mode indexes: order is part of the
-/// mode set rather than an accident of who built the array, so `Mode::ALL`
-/// sizes it and a mode with no page behind it cannot be expressed. Which pages
-/// those are is a composition question and belongs to whoever builds the shell,
-/// the way choosing a backend does — the shell knows it has a page per mode,
-/// not which pages they are.
+/// A page per [`Mode`], held in an array the mode indexes, so `Mode::ALL` sizes
+/// it and a mode with no page cannot be expressed. Which pages those are is a
+/// composition question, the way choosing a backend is.
 ///
-/// Showing a mode is a call rather than a gesture. Nothing on the panel reaches
-/// it yet, which is deliberate: the shell is the part that does not change when
-/// a navigation scheme does, so it is built and tested without one.
+/// Showing a mode is a call, not a gesture: the shell is what does not change
+/// when a navigation scheme does, so it is built without one.
 ///
-/// The shell keeps shift + stop for itself and forwards every other control to
-/// the showing page. Ending the run is the one decision that cannot belong to a
-/// screen, because a screen only knows about itself.
-///
-/// Both halves of that gesture are added to the showing page's legend, so the
-/// way out is drawn as a live key on every page rather than only on the ones
-/// that happen to answer stop themselves. A player who cannot see the exit has
-/// a terminal they can only leave by killing the process.
+/// It keeps shift + stop and forwards the rest to the showing page, declaring
+/// both halves so the way out is drawn live on a page that ignores stop.
 ///
 /// ```
 /// use motif::device::Button;

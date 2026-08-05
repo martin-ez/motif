@@ -5,15 +5,11 @@ use crate::ui::{ControlEvent, Frame, Legend};
 /// A screen a [`Shell`](crate::ui::Shell) can show.
 ///
 /// The same three members an [`App`](crate::ui::App) has, less the
-/// [`Flow`](crate::ui::Flow): a page cannot end the run, because there is
-/// nothing it could return to say so. Quitting belongs to the shell, which is
-/// the part that knows whether there is anywhere else to go — a screen only
-/// knows about itself.
+/// [`Flow`](crate::ui::Flow): a page cannot end the run, having nothing to
+/// return that would say so. Quitting belongs to the shell.
 ///
 /// A page is handed the whole frame, of which the bottom [`Legend::ROWS`] rows
-/// are drawn over afterwards with what it declared. Nothing here names a key, a
-/// terminal or an escape sequence, so the same page draws on a hardware panel
-/// once there is one.
+/// are drawn over afterwards with what it declared.
 ///
 /// ```
 /// use motif::device::Button;
