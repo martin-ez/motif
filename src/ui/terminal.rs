@@ -78,14 +78,13 @@ fn differs(previous: Option<&Frame>, frame: &Frame, column: usize, row: usize) -
 
 fn changed_runs(previous: Option<&Frame>, frame: &Frame, row: usize) -> Vec<Run> {
     let screen = DeviceProfile::TARGET.screen;
-    let mut runs: Vec<Run> = Vec::new();
-    let mut column = 0;
 
-    while column < screen.columns {
-        let cell = frame.get(column, row).unwrap_or(Cell::BLANK);
-        let ends_at = column + cell.columns();
-
-        if differs(previous, frame, column, row) {
+    (0..screen.columns)
+        .map(|column| (column, frame.get(column, row).unwrap_or(Cell::BLANK)))
+        .filter(|(_, cell)| cell.columns() > 0)
+        .filter(|(column, _)| differs(previous, frame, *column, row))
+        .fold(Vec::new(), |mut runs, (column, cell)| {
+            let ends_at = column + cell.columns();
             match runs.last_mut() {
                 Some(run) if run.ends_at == column => {
                     run.glyphs.push(cell.glyph());
@@ -97,12 +96,8 @@ fn changed_runs(previous: Option<&Frame>, frame: &Frame, row: usize) -> Vec<Run>
                     glyphs: String::from(cell.glyph()),
                 }),
             }
-        }
-
-        column = ends_at;
-    }
-
-    runs
+            runs
+        })
 }
 
 impl<W: Write> Renderer for FrameWriter<W> {
