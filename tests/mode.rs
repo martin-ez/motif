@@ -20,11 +20,6 @@ fn a_mode_is_its_own_place_in_the_order() {
 }
 
 #[test]
-fn the_looper_is_a_mode_of_the_instrument() {
-    assert!(Mode::ALL.contains(&Mode::Looper));
-}
-
-#[test]
 fn the_instrument_has_one_screen_today() {
     assert_eq!(Mode::ALL, [Mode::Looper]);
 }
