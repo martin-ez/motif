@@ -6,8 +6,9 @@
 //! page never learns which control navigates and a scheme is one value rather
 //! than an opinion held by every page.
 //!
-//! What that value is belongs to whoever composes the application, the way
-//! choosing a backend does: nothing here binds a control to anything.
+//! [`Scheme`] is that value written as a table, and what a scheme binds belongs
+//! to whoever composes the application, the way choosing a backend does:
+//! nothing here binds a control to anything.
 
 use crate::ui::{ControlEvent, Mode};
 
@@ -57,4 +58,53 @@ pub trait Navigation {
     /// What `event` means here, or `None` if it means nothing and belongs to
     /// the page.
     fn intent(&self, event: ControlEvent) -> Option<Intent>;
+}
+
+/// A scheme written as a table: the gestures that navigate, each beside what it
+/// means.
+///
+/// Rows rather than an entry per control, so a button added to the panel is a
+/// row here and nothing else: a scheme states the gestures it binds and never
+/// assumes the set they were drawn from. A gesture no row names means nothing,
+/// and reaches the showing page unchanged.
+///
+/// A value, so trying a different scheme is a different table rather than a
+/// rewritten `match`.
+///
+/// ```
+/// use motif::device::Button;
+/// use motif::ui::{ControlEvent, Intent, Mode, Navigation, Scheme};
+///
+/// let scene = ControlEvent::Pressed { button: Button::FirstScene, shifted: false };
+/// let play = ControlEvent::Pressed { button: Button::Play, shifted: false };
+///
+/// let scheme = Scheme::new([(scene, Intent::Show(Mode::Looper))]);
+///
+/// assert_eq!(scheme.intent(scene), Some(Intent::Show(Mode::Looper)));
+/// assert_eq!(scheme.intent(play), None);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scheme {
+    bindings: Vec<(ControlEvent, Intent)>,
+}
+
+impl Scheme {
+    /// A scheme resolving `bindings` and no gesture they leave out.
+    ///
+    /// The rows are taken as they are given rather than checked against the
+    /// panel, which is what lets a scheme outlive a change to it.
+    pub fn new(bindings: impl IntoIterator<Item = (ControlEvent, Intent)>) -> Self {
+        Self {
+            bindings: bindings.into_iter().collect(),
+        }
+    }
+}
+
+impl Navigation for Scheme {
+    fn intent(&self, event: ControlEvent) -> Option<Intent> {
+        self.bindings
+            .iter()
+            .find(|(gesture, _)| *gesture == event)
+            .map(|&(_, intent)| intent)
+    }
 }
