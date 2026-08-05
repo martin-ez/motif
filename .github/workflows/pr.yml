@@ -3,11 +3,18 @@ name: PR hygiene
 on:
   pull_request:
     types: [opened, edited, reopened, synchronize]
+  # A merge group has no pull request to read a title or a body from, so every
+  # step below is skipped there and the job reports on the strength of what it
+  # already checked at the queue entrance. It runs rather than being gated off
+  # because a required check that reports nothing drops the entry from the queue.
+  merge_group:
 
 jobs:
   hygiene:
     name: pull request hygiene
     runs-on: ubuntu-latest
+    env:
+      REVIEWABLE: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -16,6 +23,7 @@ jobs:
       # The title and body are attacker-controlled on a fork, so they are read
       # from the environment rather than interpolated into the script.
       - name: title
+        if: ${{ env.REVIEWABLE == 'true' }}
         env:
           TITLE: ${{ github.event.pull_request.title }}
         run: |
@@ -32,6 +40,7 @@ jobs:
           fi
 
       - name: no co-authors
+        if: ${{ env.REVIEWABLE == 'true' }}
         env:
           BODY: ${{ github.event.pull_request.body }}
           BASE: ${{ github.event.pull_request.base.sha }}

@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue builds each entry against the branches ahead of it, so this
+  # is where a semantic conflict between two green pull requests is caught. A
+  # required check that never reports here times the entry out and drops it.
+  merge_group:
 
 env:
   CARGO_TERM_COLOR: always
@@ -92,16 +96,22 @@ jobs:
   mutants:
     name: mutation coverage
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    env:
+      # The sweep measures whether a diff's tests constrain behaviour, which is
+      # a property of the pull request and not of the commit that lands. It is
+      # answered once, when the entry joins the queue; a merge group would only
+      # re-measure the same diff. The job still runs there rather than being
+      # gated off, because a check that reports nothing blocks the queue.
+      SWEEP: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - id: changed
         uses: ./.github/actions/rust-changed
-      - if: ${{ steps.changed.outputs.rust != 'false' }}
+      - if: ${{ env.SWEEP == 'true' && steps.changed.outputs.rust != 'false' }}
         uses: Swatinem/rust-cache@v2
-      - if: ${{ steps.changed.outputs.rust != 'false' }}
+      - if: ${{ env.SWEEP == 'true' && steps.changed.outputs.rust != 'false' }}
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-mutants
@@ -109,7 +119,7 @@ jobs:
       # this crate for a Linux host needs its development headers. The aarch64
       # job is the exception: it cross-checks, and .cargo/config.toml points it
       # at a stub .pc instead.
-      - if: ${{ steps.changed.outputs.rust != 'false' }}
+      - if: ${{ env.SWEEP == 'true' && steps.changed.outputs.rust != 'false' }}
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       # Test-first ordering is not observable in a diff, but its purpose is:
       # tests that genuinely constrain behaviour. cargo-mutants alters the code
@@ -119,7 +129,7 @@ jobs:
       # One job per core: a standard runner has four, and the sweep is the
       # longest job in this workflow, so it sets the wall clock for the whole
       # pull request.
-      - if: ${{ steps.changed.outputs.rust != 'false' }}
+      - if: ${{ env.SWEEP == 'true' && steps.changed.outputs.rust != 'false' }}
         run: |
           git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
           cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 4
