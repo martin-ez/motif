@@ -5,22 +5,28 @@
 //! already there — data rather than a closure, since a closure that captures is
 //! an allocation on one thread and a vtable dispatch on the other.
 //!
-//! Commands set a level rather than toggle one: [`Command::SetMuted`] carries
-//! the state to be in. A toggle means something different depending on how many
-//! of its predecessors arrived, so one refused send would leave the two ends
-//! disagreeing for good.
+//! A command that sets something carries the state to be in rather than a
+//! change to it: [`Command::SetTransport`] carries the whole of [`Transport`],
+//! not a flag derived from it. A toggle means something different depending on
+//! how many of its predecessors arrived, so one refused send would leave the
+//! two ends disagreeing for good.
 //!
 //! Each slot is an [`AtomicU64`] bit pattern, which is what keeps the queue in
-//! safe code; a tag naming no command is discarded rather than guessed at.
+//! safe code; a pattern naming no command is discarded rather than guessed at.
 
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-const ARMED: u64 = 0;
+use crate::looper::Transport;
+
+const TRANSPORT: u64 = 0;
 const MUTED: u64 = 1;
 const GAIN: u64 = 2;
+const UNDO: u64 = 3;
+const CLEAR: u64 = 4;
 const TAG_SHIFT: u32 = 32;
+const NO_PAYLOAD: u32 = 0;
 
 /// A change to what the callback does.
 ///
@@ -29,33 +35,73 @@ const TAG_SHIFT: u32 = 32;
 /// outcome than a command nothing applies.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
-    /// Arm capture, or disarm it.
-    SetArmed(bool),
+    /// Put the transport in a state: open a take or a layer, play the loop, or
+    /// halt it.
+    SetTransport(Transport),
     /// Mute the output, or unmute it.
     SetMuted(bool),
     /// Set the gain applied to the input, as a linear multiplier where `1.0` is
     /// unity and `0.0` is silence.
     SetGain(f32),
+    /// Take the most recent overdub off the loop, keeping the take under it.
+    Undo,
+    /// Empty the loop, back to nothing recorded.
+    Clear,
 }
 
 impl Command {
-    fn to_bits(self) -> u64 {
+    /// The bit pattern this command crosses the queue as: a tag naming the
+    /// command, and a payload carrying what it says.
+    #[must_use]
+    pub fn to_bits(self) -> u64 {
         let (tag, payload) = match self {
-            Self::SetArmed(armed) => (ARMED, u32::from(armed)),
+            Self::SetTransport(transport) => (TRANSPORT, transport_bits(transport)),
             Self::SetMuted(muted) => (MUTED, u32::from(muted)),
             Self::SetGain(gain) => (GAIN, gain.to_bits()),
+            Self::Undo => (UNDO, NO_PAYLOAD),
+            Self::Clear => (CLEAR, NO_PAYLOAD),
         };
         (tag << TAG_SHIFT) | u64::from(payload)
     }
 
-    fn from_bits(bits: u64) -> Option<Self> {
+    /// The command a bit pattern names, or `None` where it names none.
+    ///
+    /// Exactly what [`to_bits`](Self::to_bits) produces is accepted: a tag no
+    /// command carries, or a payload no command of that tag would ever hold, is
+    /// refused rather than guessed at. The callback applying the result is the
+    /// reason — a guess there is a state the player never asked for.
+    #[must_use]
+    pub fn from_bits(bits: u64) -> Option<Self> {
         let payload = bits as u32;
         match bits >> TAG_SHIFT {
-            ARMED => Some(Self::SetArmed(payload != 0)),
-            MUTED => Some(Self::SetMuted(payload != 0)),
+            TRANSPORT => transport_from_bits(payload).map(Self::SetTransport),
+            MUTED if payload <= 1 => Some(Self::SetMuted(payload != 0)),
             GAIN => Some(Self::SetGain(f32::from_bits(payload))),
+            UNDO if payload == NO_PAYLOAD => Some(Self::Undo),
+            CLEAR if payload == NO_PAYLOAD => Some(Self::Clear),
             _ => None,
         }
+    }
+}
+
+fn transport_bits(transport: Transport) -> u32 {
+    match transport {
+        Transport::Idle => 0,
+        Transport::Recording => 1,
+        Transport::Playing => 2,
+        Transport::Overdubbing => 3,
+        Transport::Stopped => 4,
+    }
+}
+
+fn transport_from_bits(payload: u32) -> Option<Transport> {
+    match payload {
+        0 => Some(Transport::Idle),
+        1 => Some(Transport::Recording),
+        2 => Some(Transport::Playing),
+        3 => Some(Transport::Overdubbing),
+        4 => Some(Transport::Stopped),
+        _ => None,
     }
 }
 
