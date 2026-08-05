@@ -7,8 +7,8 @@
 //! own transport would drift from the buttons.
 //!
 //! The input gain and its mute are held here for the first of those reasons,
-//! and forwarded as commands by whatever composes the page. The transport is
-//! sent from here instead, being the one the playhead comes back from.
+//! and go down the same queue the transport does: the page owns what the
+//! player asked for, and the engine is told rather than read.
 //!
 //! Nothing here names a key, a terminal or an escape sequence. The page is
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
@@ -31,6 +31,7 @@ const MUTE_COLUMN: usize = 12;
 const ARMED: &str = "ARMED";
 const MUTED: &str = "MUTE";
 const DECIBELS_PER_DETENT: f32 = 1.0;
+const UNITY_DECIBELS: f32 = 0.0;
 const DECIBELS_PER_DECADE: f32 = 20.0;
 const FLOOR_DECIBELS: f32 = -60.0;
 const CEILING_DECIBELS: f32 = 12.0;
@@ -106,7 +107,9 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 /// ```
 pub struct LooperPage {
     transport: Transport,
-    ordered: Transport,
+    ordered_transport: Transport,
+    ordered_decibels: f32,
+    ordered_muted: bool,
     commands: CommandSender,
     position: PositionReader,
     elapsed: SampleClockReader,
@@ -128,12 +131,14 @@ impl LooperPage {
     ) -> Self {
         Self {
             transport: Transport::default(),
-            ordered: Transport::default(),
+            ordered_transport: Transport::default(),
+            ordered_decibels: UNITY_DECIBELS,
+            ordered_muted: false,
             taps: TapTempo::new(elapsed.sample_rate()),
             commands,
             position,
             elapsed,
-            decibels: 0.0,
+            decibels: UNITY_DECIBELS,
             muted: false,
         }
     }
@@ -161,7 +166,7 @@ impl LooperPage {
     }
 
     fn order_transport(&mut self) {
-        if self.ordered == self.transport {
+        if self.ordered_transport == self.transport {
             return;
         }
 
@@ -170,8 +175,34 @@ impl LooperPage {
             .send(Command::SetTransport(self.transport))
             .is_ok()
         {
-            self.ordered = self.transport;
+            self.ordered_transport = self.transport;
         }
+    }
+
+    fn order_gain(&mut self) {
+        if self.ordered_decibels == self.decibels {
+            return;
+        }
+
+        if self.commands.send(Command::SetGain(self.gain())).is_ok() {
+            self.ordered_decibels = self.decibels;
+        }
+    }
+
+    fn order_mute(&mut self) {
+        if self.ordered_muted == self.muted {
+            return;
+        }
+
+        if self.commands.send(Command::SetMuted(self.muted)).is_ok() {
+            self.ordered_muted = self.muted;
+        }
+    }
+
+    fn order_the_engine(&mut self) {
+        self.order_transport();
+        self.order_gain();
+        self.order_mute();
     }
 
     /// What the looper is doing.
@@ -203,8 +234,7 @@ impl LooperPage {
 
     /// The input gain as a linear multiplier, with `1.0` at unity.
     ///
-    /// Public for the reason [`transport`](Self::transport) is: a composition
-    /// holding this page and a command queue forwards it as
+    /// What the page orders as
     /// [`Command::SetGain`](crate::audio::Command::SetGain), which carries a
     /// multiplier rather than a scale reading.
     pub fn gain(&self) -> f32 {
@@ -213,7 +243,7 @@ impl LooperPage {
 
     /// Whether the player has muted the input.
     ///
-    /// Forwarded as [`Command::SetMuted`](crate::audio::Command::SetMuted), and
+    /// Ordered as [`Command::SetMuted`](crate::audio::Command::SetMuted), and
     /// kept apart from the gain so that unmuting returns to the level that was
     /// set rather than to unity.
     pub const fn muted(&self) -> bool {
@@ -242,6 +272,7 @@ impl Page for LooperPage {
         } = event
         {
             self.muted = !self.muted;
+            self.order_mute();
             return;
         }
 
@@ -255,6 +286,7 @@ impl Page for LooperPage {
                 Turn::Clockwise => DECIBELS_PER_DETENT,
                 Turn::Anticlockwise => -DECIBELS_PER_DETENT,
             });
+            self.order_gain();
             return;
         }
 
@@ -285,11 +317,11 @@ impl Page for LooperPage {
             .answering(Encoder::Main)
     }
 
-    /// The transport is ordered again here where the queue was full when it was
-    /// pressed, an order the engine never took leaving the two disagreeing for
-    /// as long as the run lasts.
+    /// Every control is ordered again here where the queue was full when it was
+    /// moved, an order the engine never took leaving the two disagreeing for as
+    /// long as the run lasts.
     fn draw(&mut self, mut region: Region<'_>) {
-        self.order_transport();
+        self.order_the_engine();
         let position = self.position.read();
 
         region.write(0, STATE_ROW, named(self.transport));
