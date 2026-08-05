@@ -12,23 +12,32 @@
 //!
 //! [`xrun_counter`] carries the news that the boundary failed, which none of
 //! the others can report: the samples a dropout costs are gone.
-//! [`headroom_meter`] carries how close it came to failing, which is the reading
-//! that is still useful once a count has stopped rising.
+//!
+//! [`fault_channel`] carries the news that the device did. That one outlives
+//! the stream it came from, so [`DeviceLink`] holds the pieces needed to open
+//! another and is what the rest of the application talks to.
+//!
+//! [`headroom_meter`] carries how close the boundary came to failing, which is
+//! the reading that is still useful once a count has stopped rising.
 
 use std::fmt;
 
 mod command;
 mod cpal_backend;
+mod fault;
 mod headroom;
 mod level;
+mod link;
 mod passthrough;
 mod ring;
 mod xrun;
 
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
+pub use fault::{FaultReader, FaultReporter, fault_channel};
 pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
+pub use link::{AudioState, DeviceLink};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};
@@ -199,6 +208,15 @@ pub trait DuplexStream {
     /// so a stopped stream keeps reporting the window it stopped in.
     fn headroom(&self) -> Headroom;
 
+    /// Why the device failed, or `None` while it has not.
+    ///
+    /// This is the fault a callback reported, latched and read here rather than
+    /// returned from anything: a device goes away between calls, not during
+    /// one, so there is no method for it to fail. The first fault is the one
+    /// kept, and it is kept for the life of the stream — a stream that has
+    /// faulted is finished, and [`DeviceLink`] is what opens another.
+    fn fault(&self) -> Option<DeviceError>;
+
     /// Start calling back.
     ///
     /// # Errors
@@ -288,9 +306,13 @@ impl AudioBackend for NullBackend {
             return Err(DeviceError::UnsupportedConfig);
         }
 
+        let (reporter, faults) = fault_channel();
+
         Ok(NullStream {
             config: self.granted,
             state: StreamState::Stopped,
+            reporter,
+            faults,
         })
     }
 }
@@ -299,6 +321,23 @@ impl AudioBackend for NullBackend {
 pub struct NullStream {
     config: StreamConfig,
     state: StreamState,
+    reporter: FaultReporter,
+    faults: FaultReader,
+}
+
+impl NullStream {
+    /// Report `error` against this stream, as a real device's error callback
+    /// would.
+    ///
+    /// A device cannot be unplugged from a test, so this stands in for the
+    /// unplugging. It is public for the same reason [`NullBackend`] is: the
+    /// recovery path is the part of device loss that has to work, and it would
+    /// otherwise be exercisable only where there is hardware to pull out.
+    ///
+    /// Takes `&self`, because that is what an error callback has.
+    pub fn fail(&self, error: DeviceError) {
+        self.reporter.report(error);
+    }
 }
 
 impl DuplexStream for NullStream {
@@ -326,6 +365,12 @@ impl DuplexStream for NullStream {
     /// [`Headroom::IDLE`].
     fn headroom(&self) -> Headroom {
         Headroom::IDLE
+    }
+
+    /// Nothing, until [`fail`](Self::fail) says otherwise: a device that does
+    /// not exist cannot go away on its own.
+    fn fault(&self) -> Option<DeviceError> {
+        self.faults.read()
     }
 
     fn start(&mut self) -> Result<(), DeviceError> {
