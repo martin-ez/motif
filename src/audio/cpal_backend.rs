@@ -4,9 +4,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, LevelReader, Levels,
-    StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, level_meter, passthrough,
-    xrun_counter,
+    AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, FaultReader, LevelReader,
+    Levels, StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, fault_channel,
+    level_meter, passthrough, xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -197,6 +197,9 @@ impl AudioBackend for CpalBackend {
         );
         let (mut level_writer, levels) = level_meter();
         let (mut overruns, mut underruns, xruns) = xrun_counter();
+        let (reporter, faults) = fault_channel();
+        let input_faults = reporter.clone();
+        let output_faults = reporter;
 
         let input_stream = input
             .build_input_stream_raw(
@@ -209,7 +212,7 @@ impl AudioBackend for CpalBackend {
                         overruns.captured(passthrough_input.capture(samples), offered);
                     }
                 },
-                |_| {},
+                move |failed| input_faults.report(classify(&failed)),
                 None,
             )
             .map_err(|e| classify(&e))?;
@@ -224,7 +227,7 @@ impl AudioBackend for CpalBackend {
                         underruns.supplied(passthrough_output.render(samples), wanted);
                     }
                 },
-                |_| {},
+                move |failed| output_faults.report(classify(&failed)),
                 None,
             )
             .map_err(|e| classify(&e))?;
@@ -248,6 +251,7 @@ impl AudioBackend for CpalBackend {
             output: output_stream,
             levels,
             xruns,
+            faults,
         })
     }
 }
@@ -260,6 +264,7 @@ pub struct CpalStream {
     output: cpal::Stream,
     levels: LevelReader,
     xruns: XrunReader,
+    faults: FaultReader,
 }
 
 impl DuplexStream for CpalStream {
@@ -271,9 +276,10 @@ impl DuplexStream for CpalStream {
         self.config
     }
 
-    /// What [`start`](Self::start) and [`stop`](Self::stop) did. It is not a
-    /// reading of the device: a device that goes away while running is reported
-    /// through the stream's error callback, which this type does not observe.
+    /// What [`start`](Self::start) and [`stop`](Self::stop) did, and not a
+    /// reading of the device — a stream whose device went away while running
+    /// still reports [`StreamState::Running`]. [`fault`](Self::fault) is what
+    /// answers whether the device is still there.
     fn state(&self) -> StreamState {
         self.state
     }
@@ -289,6 +295,14 @@ impl DuplexStream for CpalStream {
     /// here — the callback is simply not called.
     fn xruns(&self) -> Xruns {
         self.xruns.read()
+    }
+
+    /// Whichever of the two streams noticed first. The input and the output are
+    /// separate `cpal` streams with an error callback each, and a device that
+    /// serves both fails on both — so they report into one latch and the first
+    /// report is the one kept.
+    fn fault(&self) -> Option<DeviceError> {
+        self.faults.read()
     }
 
     /// Both streams are acted on before either error is returned, so one of
