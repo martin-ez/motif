@@ -34,11 +34,8 @@ impl Shell {
     }
 }
 
-fn last_row_above_the_legend() -> usize {
-    DeviceProfile::TARGET
-        .screen
-        .rows
-        .saturating_sub(Legend::ROWS + 1)
+fn last_row() -> usize {
+    DeviceProfile::TARGET.screen.rows.saturating_sub(1)
 }
 
 fn write_right(frame: &mut Frame, row: usize, text: &str) {
@@ -69,7 +66,7 @@ impl App for Shell {
         let flow = self.looper.draw(frame);
 
         write_right(frame, 0, NAME);
-        write_right(frame, last_row_above_the_legend(), QUIT);
+        write_right(frame, last_row(), QUIT);
 
         flow
     }

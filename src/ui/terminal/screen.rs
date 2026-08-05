@@ -10,8 +10,8 @@ use std::io::{self, Stdin, Stdout, Write};
 use std::mem::MaybeUninit;
 
 use super::{KeyReader, Viewport};
-use crate::device::{Control, DeviceProfile};
-use crate::ui::{ControlEvent, Controls, Frame, Hint, RenderError, Renderer};
+use crate::device::Control;
+use crate::ui::{ControlEvent, Controls, Frame, Hint, Panel, RenderError, Renderer};
 
 const ENTER_ALTERNATE_SCREEN: &str = "\u{1b}[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\u{1b}[?1049l";
@@ -84,14 +84,13 @@ fn window_size() -> Option<(usize, usize)> {
 }
 
 fn centred_origin() -> (usize, usize) {
-    let screen = DeviceProfile::TARGET.screen;
     let Some((columns, rows)) = window_size() else {
         return (0, 0);
     };
 
     (
-        columns.saturating_sub(screen.columns + 2) / 2,
-        rows.saturating_sub(screen.rows + 2) / 2,
+        columns.saturating_sub(Viewport::<Stdout>::COLUMNS) / 2,
+        rows.saturating_sub(Viewport::<Stdout>::ROWS) / 2,
     )
 }
 
@@ -184,6 +183,10 @@ impl Renderer for CentredScreen<'_> {
         self.viewport.place(column, row);
         self.viewport.render(frame)
     }
+
+    fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
+        self.viewport.show_panel(panel)
+    }
 }
 
 impl Controls for TerminalScreen {
@@ -199,6 +202,10 @@ impl Controls for TerminalScreen {
 impl Renderer for TerminalScreen {
     fn render(&mut self, frame: &Frame) -> Result<(), RenderError> {
         self.writer.render(frame)
+    }
+
+    fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
+        self.writer.show_panel(panel)
     }
 }
 

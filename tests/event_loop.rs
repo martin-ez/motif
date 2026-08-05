@@ -8,12 +8,11 @@ use std::time::{Duration, Instant};
 use motif::device::{Button, DeviceProfile};
 use motif::ui::{
     App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, Legend,
-    NullRenderer, RenderError, Renderer, ScriptedClock, ScriptedControls,
+    NullRenderer, Panel, RenderError, Renderer, ScriptedClock, ScriptedControls,
 };
 
 /// The edge of a key, which is drawn for every control whether the page answers
-/// it or not, so a panel on the screen can be told from anything else drawn
-/// there.
+/// it or not, so a picture of the panel can be told from anything else drawn.
 const KEY_EDGE: char = '┌';
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
@@ -112,6 +111,10 @@ impl Patient {
     fn rendered(&self) -> Option<&Frame> {
         self.screen.rendered()
     }
+
+    fn shown(&self) -> Option<&Panel> {
+        self.screen.shown()
+    }
 }
 
 impl Renderer for Patient {
@@ -122,6 +125,10 @@ impl Renderer for Patient {
             .ok_or(RenderError::Unavailable)?;
 
         self.screen.render(frame)
+    }
+
+    fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
+        self.screen.show_panel(panel)
     }
 }
 
@@ -398,10 +405,11 @@ fn a_screen_that_cannot_be_written_is_not_drawn_again() {
     assert_eq!(app.drawn, 1);
 }
 
-/// An application that draws over the rows the legend keeps for itself.
-struct Covering;
+/// An application that draws in the last row of the screen, which is the row a
+/// legend drawn into the frame would take first.
+struct Filling;
 
-impl App for Covering {
+impl App for Filling {
     fn control(&mut self, _event: ControlEvent) -> Flow {
         Flow::Continue
     }
@@ -434,8 +442,35 @@ fn text_of(frame: &Frame) -> String {
     text
 }
 
+fn picture_of(panel: &Panel) -> String {
+    let mut text = String::new();
+
+    for row in 0..Panel::ROWS {
+        for column in 0..Panel::COLUMNS {
+            text.push(panel.get(column, row).unwrap_or(Cell::BLANK).glyph());
+        }
+        text.push('\n');
+    }
+
+    text
+}
+
 #[test]
-fn a_run_puts_what_the_page_declares_on_the_screen() {
+fn a_run_hands_the_screen_what_the_page_declares() {
+    let mut app = Page::lasting(1);
+    let mut controls = ScriptedControls::new([]);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    let shown = screen.shown().expect("the panel was shown");
+    assert!(picture_of(shown).contains(KEY_EDGE));
+}
+
+#[test]
+fn the_panel_is_shown_beside_the_frame_rather_than_in_it() {
     let mut app = Page::lasting(1);
     let mut controls = ScriptedControls::new([]);
     let mut screen = Patient::accepting(FRAMES_ACCEPTED);
@@ -445,12 +480,12 @@ fn a_run_puts_what_the_page_declares_on_the_screen() {
         .expect("the screen accepts the frames this run draws");
 
     let drawn = screen.rendered().expect("a frame was drawn");
-    assert!(text_of(drawn).contains(KEY_EDGE));
+    assert!(!text_of(drawn).contains(KEY_EDGE));
 }
 
 #[test]
-fn the_legend_is_drawn_over_what_the_page_put_in_its_rows() {
-    let mut app = Covering;
+fn the_last_row_of_the_screen_is_the_page_s_to_draw_in() {
+    let mut app = Filling;
     let mut controls = ScriptedControls::new([]);
     let mut screen = Patient::accepting(FRAMES_ACCEPTED);
 
@@ -459,7 +494,20 @@ fn the_legend_is_drawn_over_what_the_page_put_in_its_rows() {
         .expect("the screen accepts the frames this run draws");
 
     let drawn = screen.rendered().expect("a frame was drawn");
-    assert!(!text_of(drawn).contains('#'));
+    assert!(text_of(drawn).contains('#'));
+}
+
+#[test]
+fn a_run_that_draws_nothing_shows_no_panel() {
+    let mut app = Page::quitting_on(Button::Stop);
+    let mut controls = ScriptedControls::new([pressed(Button::Stop)]);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    assert_eq!(screen.shown(), None);
 }
 
 #[test]

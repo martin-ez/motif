@@ -55,13 +55,8 @@ impl ListPage {
     /// How many rows of the list are on screen at once.
     ///
     /// The page fills the frame it is handed, so this is the screen's height
-    /// less the rows the panel takes along the bottom, and not a number of its
-    /// own. Counting the panel's rows in would scroll the selection into cells
-    /// the panel is drawn over, where it cannot be seen.
-    pub const VISIBLE_ROWS: usize = DeviceProfile::TARGET
-        .screen
-        .rows
-        .saturating_sub(Legend::ROWS);
+    /// and not a number of its own.
+    pub const VISIBLE_ROWS: usize = DeviceProfile::TARGET.screen.rows;
 
     /// A page listing `rows`, with the first of them selected.
     pub fn new(rows: impl IntoIterator<Item = impl Into<String>>) -> Self {

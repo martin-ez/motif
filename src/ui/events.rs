@@ -105,9 +105,9 @@ pub trait App {
     /// this is the one place in a frame where an application is expected to
     /// spend it.
     ///
-    /// The whole frame is the application's to draw into, but the bottom
-    /// [`Legend::ROWS`] rows are drawn over afterwards with what
-    /// [`legend`](Self::legend) declared.
+    /// The whole frame is the application's to draw into, and nothing is drawn
+    /// over it afterwards: what [`legend`](Self::legend) declares goes to the
+    /// screen as a picture of its own.
     fn draw(&mut self, frame: &mut Frame) -> Flow;
 }
 
@@ -180,15 +180,17 @@ impl<K: Clock> EventLoop<K> {
     /// drawing to `screen`.
     ///
     /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws once,
-    /// draws the application's [`Legend`] over the bottom of that, renders, and
-    /// then waits out the rest of its budget. An event arriving mid-frame is
-    /// handled by the next one: the frame boundary is what makes a draw see one
-    /// state rather than a state that changed underneath it.
+    /// renders that, hands the screen the panel the application's [`Legend`]
+    /// makes, and then waits out the rest of its budget. An event arriving
+    /// mid-frame is handled by the next one: the frame boundary is what makes a
+    /// draw see one state rather than a state that changed underneath it.
     ///
-    /// The legend is drawn here because this is the only place holding both
+    /// The picture is made here because this is the only place holding both
     /// halves of it: the application knows what its controls mean and the panel
     /// knows what to call them, and neither can be shown the other without one
-    /// of them learning something it must not know.
+    /// of them learning something it must not know. Where it then goes — beside
+    /// the screen, or nowhere, on a device whose keys are real — is the
+    /// screen's to say.
     ///
     /// An exit from [`App::control`] ends the run without drawing, because the
     /// application has just said there is nothing further to show. An exit from
@@ -220,8 +222,8 @@ impl<K: Clock> EventLoop<K> {
 
             self.frame = Frame::blank();
             let flow = app.draw(&mut self.frame);
-            app.legend().draw(&mut self.frame, controls);
             screen.render(&self.frame)?;
+            screen.show_panel(&app.legend().picture(controls))?;
             report.frames += 1;
 
             let spent = self.clock.now().duration_since(started);

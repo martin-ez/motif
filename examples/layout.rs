@@ -17,8 +17,8 @@
 //! the only way to answer it is to lay the three out and look. The real widgets
 //! are built elsewhere; what is measured here is the space they have to fit in.
 //!
-//! The bottom [`Legend::ROWS`] rows are the panel's, so what is measured above
-//! them is the room a page actually has.
+//! The keys are drawn under the screen rather than on it, as they sit on the
+//! device, so every row inside the box is a row a page actually has.
 //!
 //! Everything drawn comes from a type that already exists — [`Transport`] for
 //! the indicators, [`Levels`] for the meter, [`LoopBuffer`] for the position —
@@ -41,7 +41,8 @@ use motif::audio::Levels;
 use motif::device::{Button, DeviceProfile, Encoder};
 use motif::looper::{LoopBuffer, Transport};
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, RenderError, TerminalScreen,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, Panel, RenderError,
+    TerminalScreen,
 };
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
@@ -180,15 +181,16 @@ impl Layout {
         draw_meter(frame, 3, self.levels);
         draw_position(frame, 5, &self.loop_buffer);
         draw_transport(frame, 8, self.transport);
-
-        rule(frame, SCREEN.rows - Legend::ROWS - 1);
     }
 
     fn page(&self) -> Frame {
         let mut frame = Frame::blank();
         self.draw_into(&mut frame);
-        self.legend().draw(&mut frame, &KeyReader::new(io::empty()));
         frame
+    }
+
+    fn panel(&self) -> Panel {
+        self.legend().picture(&KeyReader::new(io::empty()))
     }
 }
 
@@ -211,9 +213,10 @@ impl App for Layout {
     }
 }
 
-fn print_plain(frame: &Frame) -> io::Result<()> {
+fn print_plain(frame: &Frame, panel: &Panel) -> io::Result<()> {
     let mut out = io::stdout();
     let span = String::from(RULE).repeat(SCREEN.columns);
+    let margin = " ".repeat((SCREEN.columns + 2 - Panel::COLUMNS) / 2);
 
     writeln!(out, "┌{span}┐")?;
     for row in 0..SCREEN.rows {
@@ -223,6 +226,15 @@ fn print_plain(frame: &Frame) -> io::Result<()> {
         writeln!(out, "│{line}│")?;
     }
     writeln!(out, "└{span}┘")?;
+    writeln!(out)?;
+
+    for row in 0..Panel::ROWS {
+        let keys: String = (0..Panel::COLUMNS)
+            .map(|column| panel.get(column, row).unwrap_or(Cell::BLANK).glyph())
+            .collect();
+        writeln!(out, "{margin}{}", keys.trim_end())?;
+    }
+
     writeln!(out, "\n{} columns x {} rows", SCREEN.columns, SCREEN.rows)
 }
 
@@ -242,5 +254,5 @@ fn main() -> Result<(), RenderError> {
         return show_in_terminal(&mut layout);
     }
 
-    print_plain(&layout.page()).map_err(|_| RenderError::WriteFailed)
+    print_plain(&layout.page(), &layout.panel()).map_err(|_| RenderError::WriteFailed)
 }

@@ -1,4 +1,4 @@
-//! The panel as the screen draws it: which controls do something here.
+//! The panel as a screen without one draws it: which controls do something here.
 //!
 //! Two halves meet here and neither knows the other. A page declares which
 //! controls it answers; a backend says what to call the way each one is
@@ -15,9 +15,14 @@
 //! controls in prose can go on being unreadable, where one that says only
 //! *which* controls are live has to make the rest obvious where the player is
 //! already looking.
+//!
+//! The picture is a surface of its own rather than part of a [`Frame`]. The
+//! device has the keys under the player's hands and the screen shows the page
+//! alone, so a picture drawn into the frame would cost a page rows that the
+//! hardware never charges it.
 
-use crate::device::{Button, Control, DeviceProfile, Encoder};
-use crate::ui::{Cell, Controls, Frame, Hint};
+use crate::device::{Button, Control, Encoder};
+use crate::ui::{Cell, Controls, Hint};
 
 /// The four corners and two sides a key is drawn with.
 struct Edges {
@@ -69,12 +74,15 @@ const KEY_WIDTH: usize = 5;
 const ENCODER_WIDTH: usize = 7;
 const KEY_ROWS: usize = 3;
 
-const CROSS_LEFT_AT: usize = 8;
+const CROSS_LEFT_AT: usize = 0;
 const CROSS_MIDDLE_AT: usize = CROSS_LEFT_AT + KEY_WIDTH + 1;
 const CROSS_RIGHT_AT: usize = CROSS_MIDDLE_AT + KEY_WIDTH + 1;
 const GRID_AT: usize = CROSS_RIGHT_AT + KEY_WIDTH + 3;
 const GRID_WIDE: usize = 4;
 const ENCODER_AT: usize = GRID_AT + GRID_WIDE * KEY_WIDTH + 3;
+
+const PANEL_COLUMNS: usize = ENCODER_AT + ENCODER_WIDTH;
+const PANEL_ROWS: usize = KEY_ROWS * 2;
 
 const SCENES: [Control; GRID_WIDE] = [
     Control::Button(Button::FirstScene),
@@ -90,8 +98,76 @@ const ACTIONS: [Control; GRID_WIDE] = [
     Control::Button(Button::Shift),
 ];
 
+/// A picture of the panel, drawn beside a screen by a backend that has no
+/// panel of its own.
+///
+/// A surface rather than a region of a [`Frame`](crate::ui::Frame): where it
+/// goes is the backend's to decide, and a backend whose keys are real hardware
+/// puts it nowhere at all.
+///
+/// Addressed by column and then row, both counted from zero at the top left,
+/// as a frame is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Panel {
+    cells: [Cell; PANEL_COLUMNS * PANEL_ROWS],
+}
+
+impl Panel {
+    /// How wide the picture is.
+    ///
+    /// The keys are what fix it: the navigation cross, the scene buttons with
+    /// the transport under them, and the encoder beside, each key an edge with
+    /// a glyph inside it. Nothing is padded out to a screen's width, because
+    /// the picture does not know what it will be drawn next to.
+    pub const COLUMNS: usize = PANEL_COLUMNS;
+
+    /// How tall the picture is.
+    ///
+    /// A key is an edge with a glyph inside it, which is three rows, and the
+    /// panel is two rows of keys deep wherever one looks at it. No key shares
+    /// an edge with the key beside it, because a shared edge is one cell and
+    /// the two keys it belongs to may not be drawn the same weight.
+    pub const ROWS: usize = PANEL_ROWS;
+
+    /// A picture of nothing at all.
+    pub const fn blank() -> Self {
+        Self {
+            cells: [Cell::BLANK; PANEL_COLUMNS * PANEL_ROWS],
+        }
+    }
+
+    /// The cell at `column` and `row`, or `None` if that is off the picture.
+    pub fn get(&self, column: usize, row: usize) -> Option<Cell> {
+        Self::position(column, row).map(|position| self.cells[position])
+    }
+
+    /// Every cell, row by row from the top.
+    pub fn cells(&self) -> &[Cell] {
+        &self.cells
+    }
+
+    fn set(&mut self, column: usize, row: usize, cell: Cell) {
+        if let Some(position) = Self::position(column, row) {
+            self.cells[position] = cell;
+        }
+    }
+
+    fn position(column: usize, row: usize) -> Option<usize> {
+        if column >= Self::COLUMNS || row >= Self::ROWS {
+            return None;
+        }
+        Some(row * Self::COLUMNS + column)
+    }
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Self::blank()
+    }
+}
+
 fn centred(
-    frame: &mut Frame,
+    panel: &mut Panel,
     row: usize,
     at: usize,
     width: usize,
@@ -101,30 +177,30 @@ fn centred(
     let offset = (width - count.min(width)) / 2;
 
     for (place, glyph) in glyphs.take(width).enumerate() {
-        frame.set(at + offset + place, row, Cell::new(glyph));
+        panel.set(at + offset + place, row, Cell::new(glyph));
     }
 }
 
-fn span(frame: &mut Frame, row: usize, at: usize, width: usize, edges: &Edges, closing: bool) {
+fn span(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, closing: bool) {
     let (left, right) = match closing {
         false => (edges.top_left, edges.top_right),
         true => (edges.bottom_left, edges.bottom_right),
     };
 
-    frame.set(at, row, Cell::new(left));
+    panel.set(at, row, Cell::new(left));
     for column in 1..width.saturating_sub(1) {
-        frame.set(at + column, row, Cell::new(edges.horizontal));
+        panel.set(at + column, row, Cell::new(edges.horizontal));
     }
-    frame.set(at + width.saturating_sub(1), row, Cell::new(right));
+    panel.set(at + width.saturating_sub(1), row, Cell::new(right));
 }
 
-fn face(frame: &mut Frame, row: usize, at: usize, width: usize, edges: &Edges, hint: Option<Hint>) {
-    frame.set(at, row, Cell::new(edges.vertical));
-    frame.set(at + width.saturating_sub(1), row, Cell::new(edges.vertical));
+fn face(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, hint: Option<Hint>) {
+    panel.set(at, row, Cell::new(edges.vertical));
+    panel.set(at + width.saturating_sub(1), row, Cell::new(edges.vertical));
 
     if let Some(hint) = hint {
         centred(
-            frame,
+            panel,
             row,
             at + 1,
             width.saturating_sub(2),
@@ -157,23 +233,6 @@ pub struct Legend {
 }
 
 impl Legend {
-    /// How many rows a legend takes, along the bottom of the frame.
-    ///
-    /// It is permanent rather than an overlay a player summons: a legend that
-    /// has to be asked for is one more thing to know about before it can help,
-    /// and the pages this is drawn for are read while both hands are busy.
-    ///
-    /// Six rows is what the panel picture costs. A key is an edge with a glyph
-    /// inside it, which is three rows, and the panel is two rows of keys deep
-    /// wherever one looks at it: the navigation cross, and the scene buttons
-    /// with the transport under them. No key shares an edge with the key beside
-    /// it, because a shared edge is one cell and the two keys it belongs to may
-    /// not be drawn the same weight.
-    ///
-    /// A page draws into the whole frame and the legend is drawn over these
-    /// rows afterwards, so what a page puts here does not survive the frame.
-    pub const ROWS: usize = KEY_ROWS * 2;
-
     /// A legend for a page that answers nothing yet.
     pub const fn blank() -> Self {
         Self {
@@ -192,79 +251,80 @@ impl Legend {
         self.answered[control.into().position()]
     }
 
-    /// Draw the panel along the bottom [`ROWS`](Self::ROWS) rows of `frame`,
-    /// each key wearing the glyph `panel` reaches it by and nothing else.
+    /// The picture of the panel this page makes, each key wearing the glyph
+    /// `controls` reaches it by and nothing else.
     ///
     /// A key the page answers is drawn with a heavy edge and one it ignores
-    /// with a light one, so both are on the screen and the picture is a map of
-    /// the panel wherever the player is. Every key keeps a place of its own, so
+    /// with a light one, so both are in the picture and it is a map of the
+    /// panel wherever the player is. Every key keeps a place of its own, so
     /// nothing moves from page to page and only the weight changes. The encoder
     /// is rounded, never square, so that it does not read as a button — and it
     /// lights by doubling its edge rather than thickening it, there being no
     /// heavy rounded corner to draw.
     ///
-    /// The rows are cleared first, so nothing drawn underneath shows through
-    /// the gaps between keys.
-    pub fn draw(&self, frame: &mut Frame, panel: &impl Controls) {
-        let screen = DeviceProfile::TARGET.screen;
-        let top = screen.rows.saturating_sub(Self::ROWS);
+    /// ```
+    /// use motif::device::Button;
+    /// use motif::ui::{Legend, Panel, ScriptedControls};
+    ///
+    /// let picture = Legend::blank().answering(Button::Play).picture(&ScriptedControls::new([]));
+    ///
+    /// assert_eq!(picture.cells().len(), Panel::COLUMNS * Panel::ROWS);
+    /// ```
+    pub fn picture(&self, controls: &impl Controls) -> Panel {
+        let mut panel = Panel::blank();
 
-        for row in top..screen.rows {
-            for column in 0..screen.columns {
-                frame.set(column, row, Cell::BLANK);
-            }
-        }
-
-        self.draw_cross(frame, top, panel);
-        self.draw_grid(frame, top, panel);
+        self.draw_cross(&mut panel, controls);
+        self.draw_grid(&mut panel, controls);
         self.draw_key(
-            frame,
-            top,
+            &mut panel,
+            0,
             ENCODER_AT,
             ENCODER_WIDTH,
             Control::Encoder(Encoder::Main),
-            panel,
+            controls,
         );
+
+        panel
     }
 
-    fn draw_cross(&self, frame: &mut Frame, top: usize, panel: &impl Controls) {
-        self.draw_key(frame, top, CROSS_MIDDLE_AT, KEY_WIDTH, Button::Up, panel);
+    fn draw_cross(&self, panel: &mut Panel, controls: &impl Controls) {
+        self.draw_key(panel, 0, CROSS_MIDDLE_AT, KEY_WIDTH, Button::Up, controls);
 
         for (at, button) in [
             (CROSS_LEFT_AT, Button::Left),
             (CROSS_MIDDLE_AT, Button::Down),
             (CROSS_RIGHT_AT, Button::Right),
         ] {
-            self.draw_key(frame, top + KEY_ROWS, at, KEY_WIDTH, button, panel);
+            self.draw_key(panel, KEY_ROWS, at, KEY_WIDTH, button, controls);
         }
     }
 
-    fn draw_grid(&self, frame: &mut Frame, top: usize, panel: &impl Controls) {
+    fn draw_grid(&self, panel: &mut Panel, controls: &impl Controls) {
         for (place, control) in SCENES.into_iter().enumerate() {
             let at = GRID_AT + place * KEY_WIDTH;
-            self.draw_key(frame, top, at, KEY_WIDTH, control, panel);
+            self.draw_key(panel, 0, at, KEY_WIDTH, control, controls);
         }
         for (place, control) in ACTIONS.into_iter().enumerate() {
             let at = GRID_AT + place * KEY_WIDTH;
-            self.draw_key(frame, top + KEY_ROWS, at, KEY_WIDTH, control, panel);
+            self.draw_key(panel, KEY_ROWS, at, KEY_WIDTH, control, controls);
         }
     }
 
     fn draw_key(
         &self,
-        frame: &mut Frame,
+        panel: &mut Panel,
         top: usize,
         at: usize,
         width: usize,
         control: impl Into<Control> + Copy,
-        panel: &impl Controls,
+        controls: &impl Controls,
     ) {
         let control = control.into();
         let edges = edges_of(control, self.answers(control));
 
-        span(frame, top, at, width, edges, false);
-        face(frame, top + 1, at, width, edges, panel.hint(control));
-        span(frame, top + 2, at, width, edges, true);
+        span(panel, top, at, width, edges, false);
+        face(panel, top + 1, at, width, edges, controls.hint(control));
+        span(panel, top + 2, at, width, edges, true);
     }
 }
 

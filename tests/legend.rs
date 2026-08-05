@@ -1,4 +1,4 @@
-//! Which controls a page answers, and the panel the screen draws from that.
+//! Which controls a page answers, and the panel a screen draws from that.
 //!
 //! The legend is where a page's declaration and a backend's glyphs meet, so this
 //! is the one thing that has to hold both without either knowing the other. No
@@ -9,10 +9,9 @@
 //! row: a key is an edge with a glyph inside it, and the arrangement of those
 //! keys is the picture of the panel.
 
-use motif::device::{Button, Control, DeviceProfile, Encoder, ScreenProfile};
-use motif::ui::{ControlEvent, Controls, Frame, Hint, Legend};
+use motif::device::{Button, Control, Encoder};
+use motif::ui::{ControlEvent, Controls, Hint, Legend, Panel};
 
-const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const LIGHT: char = '─';
 const LIGHT_WALL: char = '│';
 const HEAVY: char = '━';
@@ -66,29 +65,26 @@ impl Controls for Unlabelled {
     }
 }
 
-fn drawn(legend: &Legend, panel: &impl Controls) -> Frame {
-    let mut frame = Frame::blank();
-    legend.draw(&mut frame, panel);
-
-    frame
+fn drawn(legend: &Legend, panel: &impl Controls) -> Panel {
+    legend.picture(panel)
 }
 
-fn row_of(frame: &Frame, row: usize) -> String {
-    (0..SCREEN.columns)
-        .filter_map(|column| frame.get(column, row))
+fn row_of(panel: &Panel, row: usize) -> String {
+    (0..Panel::COLUMNS)
+        .filter_map(|column| panel.get(column, row))
         .map(|cell| cell.glyph())
         .collect()
 }
 
-fn text_of(frame: &Frame) -> String {
-    (0..SCREEN.rows)
-        .map(|row| row_of(frame, row))
+fn text_of(panel: &Panel) -> String {
+    (0..Panel::ROWS)
+        .map(|row| row_of(panel, row))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn glyph_at(frame: &Frame, column: usize, row: usize) -> char {
-    frame
+fn glyph_at(panel: &Panel, column: usize, row: usize) -> char {
+    panel
         .get(column, row)
         .map(|cell| cell.glyph())
         .unwrap_or_default()
@@ -101,21 +97,21 @@ struct At {
 
 /// Where `text` was drawn, counted in cells rather than bytes: the panel is
 /// mostly box-drawing characters, which are three bytes each and one cell each.
-fn found(frame: &Frame, text: &str) -> At {
-    (0..SCREEN.rows)
+fn found(panel: &Panel, text: &str) -> At {
+    (0..Panel::ROWS)
         .find_map(|row| {
-            let drawn = row_of(frame, row);
+            let drawn = row_of(panel, row);
             let at = drawn.find(text)?;
             Some(At {
                 row,
                 column: drawn[..at].chars().count(),
             })
         })
-        .unwrap_or_else(|| panic!("{text:?} is nowhere on the screen"))
+        .unwrap_or_else(|| panic!("{text:?} is nowhere on the panel"))
 }
 
-fn key_of(frame: &Frame, control: impl Into<Control>) -> At {
-    found(frame, &String::from(glyph_of(control)))
+fn key_of(panel: &Panel, control: impl Into<Control>) -> At {
+    found(panel, &String::from(glyph_of(control)))
 }
 
 #[test]
@@ -145,65 +141,65 @@ fn answering_a_control_twice_answers_it_once() {
 
 #[test]
 fn every_key_wears_the_glyph_that_reaches_it_answered_or_not() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let text = text_of(&frame);
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let text = text_of(&panel);
 
     for control in Control::ALL {
         assert!(
             text.contains(glyph_of(control)),
-            "{control:?} is on the panel and unnamed on the screen"
+            "{control:?} is on the panel and unnamed in the picture"
         );
     }
 }
 
 #[test]
 fn nothing_but_the_glyph_is_written_on_a_key() {
-    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
-    let key = key_of(&frame, Button::Play);
+    let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let key = key_of(&panel, Button::Play);
 
-    assert_eq!(glyph_at(&frame, key.column - 1, key.row), ' ');
-    assert_eq!(glyph_at(&frame, key.column + 1, key.row), ' ');
+    assert_eq!(glyph_at(&panel, key.column - 1, key.row), ' ');
+    assert_eq!(glyph_at(&panel, key.column + 1, key.row), ' ');
 }
 
 #[test]
 fn a_control_the_page_answers_is_drawn_with_a_heavy_edge() {
-    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
-    let key = key_of(&frame, Button::Play);
+    let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let key = key_of(&panel, Button::Play);
 
-    assert_eq!(glyph_at(&frame, key.column, key.row - 1), HEAVY);
-    assert_eq!(glyph_at(&frame, key.column, key.row + 1), HEAVY);
-    assert_eq!(glyph_at(&frame, key.column - 2, key.row), HEAVY_WALL);
-    assert_eq!(glyph_at(&frame, key.column + 2, key.row), HEAVY_WALL);
+    assert_eq!(glyph_at(&panel, key.column, key.row - 1), HEAVY);
+    assert_eq!(glyph_at(&panel, key.column, key.row + 1), HEAVY);
+    assert_eq!(glyph_at(&panel, key.column - 2, key.row), HEAVY_WALL);
+    assert_eq!(glyph_at(&panel, key.column + 2, key.row), HEAVY_WALL);
 }
 
 #[test]
 fn a_control_the_page_does_not_answer_is_drawn_light_rather_than_dropped() {
-    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
-    let key = key_of(&frame, Button::Stop);
+    let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let key = key_of(&panel, Button::Stop);
 
     assert_eq!(
-        glyph_at(&frame, key.column, key.row),
+        glyph_at(&panel, key.column, key.row),
         glyph_of(Button::Stop)
     );
-    assert_eq!(glyph_at(&frame, key.column, key.row - 1), LIGHT);
-    assert_eq!(glyph_at(&frame, key.column - 2, key.row), LIGHT_WALL);
+    assert_eq!(glyph_at(&panel, key.column, key.row - 1), LIGHT);
+    assert_eq!(glyph_at(&panel, key.column - 2, key.row), LIGHT_WALL);
 }
 
 #[test]
 fn a_navigation_key_shows_its_arrow_on_a_page_that_ignores_it() {
-    let frame = drawn(&Legend::blank(), &Lettered);
+    let panel = drawn(&Legend::blank(), &Lettered);
 
     for arrow in [Button::Up, Button::Down, Button::Left, Button::Right] {
-        let key = key_of(&frame, arrow);
+        let key = key_of(&panel, arrow);
 
-        assert_eq!(glyph_at(&frame, key.column, key.row), glyph_of(arrow));
+        assert_eq!(glyph_at(&panel, key.column, key.row), glyph_of(arrow));
     }
 }
 
 #[test]
 fn a_panel_that_labels_its_own_keys_still_says_which_are_live() {
-    let frame = drawn(&Legend::blank().answering(Button::Play), &Unlabelled);
-    let text = text_of(&frame);
+    let panel = drawn(&Legend::blank().answering(Button::Play), &Unlabelled);
+    let text = text_of(&panel);
 
     assert!(text.contains(HEAVY));
     for control in Control::ALL {
@@ -216,9 +212,9 @@ fn a_panel_that_labels_its_own_keys_still_says_which_are_live() {
 
 #[test]
 fn the_navigation_keys_are_drawn_in_the_pattern_they_sit_in() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let (up, down) = (key_of(&frame, Button::Up), key_of(&frame, Button::Down));
-    let (left, right) = (key_of(&frame, Button::Left), key_of(&frame, Button::Right));
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let (up, down) = (key_of(&panel, Button::Up), key_of(&panel, Button::Down));
+    let (left, right) = (key_of(&panel, Button::Left), key_of(&panel, Button::Right));
 
     assert_eq!(up.column, down.column);
     assert!(up.row < down.row);
@@ -230,14 +226,14 @@ fn the_navigation_keys_are_drawn_in_the_pattern_they_sit_in() {
 
 #[test]
 fn the_scene_buttons_run_left_to_right_in_a_row_of_their_own() {
-    let frame = drawn(&Legend::blank(), &Lettered);
+    let panel = drawn(&Legend::blank(), &Lettered);
     let scenes = [
         Button::FirstScene,
         Button::SecondScene,
         Button::ThirdScene,
         Button::FourthScene,
     ]
-    .map(|scene| key_of(&frame, scene));
+    .map(|scene| key_of(&panel, scene));
 
     for pair in scenes.windows(2) {
         assert_eq!(pair[0].row, pair[1].row);
@@ -247,9 +243,9 @@ fn the_scene_buttons_run_left_to_right_in_a_row_of_their_own() {
 
 #[test]
 fn the_action_keys_are_drawn_under_the_scene_buttons() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let scene = key_of(&frame, Button::FirstScene);
-    let actions = [Button::Play, Button::Stop, Button::Record].map(|action| key_of(&frame, action));
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let scene = key_of(&panel, Button::FirstScene);
+    let actions = [Button::Play, Button::Stop, Button::Record].map(|action| key_of(&panel, action));
 
     assert_eq!(actions[0].column, scene.column);
     for action in &actions {
@@ -259,9 +255,9 @@ fn the_action_keys_are_drawn_under_the_scene_buttons() {
 
 #[test]
 fn shift_is_a_key_on_the_panel_like_any_other() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let shift = key_of(&frame, Button::Shift);
-    let record = key_of(&frame, Button::Record);
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let shift = key_of(&panel, Button::Shift);
+    let record = key_of(&panel, Button::Record);
 
     assert_eq!(shift.row, record.row);
     assert!(shift.column > record.column);
@@ -269,9 +265,9 @@ fn shift_is_a_key_on_the_panel_like_any_other() {
 
 #[test]
 fn the_encoder_is_drawn_as_a_knob_rather_than_a_key() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let knob = key_of(&frame, Encoder::Main);
-    let (opens, closes) = (found(&frame, "╭"), found(&frame, "╯"));
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let knob = key_of(&panel, Encoder::Main);
+    let (opens, closes) = (found(&panel, "╭"), found(&panel, "╯"));
 
     assert_eq!(opens.row, knob.row - 1);
     assert!(opens.column < knob.column);
@@ -281,20 +277,20 @@ fn the_encoder_is_drawn_as_a_knob_rather_than_a_key() {
 
 #[test]
 fn a_knob_the_page_answers_is_drawn_doubled_rather_than_heavy() {
-    let frame = drawn(&Legend::blank().answering(Encoder::Main), &Lettered);
-    let knob = key_of(&frame, Encoder::Main);
+    let panel = drawn(&Legend::blank().answering(Encoder::Main), &Lettered);
+    let knob = key_of(&panel, Encoder::Main);
 
-    assert_eq!(glyph_at(&frame, knob.column, knob.row - 1), '═');
-    assert_eq!(glyph_at(&frame, knob.column, knob.row + 1), '═');
+    assert_eq!(glyph_at(&panel, knob.column, knob.row - 1), '═');
+    assert_eq!(glyph_at(&panel, knob.column, knob.row + 1), '═');
 }
 
 #[test]
 fn a_hint_of_several_glyphs_is_centred_on_its_key() {
-    let frame = drawn(&Legend::blank(), &Wordy);
-    let opens = found(&frame, "╭");
-    let closes = found(&frame, "╮");
+    let panel = drawn(&Legend::blank(), &Wordy);
+    let opens = found(&panel, "╭");
+    let closes = found(&panel, "╮");
     let face: String = (opens.column..=closes.column)
-        .map(|column| glyph_at(&frame, column, opens.row + 1))
+        .map(|column| glyph_at(&panel, column, opens.row + 1))
         .collect();
 
     assert_eq!(face, format!("│ ({}) │", glyph_of(Encoder::Main)));
@@ -302,37 +298,24 @@ fn a_hint_of_several_glyphs_is_centred_on_its_key() {
 
 #[test]
 fn the_cross_keys_are_evenly_spaced() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let (left, down) = (key_of(&frame, Button::Left), key_of(&frame, Button::Down));
-    let right = key_of(&frame, Button::Right);
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let (left, down) = (key_of(&panel, Button::Left), key_of(&panel, Button::Down));
+    let right = key_of(&panel, Button::Right);
 
     assert_eq!(down.column - left.column, right.column - down.column);
 }
 
 #[test]
-fn the_panel_is_centred_on_the_screen() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let drawn_columns: Vec<usize> = (0..SCREEN.columns)
-        .filter(|column| {
-            (SCREEN.rows - Legend::ROWS..SCREEN.rows)
-                .any(|row| glyph_at(&frame, *column, row) != ' ')
-        })
+fn the_picture_is_no_larger_than_the_keys_drawn_on_it() {
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let drawn_columns: Vec<usize> = (0..Panel::COLUMNS)
+        .filter(|column| (0..Panel::ROWS).any(|row| glyph_at(&panel, *column, row) != ' '))
         .collect();
-    let (leftmost, rightmost) = (
-        *drawn_columns.first().expect("the panel is drawn"),
-        *drawn_columns.last().expect("the panel is drawn"),
-    );
 
-    assert_eq!(leftmost, SCREEN.columns - 1 - rightmost);
-}
-
-#[test]
-fn the_legend_keeps_to_the_rows_it_reserves() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-
-    for row in 0..SCREEN.rows - Legend::ROWS {
-        assert_eq!(row_of(&frame, row).trim(), "", "row {row} was drawn on");
-    }
+    assert_eq!(drawn_columns.first(), Some(&0));
+    assert_eq!(drawn_columns.last(), Some(&(Panel::COLUMNS - 1)));
+    assert_ne!(row_of(&panel, 0).trim(), "");
+    assert_ne!(row_of(&panel, Panel::ROWS - 1).trim(), "");
 }
 
 #[test]
@@ -342,6 +325,22 @@ fn a_key_keeps_its_place_whether_it_is_live_or_dead() {
     let (before, after) = (key_of(&all, Button::Record), key_of(&one, Button::Record));
 
     assert_eq!((before.row, before.column), (after.row, after.column));
+}
+
+#[test]
+fn a_blank_panel_is_the_size_of_the_picture_and_empty() {
+    let blank = Panel::blank();
+
+    assert_eq!(blank.cells().len(), Panel::COLUMNS * Panel::ROWS);
+    assert_eq!(text_of(&blank).trim(), "");
+}
+
+#[test]
+fn nothing_is_drawn_past_the_edge_of_the_picture() {
+    let panel = drawn(&Legend::blank(), &Lettered);
+
+    assert_eq!(panel.get(Panel::COLUMNS, 0), None);
+    assert_eq!(panel.get(0, Panel::ROWS), None);
 }
 
 #[test]
