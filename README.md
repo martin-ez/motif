@@ -7,16 +7,27 @@ It is meant to be a sketchpad, not a DAW. The terminal is a deliberate
 constraint: it keeps UI design off the critical path and forces the interaction
 to stay simple.
 
-> **Status: nothing plays yet.** The crate is a skeleton — `cargo run` opens a
-> screen, draws the program's name 30 times a second, and quits on shift and
-> stop. What exists today is the design, the build, and the shell around them.
->
-> It wants a real terminal, since it switches one into raw mode and onto its
-> alternate screen. Run from an editor's output pane it will exit with `the
-> screen is not available` instead, which is the same path as a piped stdin.
->
-> This README describes what is here now. Work that has not happened lives in
-> [issues](https://github.com/martin-ez/motif/issues), not in prose.
+## What runs today
+
+`cargo run` opens a duplex stream on the default input and output, holds it for
+the length of the run, and puts the looper on screen. Record opens the first
+take, records again to layer over it, and drops back out of the layer; play
+closes whatever is open and runs the loop; stop halts it keeping what was
+recorded. Held with shift, play taps a pulse instead of starting one and record
+mutes the input, and the encoder moves the input gain a decibel a detent. The
+bottom row carries the device's state and the input level, and shift with stop
+ends the run.
+
+The keyboard stands in for the panel the design is aimed at, twelve buttons and
+one encoder: `z`, `x` and `c` are play, stop and record, `,` and `.` turn the
+encoder, and an upper case letter is that button held with shift.
+
+It wants a real terminal, since it switches one into raw mode and onto its
+alternate screen. Run from an editor's output pane it will exit with `the
+screen is not available` instead, which is the same path as a piped stdin.
+
+This README describes what is here now. Work that has not happened lives in
+[issues](https://github.com/martin-ez/motif/issues), not in prose.
 
 ## The bet
 
@@ -66,8 +77,12 @@ cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 scripts/check-style.sh
+scripts/check-mutants.sh
 cargo check --target aarch64-unknown-linux-gnu
 ```
+
+The mutation sweep is scoped to the diff and is the one check that can fail a
+change the others approved. CI runs it on every pull request either way.
 
 Debug builds compile dependencies at `opt-level = 2` and this crate at `1`.
 Audio code is unusable at `opt-level = 0` — the DSP path underruns the callback
@@ -78,6 +93,7 @@ and timing measurements become noise.
 ```
 src/            the crate
 tests/          every test lives here, so that tests reach only the public API
+examples/       things to run against real hardware: devices, layout, fixtures
 scripts/        house-style checks that rustc and clippy cannot express
 AGENTS.md       how this project is built; read before contributing
 ```
