@@ -23,19 +23,16 @@ thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
-/// An allocator that forwards to the system allocator and counts the calls
-/// made by the thread that makes them.
+/// An allocator that forwards to the system allocator and counts the calls made
+/// by the thread that makes them.
 ///
-/// SAFETY: every method hands its arguments to [`System`] unchanged and
-/// returns what it returns, so the contract it upholds is the one `System`
-/// already upholds. Counting touches only a thread-local `Cell<usize>`, which
-/// is const-initialised and has no destructor, so it never allocates and never
-/// re-enters the allocator.
+/// SAFETY: every method hands its arguments to [`System`] unchanged and returns
+/// what it returns, so the contract it upholds is `System`'s. Counting touches
+/// only a const-initialised thread-local `Cell<usize>` with no destructor, so it
+/// never allocates and never re-enters the allocator.
 ///
-/// Zeroed allocation is counted alongside plain allocation, because a loop
-/// buffer is a block of silence and `Vec` asks for that one pre-zeroed — a
-/// count that watched only [`GlobalAlloc::alloc`] would miss the regression
-/// this is here to catch.
+/// Zeroed allocation is counted alongside plain allocation: a loop buffer is a
+/// block of silence, which [`GlobalAlloc::alloc`] alone would miss.
 struct CountingAllocator;
 
 #[expect(
