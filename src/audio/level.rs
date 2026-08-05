@@ -3,18 +3,22 @@
 //!
 //! A meter is not a queue. The thread drawing it wants the level now, not every
 //! level since it last looked, so a block published while nobody was reading is
-//! overwritten rather than kept. That makes the whole crossing one atomic store
-//! against one atomic load: wait-free at both ends, and a fixed cost per block
-//! on the end that may not wait.
+//! overwritten. The whole crossing is then one atomic store against one atomic
+//! load: wait-free at both ends, and a fixed cost on the end that may not wait.
 //!
 //! Peak and RMS travel packed into a single [`AtomicU64`] rather than in two
-//! atomics side by side. Read separately they can straddle two blocks, and the
-//! pair that comes back is then one no block ever had — an RMS above the peak
-//! it arrives with, which a meter would draw as a bar past its own clip mark.
-//! Packed, there is nothing to straddle.
+//! atomics side by side: read separately they can straddle two blocks, and the
+//! pair that comes back is one no block ever had — an RMS above its own peak.
+//!
+//! A meter is built for one stream's channel layout and counts only the
+//! channels that stream captures. Metering the rest reports a level on audio
+//! nobody is recording: a hot line on an unselected input would read as clipping.
 
+use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use super::ChannelSelection;
 
 /// How loud a block of samples was.
 ///
@@ -43,16 +47,15 @@ impl Levels {
         rms: 0.0,
     };
 
-    /// Measure `samples`.
+    /// Measure every sample in `samples`.
     ///
-    /// Channel layout does not matter: interleaved samples are measured across
-    /// every channel at once, which is what a meter watching for clipping wants.
-    /// Folding the channels together would let one at full scale hide.
+    /// Sample by sample rather than frame by frame: folding a frame's channels
+    /// together would let one at full scale hide in their mean. To measure some
+    /// channels of an interleaved block and not others, build a [`level_meter`].
     ///
     /// A block with no samples measures as [`SILENT`](Self::SILENT), and so does
-    /// one holding a sample that is not finite — a driver is free to hand back
-    /// whatever was in its buffer, and comparison ignores a NaN where addition
-    /// carries it.
+    /// one holding a sample that is not finite — a driver may hand back whatever
+    /// was in its buffer, and comparison ignores a NaN where addition carries it.
     ///
     /// ```
     /// use motif::audio::Levels;
@@ -63,24 +66,17 @@ impl Levels {
     /// assert!(levels.rms < levels.peak);
     /// ```
     pub fn of(samples: &[f32]) -> Self {
-        if samples.is_empty() {
-            return Self::SILENT;
-        }
+        let mut measured = Measured::default();
+        measured.take(samples);
+        measured.levels()
+    }
 
-        let mut peak = 0.0f32;
-        let mut squares = 0.0f32;
-        for sample in samples {
-            let magnitude = sample.abs();
-            if magnitude.is_finite() {
-                peak = peak.max(magnitude);
-                squares += magnitude * magnitude;
-            }
+    fn measure(samples: &[f32], channels: usize, selected: Range<usize>) -> Self {
+        let mut measured = Measured::default();
+        for frame in samples.chunks_exact(channels) {
+            measured.take(&frame[selected.clone()]);
         }
-
-        Self {
-            peak,
-            rms: (squares / samples.len() as f32).sqrt(),
-        }
+        measured.levels()
     }
 
     fn packed(self) -> u64 {
@@ -95,28 +91,82 @@ impl Levels {
     }
 }
 
-/// Build a meter, and split it into the end that publishes and the end that
-/// reads.
+#[derive(Default)]
+struct Measured {
+    peak: f32,
+    squares: f32,
+    counted: usize,
+}
+
+impl Measured {
+    fn take(&mut self, samples: &[f32]) {
+        for sample in samples {
+            let magnitude = sample.abs();
+            if magnitude.is_finite() {
+                self.peak = self.peak.max(magnitude);
+                self.squares += magnitude * magnitude;
+            }
+        }
+        self.counted += samples.len();
+    }
+
+    fn levels(&self) -> Levels {
+        if self.counted == 0 {
+            return Levels::SILENT;
+        }
+        Levels {
+            peak: self.peak,
+            rms: (self.squares / self.counted as f32).sqrt(),
+        }
+    }
+}
+
+/// Build a meter over `selection` of a block `channels` wide, and split it into
+/// the end that publishes and the end that reads.
 ///
 /// The storage is allocated here and never again, so this belongs in setup,
-/// before the stream starts.
+/// before the stream starts. A selection reaching past `channels` is narrowed
+/// to what the block holds, which is what keeps the publishing end free of a
+/// path that can panic.
 ///
 /// ```
-/// let (mut writer, reader) = motif::audio::level_meter();
+/// use motif::audio::{ChannelSelection, level_meter};
+///
+/// let (mut writer, reader) = level_meter(1, ChannelSelection::all(1));
 ///
 /// writer.publish(&[0.5, -0.5]);
 ///
 /// assert_eq!(reader.read().peak, 0.5);
 /// ```
-pub fn level_meter() -> (LevelWriter, LevelReader) {
+///
+/// The second channel of a stereo block is a loud line nobody selected, and the
+/// meter does not see it:
+///
+/// ```
+/// use motif::audio::{ChannelSelection, level_meter};
+///
+/// let (mut writer, reader) = level_meter(2, ChannelSelection { first: 0, count: 1 });
+///
+/// writer.publish(&[0.25, 1.0, 0.25, 1.0]);
+///
+/// assert_eq!(reader.read().peak, 0.25);
+/// ```
+pub fn level_meter(channels: u16, selection: ChannelSelection) -> (LevelWriter, LevelReader) {
     let published = Arc::new(AtomicU64::new(Levels::SILENT.packed()));
 
     (
         LevelWriter {
             published: Arc::clone(&published),
+            channels: channels as usize,
+            selected: reachable(channels, selection),
         },
         LevelReader { published },
     )
+}
+
+fn reachable(channels: u16, selection: ChannelSelection) -> Range<usize> {
+    let width = channels as u32;
+    selection.first.min(channels) as usize..selection.reach().min(width) as usize
 }
 
 /// The measuring end of a meter, held by whichever thread produces samples.
@@ -124,16 +174,22 @@ pub fn level_meter() -> (LevelWriter, LevelReader) {
 /// This is the end the audio callback holds.
 pub struct LevelWriter {
     published: Arc<AtomicU64>,
+    channels: usize,
+    selected: Range<usize>,
 }
 
 impl LevelWriter {
-    /// Measure `samples`, publish the result, and report what was published.
+    /// Measure the selected channels of the interleaved block `samples`,
+    /// publish the result, and report what was published.
     ///
     /// Whatever was published before is replaced rather than queued: a block
     /// the reader never looked at is gone, which is the whole of what makes
     /// this safe to call from a callback that cannot wait for a reader.
+    ///
+    /// `samples` may be any length; anything past the last whole frame is
+    /// ignored, as it is on the way into the boundary.
     pub fn publish(&mut self, samples: &[f32]) -> Levels {
-        let levels = Levels::of(samples);
+        let levels = Levels::measure(samples, self.channels, self.selected.clone());
         self.published.store(levels.packed(), Ordering::Release);
         levels
     }

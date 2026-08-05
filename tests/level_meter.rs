@@ -3,8 +3,9 @@
 //!
 //! The callback measures a block and publishes it; the application thread reads
 //! whatever was published last. The facts worth stating are what each number
-//! means, that a reader sees a pair from one block rather than halves of two,
-//! and that publishing allocates nothing.
+//! means, which channels of an interleaved block are counted, that a reader
+//! sees a pair from one block rather than halves of two, and that publishing
+//! allocates nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -13,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use motif::audio::{Levels, level_meter};
+use motif::audio::{ChannelSelection, Levels, level_meter};
 
 /// How long the reader keeps checking that it never sees half of one block
 /// beside half of another. It bounds a search for a race rather than a wait for
@@ -67,6 +68,19 @@ fn assert_near(measured: f32, expected: f32) {
 fn sine(cycles: usize, samples: usize) -> Vec<f32> {
     let turn = std::f32::consts::TAU * cycles as f32 / samples as f32;
     (0..samples).map(|n| (turn * n as f32).sin()).collect()
+}
+
+/// A meter over a block that is one channel wide, where every sample is
+/// selected and the layout has nothing to say.
+fn whole_block() -> (motif::audio::LevelWriter, motif::audio::LevelReader) {
+    level_meter(1, ChannelSelection::all(1))
+}
+
+fn interleaved(left: &[f32], right: &[f32]) -> Vec<f32> {
+    left.iter()
+        .zip(right)
+        .flat_map(|(left, right)| [*left, *right])
+        .collect()
 }
 
 #[test]
@@ -130,14 +144,14 @@ fn a_block_with_no_samples_reads_as_silence() {
 
 #[test]
 fn a_meter_reads_silent_until_a_block_is_published() {
-    let (_writer, reader) = level_meter();
+    let (_writer, reader) = whole_block();
 
     assert_eq!(reader.read(), Levels::SILENT);
 }
 
 #[test]
 fn a_published_block_is_readable_from_the_other_end() {
-    let (mut writer, reader) = level_meter();
+    let (mut writer, reader) = whole_block();
 
     writer.publish(&[0.25, -0.25]);
 
@@ -146,7 +160,7 @@ fn a_published_block_is_readable_from_the_other_end() {
 
 #[test]
 fn a_reader_sees_the_most_recently_published_block() {
-    let (mut writer, reader) = level_meter();
+    let (mut writer, reader) = whole_block();
 
     writer.publish(&[1.0; 4]);
     writer.publish(&[0.1; 4]);
@@ -156,7 +170,7 @@ fn a_reader_sees_the_most_recently_published_block() {
 
 #[test]
 fn publishing_reports_what_it_published() {
-    let (mut writer, reader) = level_meter();
+    let (mut writer, reader) = whole_block();
 
     let published = writer.publish(&[0.75, -0.25]);
 
@@ -165,7 +179,7 @@ fn publishing_reports_what_it_published() {
 
 #[test]
 fn peak_and_rms_are_read_as_one_pair() {
-    let (mut writer, reader) = level_meter();
+    let (mut writer, reader) = whole_block();
     let stop = Arc::new(AtomicBool::new(false));
     let publishing = {
         let stop = Arc::clone(&stop);
@@ -192,7 +206,7 @@ fn peak_and_rms_are_read_as_one_pair() {
 
 #[test]
 fn publishing_does_not_allocate() {
-    let (mut writer, reader) = level_meter();
+    let (mut writer, reader) = level_meter(2, ChannelSelection { first: 1, count: 1 });
     let block = [0.5; 512];
 
     let before = allocations();
@@ -203,4 +217,59 @@ fn publishing_does_not_allocate() {
 
     assert_eq!(after, before);
     assert_eq!(reader.read().peak, 0.5);
+}
+
+#[test]
+fn a_channel_outside_the_selection_is_not_metered() {
+    let (mut writer, reader) = level_meter(2, ChannelSelection { first: 0, count: 1 });
+
+    writer.publish(&interleaved(&[0.25; 4], &[1.0; 4]));
+
+    assert_eq!(reader.read().peak, 0.25);
+}
+
+#[test]
+fn a_channel_outside_the_selection_cannot_read_as_clipping() {
+    let (mut writer, reader) = level_meter(2, ChannelSelection { first: 1, count: 1 });
+
+    let levels = writer.publish(&interleaved(&[1.0; 8], &[0.1; 8]));
+
+    assert_near(levels.peak, 0.1);
+    assert_eq!(levels, reader.read());
+}
+
+#[test]
+fn rms_counts_only_the_selected_samples() {
+    let (mut writer, _reader) = level_meter(2, ChannelSelection { first: 0, count: 1 });
+
+    let levels = writer.publish(&interleaved(&[0.5; 8], &[0.0; 8]));
+
+    assert_near(levels.rms, 0.5);
+}
+
+#[test]
+fn selecting_every_channel_meters_the_whole_block() {
+    let (mut writer, _reader) = level_meter(2, ChannelSelection::all(2));
+    let block = interleaved(&[0.2, -0.8, 0.4], &[0.9, 0.1, -0.3]);
+
+    assert_eq!(writer.publish(&block), Levels::of(&block));
+}
+
+#[test]
+fn a_selection_past_the_layout_meters_what_it_reaches() {
+    let (mut writer, _reader) = level_meter(2, ChannelSelection { first: 1, count: 4 });
+
+    let levels = writer.publish(&interleaved(&[1.0; 4], &[0.5; 4]));
+
+    assert_eq!(levels.peak, 0.5);
+    assert_near(levels.rms, 0.5);
+}
+
+#[test]
+fn samples_past_the_last_whole_frame_are_not_metered() {
+    let (mut writer, _reader) = level_meter(2, ChannelSelection::all(2));
+
+    let levels = writer.publish(&[0.25, 0.25, 1.0]);
+
+    assert_eq!(levels.peak, 0.25);
 }

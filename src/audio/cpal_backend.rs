@@ -231,11 +231,11 @@ impl AudioBackend for CpalBackend {
     ///
     /// The boundary and the path are sized from the request, not from what was
     /// granted: a stream wants its callback as it is built and reports its block
-    /// size only afterwards, so a device granting a larger block is refused
-    /// rather than run against buffers too small to feed it.
+    /// size afterwards, so a device granting a larger block is refused instead.
     ///
-    /// Metering happens before the channels are folded together, so a channel at
-    /// full scale cannot hide in the mean of its frame.
+    /// Metering covers the selected channels and happens before they are folded,
+    /// so one at full scale hides neither in the mean of its frame nor behind a
+    /// hot line on an input nobody selected.
     fn open<P: AudioPath>(
         &self,
         selection: &DeviceSelection,
@@ -301,7 +301,7 @@ impl AudioBackend for CpalBackend {
             request.block_size as usize,
             path,
         );
-        let (mut level_writer, levels) = level_meter();
+        let (mut level_writer, levels) = level_meter(input_channels, selection.input_channels);
         let (mut overruns, mut underruns, xruns) = xrun_counter();
         let (mut capture_headroom, capture_load) = headroom_meter(request.sample_rate);
         let (mut render_headroom, render_load) = headroom_meter(request.sample_rate);
@@ -400,8 +400,9 @@ impl DuplexStream for CpalStream {
         self.state
     }
 
-    /// Measured on the samples the input device delivered, across every channel
-    /// it delivered them on.
+    /// Measured on the samples the input device delivered, across the channels
+    /// the selection names and no others — the ones the path goes on to
+    /// capture.
     fn levels(&self) -> Levels {
         self.levels.read()
     }
