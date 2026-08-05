@@ -6,10 +6,12 @@
 //! allocate, and the way anything a player is meant to hear — a loop, a
 //! metronome click, a monitored input — reaches the audio callback at all.
 //!
-//! [`Passthrough`] is what every stream once did and now merely may: play the
-//! frames it captured. [`InputMonitor`] is the same thing with a level on it,
-//! and the first path that takes anything from the player — which it does over
-//! a command queue, that being the only way onto the audio thread.
+//! [`Passthrough`] plays the frames it captured; [`InputMonitor`] is the same
+//! thing with a level on it. A queue has one reader, and [`Commanded`] is it:
+//! it deals what arrived to the path it holds, which may be a composition of
+//! several. Which of them a command belongs to is that composition's to say in
+//! [`apply`](AudioPath::apply), settled where the paths are put together rather
+//! than by the order they render in.
 
 use super::{Command, CommandReceiver, Gain, StreamConfig};
 
@@ -40,6 +42,17 @@ pub trait AudioPath: Send + 'static {
     /// slice is bounded by what [`prepare`](Self::prepare) was told, so bound
     /// the work by the slices that were handed over.
     fn render(&mut self, captured: &[f32], playing: &mut [f32]);
+
+    /// Take `command` if it was meant for this path, and say whether it was.
+    ///
+    /// Answering one is the end of it: a composition offers a command along the
+    /// paths it holds until one takes it, so exactly one applies it and no
+    /// second reader is left to go without. A path answering nothing says so on
+    /// every command, and there is no default — what a path answers is part of
+    /// what it is.
+    ///
+    /// Runs on the audio thread, under [`render`](Self::render)'s rules.
+    fn apply(&mut self, command: Command) -> bool;
 }
 
 /// A path a caller has one of, and silence once it has been handed over.
@@ -59,6 +72,13 @@ impl<P: AudioPath> AudioPath for Option<P> {
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
         if let Some(path) = self {
             path.render(captured, playing);
+        }
+    }
+
+    fn apply(&mut self, command: Command) -> bool {
+        match self {
+            Some(path) => path.apply(command),
+            None => false,
         }
     }
 }
@@ -94,27 +114,30 @@ impl AudioPath for Passthrough {
         let frames = playing.len().min(captured.len());
         playing[..frames].copy_from_slice(&captured[..frames]);
     }
+
+    /// Nothing to answer: what it plays is what it was handed, and there is no
+    /// command that changes that.
+    fn apply(&mut self, _command: Command) -> bool {
+        false
+    }
 }
 
 /// The path that plays the input at a level the player controls.
 ///
 /// [`Passthrough`] with a hand on it: the same frames, scaled by a [`Gain`] the
-/// player moves and mutes from the panel. It takes those changes off a command
-/// queue, which is how anything reaches the audio thread.
+/// player moves and mutes from the panel. Those two commands are the whole of
+/// what it answers, so a composition holding it and something else is free to
+/// give the rest away.
 ///
-/// It drains the queue it is given, so a composition hands it the receiving end
-/// of a queue it is the only reader of. Commands it does not answer are taken
-/// and discarded, not left for someone else.
+/// It reads no queue of its own. [`Commanded`] is what puts one in front of it.
 pub struct InputMonitor {
-    commands: CommandReceiver,
     gain: Gain,
 }
 
 impl InputMonitor {
-    /// A monitor at unity, taking its changes from `commands`.
-    pub const fn new(commands: CommandReceiver) -> Self {
+    /// A monitor at unity.
+    pub const fn new() -> Self {
         Self {
-            commands,
             gain: Gain::unity(),
         }
     }
@@ -123,15 +146,11 @@ impl InputMonitor {
     pub const fn gain(&self) -> &Gain {
         &self.gain
     }
+}
 
-    fn take_the_commands_that_arrived(&mut self) {
-        for command in self.commands.drain() {
-            match command {
-                Command::SetGain(gain) => self.gain.set_target(gain),
-                Command::SetMuted(muted) => self.gain.set_muted(muted),
-                Command::SetTransport(_) | Command::Undo | Command::Clear => {}
-            }
-        }
+impl Default for InputMonitor {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -142,14 +161,87 @@ impl AudioPath for InputMonitor {
         self.gain.prepare(config.sample_rate);
     }
 
-    /// Takes every command that was waiting, then plays the captured frames at
-    /// the gain they left behind. Bounded by the shorter of the two slices, as
-    /// [`Passthrough`] is, and allocating nothing.
+    /// Plays the captured frames at the gain the player left it on. Bounded by
+    /// the shorter of the two slices, as [`Passthrough`] is, and allocating
+    /// nothing.
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
-        self.take_the_commands_that_arrived();
-
         let frames = playing.len().min(captured.len());
         playing[..frames].copy_from_slice(&captured[..frames]);
         self.gain.apply(&mut playing[..frames]);
+    }
+
+    /// Answers what moves the level the input is played at, and nothing about
+    /// the loop under it.
+    fn apply(&mut self, command: Command) -> bool {
+        match command {
+            Command::SetGain(gain) => self.gain.set_target(gain),
+            Command::SetMuted(muted) => self.gain.set_muted(muted),
+            Command::SetTransport(_) | Command::Undo | Command::Clear => return false,
+        }
+
+        true
+    }
+}
+
+/// A path with the command queue in front of it.
+///
+/// The one reader of that queue: everything waiting is dealt to `path` before
+/// the block it arrived in is rendered, and a command nothing answers is
+/// discarded there rather than left to accumulate.
+///
+/// `path` is a composition where more than one thing takes orders, which is
+/// what keeps a queue to a single reader however many paths are behind it.
+///
+/// ```
+/// use motif::audio::{AudioPath, Command, Commanded, InputMonitor, SendError, command_channel};
+///
+/// let (mut player, commands) = command_channel(4);
+/// let mut path = Commanded::new(commands, InputMonitor::new());
+///
+/// player.send(Command::SetGain(0.5))?;
+/// path.render(&[1.0], &mut [0.0]);
+///
+/// assert_eq!(path.path().gain().target(), 0.5);
+/// # Ok::<(), SendError>(())
+/// ```
+pub struct Commanded<P> {
+    commands: CommandReceiver,
+    path: P,
+}
+
+impl<P: AudioPath> Commanded<P> {
+    /// `path`, taking what the player asks for from `commands`.
+    pub const fn new(commands: CommandReceiver, path: P) -> Self {
+        Self { commands, path }
+    }
+
+    /// The path the commands are dealt to.
+    pub const fn path(&self) -> &P {
+        &self.path
+    }
+}
+
+impl<P: AudioPath> AudioPath for Commanded<P> {
+    /// Prepares the path it holds; a queue is allocated before either of them
+    /// exists.
+    fn prepare(&mut self, config: StreamConfig) {
+        self.path.prepare(config);
+    }
+
+    /// Deals every command that was waiting when the block began, then renders
+    /// the path. The count is fixed before the loop starts, so a sender running
+    /// concurrently cannot lengthen it.
+    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
+        for command in self.commands.drain() {
+            self.path.apply(command);
+        }
+
+        self.path.render(captured, playing);
+    }
+
+    /// Answers whatever the path it holds answers, so a commanded path composes
+    /// inside another.
+    fn apply(&mut self, command: Command) -> bool {
+        self.path.apply(command)
     }
 }

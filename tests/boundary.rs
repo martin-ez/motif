@@ -16,7 +16,8 @@ use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 
 use motif::audio::{
-    AudioPath, BlockCapture, BlockPlayback, ChannelSelection, Passthrough, StreamConfig, boundary,
+    AudioPath, BlockCapture, BlockPlayback, ChannelSelection, Command, Passthrough, StreamConfig,
+    boundary,
 };
 use motif::device::DeviceProfile;
 
@@ -72,6 +73,10 @@ impl AudioPath for Tone {
     fn render(&mut self, _captured: &[f32], playing: &mut [f32]) {
         playing.fill(self.0);
     }
+
+    fn apply(&mut self, _command: Command) -> bool {
+        false
+    }
 }
 
 /// A path that keeps every frame it was handed and plays it on, so that a test
@@ -97,6 +102,10 @@ impl AudioPath for Heard {
             .expect("no test holds this across a panic")
             .extend_from_slice(captured);
         playing.copy_from_slice(captured);
+    }
+
+    fn apply(&mut self, _command: Command) -> bool {
+        false
     }
 }
 
