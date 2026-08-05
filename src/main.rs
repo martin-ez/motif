@@ -1,9 +1,10 @@
 //! Entry point for the `motif` binary.
 //!
-//! Composition only: it builds the pages, hands them to the shell, takes the
-//! terminal over, runs the event loop against it, and reports why the run
-//! ended. The shell owns the pages and quitting — the terminal is left in a
-//! mode where the shell is the only way out of it.
+//! Composition only: it builds the pages, hands them to the shell, wraps that
+//! in the monitor holding the audio device open, takes the terminal over, runs
+//! the event loop against it, and reports why the run ended. The shell owns the
+//! pages and quitting — the terminal is left in a mode where the shell is the
+//! only way out of it.
 //!
 //! What is left here is chrome the shell has no notion of, drawn over the frame
 //! after a page has had it. It is right-aligned, so that it lands beside what a
@@ -13,9 +14,10 @@
 
 use std::process::ExitCode;
 
-use motif::audio::sample_clock;
+use motif::audio::{CpalBackend, StreamRequest, sample_clock};
 use motif::device::DeviceProfile;
 use motif::looper::{LooperPage, position_meter};
+use motif::monitor::Monitor;
 use motif::ui::{
     App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, Shell, TerminalScreen,
 };
@@ -59,6 +61,15 @@ impl App for Chrome {
     }
 }
 
+fn requested() -> StreamRequest {
+    let audio = DeviceProfile::TARGET.audio;
+
+    StreamRequest {
+        sample_rate: audio.sample_rate,
+        block_size: audio.block_size,
+    }
+}
+
 fn play() -> Result<(), RenderError> {
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();
@@ -66,11 +77,12 @@ fn play() -> Result<(), RenderError> {
         position_meter().1,
         sample_clock(DeviceProfile::TARGET.audio.sample_rate).1,
     );
-    let mut chrome = Chrome {
+    let chrome = Chrome {
         shell: Shell::new([Box::new(looper)]),
     };
+    let mut monitor = Monitor::opened(chrome, CpalBackend::new(), requested());
 
-    EventLoop::new().run(&mut chrome, controls, &mut screen)?;
+    EventLoop::new().run(&mut monitor, controls, &mut screen)?;
 
     Ok(())
 }
