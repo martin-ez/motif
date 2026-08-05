@@ -1,0 +1,313 @@
+//! A page of rows with one of them selected: what moves the selection, where it
+//! stops, and what a screen too short for the list shows.
+//!
+//! The page is driven through [`ScriptedControls`], so every test states what
+//! the player did to the panel. Nothing here names a key or a terminal, and the
+//! result is read back off the frame the page drew.
+
+use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
+use motif::ui::{App, ControlEvent, Controls, Flow, Frame, ListPage, ScriptedControls, Turn};
+
+const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
+const MARKER: char = '>';
+
+fn pressed(button: Button) -> ControlEvent {
+    ControlEvent::Pressed {
+        button,
+        shifted: false,
+    }
+}
+
+fn turned(encoder: Encoder, turn: Turn) -> ControlEvent {
+    ControlEvent::Turned {
+        encoder,
+        turn,
+        shifted: false,
+    }
+}
+
+fn numbered(count: usize) -> Vec<String> {
+    (0..count).map(|row| format!("row {row}")).collect()
+}
+
+fn page_of(count: usize) -> ListPage {
+    ListPage::new(numbered(count))
+}
+
+fn driven_by(page: &mut ListPage, events: impl IntoIterator<Item = ControlEvent>) {
+    let mut controls = ScriptedControls::new(events);
+    while let Some(event) = controls.poll() {
+        page.control(event);
+    }
+}
+
+fn moved(count: usize, events: impl IntoIterator<Item = ControlEvent>) -> ListPage {
+    let mut page = page_of(count);
+    driven_by(&mut page, events);
+
+    page
+}
+
+fn repeated(event: ControlEvent, times: usize) -> Vec<ControlEvent> {
+    std::iter::repeat_n(event, times).collect()
+}
+
+fn row_of(frame: &Frame, row: usize) -> String {
+    (0..SCREEN.columns)
+        .filter_map(|column| frame.get(column, row))
+        .map(|cell| cell.glyph())
+        .collect()
+}
+
+fn drawn(page: &mut ListPage) -> Vec<String> {
+    let mut frame = Frame::blank();
+    page.draw(&mut frame);
+
+    (0..SCREEN.rows)
+        .map(|row| row_of(&frame, row).trim_end().to_string())
+        .collect()
+}
+
+fn listed(page: &mut ListPage) -> Vec<String> {
+    drawn(page)
+        .into_iter()
+        .filter(|row| !row.is_empty())
+        .collect()
+}
+
+fn marked(page: &mut ListPage) -> Vec<String> {
+    drawn(page)
+        .into_iter()
+        .filter(|row| row.starts_with(MARKER))
+        .collect()
+}
+
+#[test]
+fn a_new_page_selects_the_first_row() {
+    assert_eq!(page_of(4).selected(), Some(0));
+}
+
+#[test]
+fn an_empty_page_selects_nothing() {
+    assert_eq!(page_of(0).selected(), None);
+    assert_eq!(page_of(0).selected_row(), None);
+}
+
+#[test]
+fn a_page_keeps_the_rows_it_was_given() {
+    assert_eq!(page_of(3).rows(), ["row 0", "row 1", "row 2"]);
+}
+
+#[test]
+fn down_moves_the_selection_to_the_next_row() {
+    assert_eq!(moved(4, [pressed(Button::Down)]).selected(), Some(1));
+}
+
+#[test]
+fn up_moves_the_selection_back() {
+    let page = moved(
+        4,
+        [
+            pressed(Button::Down),
+            pressed(Button::Down),
+            pressed(Button::Up),
+        ],
+    );
+
+    assert_eq!(page.selected(), Some(1));
+}
+
+#[test]
+fn the_selected_row_is_the_one_the_selection_names() {
+    let mut page = moved(4, [pressed(Button::Down)]);
+
+    assert_eq!(page.selected_row(), Some("row 1"));
+    assert_eq!(marked(&mut page), ["> row 1"]);
+}
+
+#[test]
+fn up_at_the_top_stays_at_the_top() {
+    let page = moved(4, repeated(pressed(Button::Up), 3));
+
+    assert_eq!(page.selected(), Some(0));
+}
+
+#[test]
+fn down_at_the_bottom_stays_at_the_bottom() {
+    let page = moved(4, repeated(pressed(Button::Down), 9));
+
+    assert_eq!(page.selected(), Some(3));
+}
+
+#[test]
+fn an_empty_page_ignores_the_arrows() {
+    let page = moved(0, [pressed(Button::Down), pressed(Button::Up)]);
+
+    assert_eq!(page.selected(), None);
+}
+
+#[test]
+fn turning_the_first_encoder_clockwise_moves_down() {
+    let page = moved(4, [turned(Encoder::First, Turn::Clockwise)]);
+
+    assert_eq!(page.selected(), Some(1));
+}
+
+#[test]
+fn turning_the_first_encoder_anticlockwise_moves_up() {
+    let page = moved(
+        4,
+        [
+            turned(Encoder::First, Turn::Clockwise),
+            turned(Encoder::First, Turn::Clockwise),
+            turned(Encoder::First, Turn::Anticlockwise),
+        ],
+    );
+
+    assert_eq!(page.selected(), Some(1));
+}
+
+#[test]
+fn the_encoder_stops_at_the_ends_like_the_arrows() {
+    let bottom = moved(4, repeated(turned(Encoder::First, Turn::Clockwise), 9));
+    let top = moved(4, repeated(turned(Encoder::First, Turn::Anticlockwise), 9));
+
+    assert_eq!(bottom.selected(), Some(3));
+    assert_eq!(top.selected(), Some(0));
+}
+
+#[test]
+fn another_encoder_leaves_the_selection_alone() {
+    let page = moved(
+        4,
+        [
+            turned(Encoder::Second, Turn::Clockwise),
+            turned(Encoder::Third, Turn::Clockwise),
+            turned(Encoder::Fourth, Turn::Anticlockwise),
+        ],
+    );
+
+    assert_eq!(page.selected(), Some(0));
+}
+
+#[test]
+fn the_other_buttons_leave_the_selection_alone() {
+    let page = moved(
+        4,
+        [
+            pressed(Button::Down),
+            pressed(Button::Left),
+            pressed(Button::Right),
+            pressed(Button::Play),
+            pressed(Button::Stop),
+            pressed(Button::Record),
+        ],
+    );
+
+    assert_eq!(page.selected(), Some(1));
+}
+
+#[test]
+fn every_row_of_a_short_list_is_drawn() {
+    assert_eq!(listed(&mut page_of(3)), ["> row 0", "  row 1", "  row 2"]);
+}
+
+#[test]
+fn only_the_selected_row_is_marked() {
+    let mut page = moved(5, [pressed(Button::Down), pressed(Button::Down)]);
+
+    assert_eq!(marked(&mut page).len(), 1);
+}
+
+#[test]
+fn an_empty_page_draws_no_rows() {
+    assert!(listed(&mut page_of(0)).is_empty());
+}
+
+#[test]
+fn a_row_wider_than_the_screen_is_clipped() {
+    let mut page = ListPage::new(["w".repeat(SCREEN.columns * 2)]);
+
+    assert_eq!(drawn(&mut page)[0].chars().count(), SCREEN.columns);
+}
+
+#[test]
+fn a_list_longer_than_the_viewport_draws_a_viewport() {
+    let mut page = page_of(ListPage::VISIBLE_ROWS * 2);
+
+    assert_eq!(listed(&mut page).len(), ListPage::VISIBLE_ROWS);
+}
+
+#[test]
+fn the_viewport_is_the_screen() {
+    assert_eq!(ListPage::VISIBLE_ROWS, SCREEN.rows);
+}
+
+#[test]
+fn a_list_shorter_than_the_viewport_never_scrolls() {
+    let mut page = page_of(3);
+    driven_by(&mut page, repeated(pressed(Button::Down), 9));
+
+    assert_eq!(listed(&mut page), ["  row 0", "  row 1", "> row 2"]);
+}
+
+#[test]
+fn moving_below_the_viewport_scrolls_the_next_row_into_view() {
+    let last = ListPage::VISIBLE_ROWS;
+    let mut page = page_of(last + 4);
+    driven_by(&mut page, repeated(pressed(Button::Down), last));
+
+    let rows = listed(&mut page);
+
+    assert_eq!(rows.last(), Some(&format!("> row {last}")));
+    assert_eq!(rows.first().map(String::as_str), Some("  row 1"));
+}
+
+#[test]
+fn moving_back_above_it_scrolls_the_first_row_back() {
+    let reach = ListPage::VISIBLE_ROWS + 3;
+    let mut page = page_of(ListPage::VISIBLE_ROWS + 4);
+    driven_by(&mut page, repeated(pressed(Button::Down), reach));
+    driven_by(&mut page, repeated(pressed(Button::Up), reach));
+
+    assert_eq!(
+        listed(&mut page).first().map(String::as_str),
+        Some("> row 0")
+    );
+}
+
+#[test]
+fn the_selection_is_always_on_screen() {
+    let count = ListPage::VISIBLE_ROWS + 7;
+    let mut page = page_of(count);
+
+    for _ in 0..count {
+        assert_eq!(marked(&mut page).len(), 1);
+        driven_by(&mut page, [pressed(Button::Down)]);
+    }
+
+    for _ in 0..count {
+        assert_eq!(marked(&mut page).len(), 1);
+        driven_by(&mut page, [turned(Encoder::First, Turn::Anticlockwise)]);
+    }
+}
+
+#[test]
+fn a_control_never_ends_the_run() {
+    let mut page = page_of(4);
+
+    for button in Button::ALL {
+        assert_eq!(page.control(pressed(button)), Flow::Continue);
+    }
+    for encoder in Encoder::ALL {
+        assert_eq!(
+            page.control(turned(encoder, Turn::Clockwise)),
+            Flow::Continue
+        );
+    }
+}
+
+#[test]
+fn a_draw_never_ends_the_run() {
+    assert_eq!(page_of(4).draw(&mut Frame::blank()), Flow::Continue);
+}
