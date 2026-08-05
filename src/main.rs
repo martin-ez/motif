@@ -14,7 +14,7 @@
 
 use std::process::ExitCode;
 
-use motif::audio::{CpalBackend, StreamRequest, sample_clock};
+use motif::audio::{CpalBackend, Passthrough, StreamRequest, sample_clock};
 use motif::device::DeviceProfile;
 use motif::looper::{LooperPage, position_meter};
 use motif::monitor::Monitor;
@@ -74,7 +74,7 @@ fn play() -> Result<(), RenderError> {
     let chrome = Chrome {
         shell: Shell::new([Box::new(looper)]),
     };
-    let mut monitor = Monitor::opened(chrome, CpalBackend::new(), requested());
+    let mut monitor = Monitor::opened(chrome, CpalBackend::new(), requested(), Passthrough::new);
 
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();
