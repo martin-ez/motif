@@ -6,10 +6,13 @@
 //! result is read back off the frame the page drew.
 
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
-use motif::ui::{ControlEvent, Controls, Frame, ListPage, Page, ScriptedControls, Turn};
+use motif::ui::{
+    ControlEvent, Controls, Frame, ListPage, Page, ScriptedControls, Turn, columns_of,
+};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const MARKER: char = '>';
+const WIDE_LABEL: &str = "オーディオ";
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -55,6 +58,7 @@ fn repeated(event: ControlEvent, times: usize) -> Vec<ControlEvent> {
 fn row_of(frame: &Frame, row: usize) -> String {
     (0..SCREEN.columns)
         .filter_map(|column| frame.get(column, row))
+        .filter(|cell| cell.columns() > 0)
         .map(|cell| cell.glyph())
         .collect()
 }
@@ -301,4 +305,21 @@ fn the_selection_is_always_on_screen() {
         assert_eq!(marked(&mut page).len(), 1);
         driven_by(&mut page, [turned(Encoder::Main, Turn::Anticlockwise)]);
     }
+}
+
+#[test]
+fn a_row_of_wide_glyphs_is_drawn_whole() {
+    let mut page = ListPage::new([WIDE_LABEL]);
+
+    assert_eq!(listed(&mut page), vec![format!("> {WIDE_LABEL}")]);
+}
+
+#[test]
+fn a_row_of_wide_glyphs_stops_at_the_margin() {
+    let mut page = ListPage::new([WIDE_LABEL.repeat(20)]);
+
+    let rows = drawn(&mut page);
+
+    assert!(columns_of(&rows[0]) <= SCREEN.columns);
+    assert_eq!(rows[1], "");
 }
