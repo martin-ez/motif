@@ -215,10 +215,10 @@ impl AudioBackend for CpalBackend {
     /// The two callbacks are joined by a [`boundary`] running `path`, with one
     /// block of slack — the least that keeps playback from outrunning capture.
     ///
-    /// The boundary is sized from the request, not from what was granted: a
-    /// stream wants its callback as it is built and reports its block size only
-    /// afterwards, so a device granting a larger block is refused rather than
-    /// run against buffers too small to feed it.
+    /// The boundary and the path are sized from the request, not from what was
+    /// granted: a stream wants its callback as it is built and reports its block
+    /// size only afterwards, so a device granting a larger block is refused
+    /// rather than run against buffers too small to feed it.
     ///
     /// Metering happens before the channels are folded together, so a channel at
     /// full scale cannot hide in the mean of its frame.

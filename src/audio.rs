@@ -241,7 +241,7 @@ pub trait AudioBackend {
     ///
     /// Each is opened at the narrowest count reaching both the selection and the
     /// width it runs at by default — in mono, a stereo device folds a pair.
-    /// `path` is prepared with what was granted, then moved to the callback.
+    /// `path` is prepared with what the stream was opened for, then moved in.
     ///
     /// # Errors
     ///
@@ -527,15 +527,16 @@ impl NullStream {
     /// `playing` with what it plays.
     ///
     /// A stream with no device behind it is never called back, so this stands in
-    /// for the callback as [`fail`](Self::fail) stands in for the unplugging. It
-    /// is public for the same reason: what a caller put on the audio thread is
-    /// the part that has to work, and it would otherwise be reachable only where
-    /// there is hardware to run it on.
-    ///
-    /// `playing` is silenced first, as a stream's own playback end does.
+    /// for the callback as [`fail`](Self::fail) stands in for the unplugging,
+    /// and promises the path what a callback does: `playing` silenced first, and
+    /// a frame of it for every frame handed over, so two lengths become the
+    /// shorter of them rather than a broken contract.
     pub fn block(&mut self, captured: &[f32], playing: &mut [f32]) {
         playing.fill(0.0);
-        self.path.render(captured, playing);
+
+        let frames = captured.len().min(playing.len());
+        self.path
+            .render(&captured[..frames], &mut playing[..frames]);
     }
 }
 

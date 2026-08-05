@@ -20,9 +20,12 @@ pub trait AudioPath: Send + 'static {
     /// Prepare to run at `config`, before any block arrives.
     ///
     /// Called once, on the thread that opened the stream, and the only place a
-    /// path may allocate. The device has the last word on the rate and the
-    /// block size, so a path sized from the request would be sized from a
-    /// guess.
+    /// path may allocate.
+    ///
+    /// `config` is what the stream was opened for, which is not always what it
+    /// goes on to report: a device may grant a shorter block, having taken the
+    /// path already. Size buffers from `block_size` and read it as a ceiling on
+    /// what [`render`](Self::render) is handed, never as a promise.
     fn prepare(&mut self, config: StreamConfig);
 
     /// Play into `playing`, given the `captured` frames that arrived with it.
@@ -61,9 +64,9 @@ impl AudioPath for Passthrough {
     /// rate and block size that arrives in.
     fn prepare(&mut self, _config: StreamConfig) {}
 
-    /// Copies as many frames as both slices have, so a caller who hands over
-    /// two of different lengths gets silence for the difference rather than a
-    /// panic on the audio thread.
+    /// Copies as many frames as both slices have and leaves the rest of
+    /// `playing` as it found it, a stream having silenced the block already: a
+    /// panic on the audio thread is the worse answer to a mismatch.
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
         let frames = playing.len().min(captured.len());
         playing[..frames].copy_from_slice(&captured[..frames]);

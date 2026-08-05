@@ -55,6 +55,18 @@ impl AudioPath for Silence {
     fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
 }
 
+/// A path written to the contract and nothing softer: a frame out for every
+/// frame in, which panics on anything that hands it two lengths.
+struct FrameForFrame;
+
+impl AudioPath for FrameForFrame {
+    fn prepare(&mut self, _config: StreamConfig) {}
+
+    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
+        playing.copy_from_slice(captured);
+    }
+}
+
 /// A path that keeps what it was told and what it was handed, so that a test
 /// can read them back after it has been moved into a stream.
 #[derive(Clone, Default)]
@@ -167,4 +179,28 @@ fn a_path_is_prepared_before_it_plays_anything() {
 
     assert_eq!(heard.config(), Some(granted()));
     assert_eq!(heard.captured(), vec![0.5]);
+}
+
+#[test]
+fn a_stand_in_callback_hands_the_path_a_frame_for_a_frame() {
+    let mut stream = NullBackend::rounding(granted())
+        .open(&selection(), request(), FrameForFrame)
+        .expect("null backend opens");
+    let mut played = [9.0; 2];
+
+    stream.block(&[1.0; 4], &mut played);
+
+    assert_eq!(played, [1.0, 1.0]);
+}
+
+#[test]
+fn a_stand_in_callback_silences_what_the_path_was_not_given() {
+    let mut stream = NullBackend::rounding(granted())
+        .open(&selection(), request(), FrameForFrame)
+        .expect("null backend opens");
+    let mut played = [9.0; 4];
+
+    stream.block(&[1.0, 1.0], &mut played);
+
+    assert_eq!(played, [1.0, 1.0, 0.0, 0.0]);
 }
