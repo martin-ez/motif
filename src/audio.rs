@@ -31,7 +31,7 @@ mod xrun;
 
 pub use boundary::{BlockCapture, BlockPlayback, boundary};
 pub use catalog::DeviceCatalog;
-pub use clock::{SampleClockReader, SampleClockWriter, sample_clock};
+pub use clock::{Counting, SampleClockReader, SampleClockWriter, sample_clock};
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use fault::{FaultReader, FaultReporter, fault_channel};

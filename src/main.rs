@@ -14,7 +14,7 @@
 
 use std::process::ExitCode;
 
-use motif::audio::{CpalBackend, StreamRequest, sample_clock};
+use motif::audio::{Counting, CpalBackend, StreamRequest, sample_clock};
 use motif::device::DeviceProfile;
 use motif::looper::LooperPage;
 use motif::monitor::Monitor;
@@ -68,11 +68,12 @@ fn requested() -> StreamRequest {
 
 fn play() -> Result<(), RenderError> {
     let audio = DeviceProfile::TARGET.audio;
-    let (looper, engine) = LooperPage::driving(audio, sample_clock(audio.sample_rate).1);
+    let (frames, elapsed) = sample_clock(audio.sample_rate);
+    let (looper, engine) = LooperPage::driving(audio, elapsed);
     let chrome = Chrome {
         shell: Shell::new([Box::new(looper)]),
     };
-    let mut playing = Some(engine);
+    let mut playing = Some(Counting::new(frames, engine));
     let mut monitor = Monitor::opened(chrome, CpalBackend::new(), requested(), move || {
         playing.take()
     });
