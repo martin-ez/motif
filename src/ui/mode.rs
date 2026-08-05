@@ -1,6 +1,6 @@
 //! The screens the instrument has, and the order they sit in.
 
-use crate::closed_set::closed_set;
+use crate::closed_set;
 
 closed_set! {
     /// A screen the instrument can be showing.

@@ -28,7 +28,7 @@
 
 use std::time::Duration;
 
-use crate::closed_set::closed_set;
+use crate::closed_set;
 
 /// The screen the UI draws into, measured in character cells.
 ///
