@@ -676,3 +676,60 @@ fn a_cleared_loop_publishes_no_shape() {
 
     assert!(shape.read().buckets().is_empty());
 }
+
+#[test]
+fn undoing_heals_the_published_shape_within_a_lap() {
+    let (mut engine, mut sender, shape) = engine_drawing();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    heard(&mut engine, 8);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.5; 8]);
+
+    press(&mut sender, Command::Undo);
+    heard(&mut engine, 8);
+
+    assert!(
+        shape
+            .read()
+            .buckets()
+            .iter()
+            .all(|bucket| bucket.peak == 0.0),
+        "the undone layer is still in the published shape"
+    );
+}
+
+#[test]
+fn the_shape_of_an_undone_layer_survives_until_the_sweep_reaches_it() {
+    let (mut engine, mut sender, shape) = engine_drawing();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    heard(&mut engine, 8);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.5; 8]);
+
+    press(&mut sender, Command::Undo);
+    heard(&mut engine, 4);
+
+    let shape = shape.read();
+    assert_eq!(shape.buckets()[0].peak, 0.0);
+    assert_eq!(shape.buckets()[7].peak, 0.5);
+}
+
+#[test]
+fn healing_the_shape_after_an_undo_does_not_allocate() {
+    let (mut engine, mut sender, _shape) = engine_drawing();
+    let captured = vec![0.25; 4];
+    let mut playing = vec![0.0; 4];
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    engine.render(&captured, &mut playing);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    engine.render(&captured, &mut playing);
+    press(&mut sender, Command::Undo);
+
+    let before = allocations();
+    for _ in 0..LoopBuffer::LAYERS {
+        engine.render(&captured, &mut playing);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before, "healing the shape allocated");
+}
