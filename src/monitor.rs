@@ -1,34 +1,33 @@
 //! Holding a device open for the length of a run, and showing what it is doing.
 //!
-//! [`Monitor`] is the half of the composition that has no engine in it: it
-//! opens whatever a backend would open if nobody chose, starts it, keeps it for
-//! the run and stops it on the way out. It wraps an [`App`] rather than being
-//! one, so the pages under it neither know nor need to know that a device is
-//! open — the bottom row is taken for the state before the pages are handed the
-//! rest, and every cell they are given stays theirs.
+//! [`Monitor`] is the half of the composition that holds the device and not the
+//! decision: it opens whatever a backend would open if nobody chose, starts it,
+//! keeps it for the run and stops it on the way out, while what its streams play
+//! is the caller's to say. It wraps an [`App`] rather than being one, so the
+//! pages under it neither know nor need to know that a device is open — the
+//! bottom row is taken for the state before the pages are handed the rest, and
+//! every cell they are given stays theirs.
 //!
 //! A device that is not there is drawn, never fatal. An instrument that quit
 //! because an interface was unplugged would be wrong, and one that drew a
 //! plausible idle screen over a dead audio path would be worse, so the state
 //! goes on the frame and the run carries on.
 
-use crate::audio::{AudioBackend, AudioState, DeviceError, DeviceLink, Passthrough, StreamRequest};
+use crate::audio::{AudioBackend, AudioPath, AudioState, DeviceError, DeviceLink, StreamRequest};
 use crate::ui::{App, ControlEvent, Flow, Legend, Region};
 
 const LABEL: &str = "audio ";
 const STATUS_ROWS: usize = 1;
 
-type MonitorLink<B> = DeviceLink<B, fn() -> Passthrough>;
-
 /// An application with an audio device held open behind it.
 ///
 /// Everything it does with the device happens on the application thread, which
-/// is where opening, starting, stopping and dropping a stream belong. What it
-/// puts on the callback is [`Passthrough`] and nothing else, and a monitor is
+/// is where opening, starting, stopping and dropping a stream belong. What goes
+/// on the callback is whatever the caller's `path` builds, and a monitor is
 /// what keeps that stream alive long enough to hear.
 ///
 /// ```
-/// use motif::audio::{AudioState, NullBackend, StreamConfig, StreamRequest};
+/// use motif::audio::{AudioState, NullBackend, Passthrough, StreamConfig, StreamRequest};
 /// use motif::device::Button;
 /// use motif::monitor::Monitor;
 /// use motif::ui::{App, ControlEvent, Flow, Legend, Region};
@@ -60,29 +59,39 @@ type MonitorLink<B> = DeviceLink<B, fn() -> Passthrough>;
 ///     block_size: 256,
 /// };
 ///
-/// let monitor = Monitor::opened(Quiet, NullBackend::rounding(granted), request);
+/// let monitor = Monitor::opened(
+///     Quiet,
+///     NullBackend::rounding(granted),
+///     request,
+///     Passthrough::new,
+/// );
 ///
 /// assert_eq!(monitor.state(), AudioState::Playing);
 /// ```
-pub struct Monitor<A: App, B: AudioBackend> {
+pub struct Monitor<A: App, B: AudioBackend, F> {
     app: A,
-    link: Option<MonitorLink<B>>,
+    link: Option<DeviceLink<B, F>>,
 }
 
-impl<A: App, B: AudioBackend> Monitor<A, B> {
-    /// Open what `backend` would open at `request` if nobody chose, start it,
-    /// and hold it behind `app`.
+impl<A: App, B: AudioBackend, F, P> Monitor<A, B, F>
+where
+    F: FnMut() -> P,
+    P: AudioPath,
+{
+    /// Open what `backend` would open at `request` if nobody chose, start it
+    /// playing through what `path` builds, and hold it behind `app`.
     ///
     /// This cannot fail. A backend with nothing to offer, one that refuses the
     /// request and one whose device will not start all leave the monitor in
     /// [`AudioState::Lost`] carrying why, that being something to draw rather
-    /// than a reason not to run.
-    pub fn opened(app: A, backend: B, request: StreamRequest) -> Self {
+    /// than a reason not to run. A backend with nothing to offer never builds a
+    /// path: there is no stream for one to play through.
+    pub fn opened(app: A, backend: B, request: StreamRequest, path: F) -> Self {
         let Some(selection) = backend.defaults(request.sample_rate) else {
             return Self { app, link: None };
         };
 
-        let mut link = DeviceLink::new(backend, request, selection, Passthrough::new as fn() -> _);
+        let mut link = DeviceLink::new(backend, request, selection, path);
         if link.open().is_ok() {
             let _started = link.start();
         }
@@ -92,7 +101,9 @@ impl<A: App, B: AudioBackend> Monitor<A, B> {
             link: Some(link),
         }
     }
+}
 
+impl<A: App, B: AudioBackend, F> Monitor<A, B, F> {
     /// What the audio path is doing, as of the last frame drawn.
     ///
     /// A backend that had no device to open reports
@@ -111,7 +122,7 @@ impl<A: App, B: AudioBackend> Monitor<A, B> {
     /// This is the route to what the stream knows and the monitor does not: the
     /// configuration the device granted, the levels, the dropout counts, the
     /// callback's headroom.
-    pub fn link(&self) -> Option<&MonitorLink<B>> {
+    pub fn link(&self) -> Option<&DeviceLink<B, F>> {
         self.link.as_ref()
     }
 
@@ -134,7 +145,7 @@ impl<A: App, B: AudioBackend> Monitor<A, B> {
     }
 }
 
-impl<A: App, B: AudioBackend> App for Monitor<A, B> {
+impl<A: App, B: AudioBackend, F> App for Monitor<A, B, F> {
     fn control(&mut self, event: ControlEvent) -> Flow {
         self.app.control(event)
     }
@@ -160,7 +171,7 @@ impl<A: App, B: AudioBackend> App for Monitor<A, B> {
     }
 }
 
-impl<A: App, B: AudioBackend> Drop for Monitor<A, B> {
+impl<A: App, B: AudioBackend, F> Drop for Monitor<A, B, F> {
     fn drop(&mut self) {
         self.close();
     }

@@ -13,11 +13,12 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
-    DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend, StreamConfig,
-    StreamRequest, StreamState, Xruns,
+    DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend, Passthrough,
+    StreamConfig, StreamRequest, StreamState, Xruns,
 };
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
@@ -142,6 +143,29 @@ impl App for Filling {
     }
 }
 
+/// A path that keeps what it was prepared with, readable once the monitor has
+/// moved it into a stream.
+///
+/// A monitor lends its stream out, so what the callback plays cannot be read
+/// back through one. What the path was prepared with can, and it is only
+/// prepared where a stream took it.
+#[derive(Clone, Default)]
+struct Heard(Arc<Mutex<Option<StreamConfig>>>);
+
+impl Heard {
+    fn config(&self) -> Option<StreamConfig> {
+        *self.0.lock().expect("no test holds this across a panic")
+    }
+}
+
+impl AudioPath for Heard {
+    fn prepare(&mut self, config: StreamConfig) {
+        *self.0.lock().expect("no test holds this across a panic") = Some(config);
+    }
+
+    fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
+}
+
 /// What a stream was asked to do, readable after the stream is gone.
 #[derive(Clone, Default)]
 struct Asked(Rc<RefCell<Vec<&'static str>>>);
@@ -237,15 +261,33 @@ impl DuplexStream for RecordingStream {
     }
 }
 
-fn monitoring(
-    app: Counted,
+/// A monitor over the null backend, playing what it captures.
+type Monitoring<A> = Monitor<A, NullBackend, fn() -> Passthrough>;
+
+/// A monitor over `backend` whose streams run a path the test can read back.
+fn hearing(
+    heard: &Heard,
     backend: NullBackend,
-    request: StreamRequest,
-) -> Monitor<Counted, NullBackend> {
-    Monitor::opened(app, backend, request)
+) -> Monitor<Counted, NullBackend, impl FnMut() -> Heard> {
+    let path = heard.clone();
+
+    Monitor::opened(Counted::default(), backend, request(), move || path.clone())
 }
 
-fn playing() -> Monitor<Counted, NullBackend> {
+fn monitoring(app: Counted, backend: NullBackend, request: StreamRequest) -> Monitoring<Counted> {
+    Monitor::opened(app, backend, request, Passthrough::new)
+}
+
+fn filling() -> Monitoring<Filling> {
+    Monitor::opened(
+        Filling,
+        NullBackend::rounding(config()),
+        request(),
+        Passthrough::new,
+    )
+}
+
+fn playing() -> Monitoring<Counted> {
     monitoring(
         Counted::default(),
         NullBackend::rounding(config()),
@@ -253,7 +295,7 @@ fn playing() -> Monitor<Counted, NullBackend> {
     )
 }
 
-fn unplug(monitor: &Monitor<Counted, NullBackend>) {
+fn unplug(monitor: &Monitoring<Counted>) {
     monitor
         .link()
         .expect("a monitor over a device that opened has a link")
@@ -262,14 +304,14 @@ fn unplug(monitor: &Monitor<Counted, NullBackend>) {
         .fail(DeviceError::DeviceNotAvailable);
 }
 
-fn drawn(monitor: &mut Monitor<Counted, NullBackend>) -> Frame {
+fn drawn(monitor: &mut Monitoring<Counted>) -> Frame {
     let mut frame = Frame::blank();
     monitor.draw(frame.region());
 
     frame
 }
 
-fn covering(monitor: &mut Monitor<Filling, NullBackend>) -> Frame {
+fn covering(monitor: &mut Monitoring<Filling>) -> Frame {
     let mut frame = Frame::blank();
     monitor.draw(frame.region());
 
@@ -287,7 +329,7 @@ fn status(frame: &Frame) -> String {
         .to_owned()
 }
 
-fn run(monitor: &mut Monitor<Counted, NullBackend>) -> RunReport {
+fn run(monitor: &mut Monitoring<Counted>) -> RunReport {
     EventLoop::with_clock(ScriptedClock::new([]))
         .run(
             monitor,
@@ -300,6 +342,24 @@ fn run(monitor: &mut Monitor<Counted, NullBackend>) -> RunReport {
 #[test]
 fn a_monitor_opens_the_default_device_and_starts_it() {
     assert_eq!(playing().state(), AudioState::Playing);
+}
+
+#[test]
+fn a_monitor_opens_its_stream_with_the_path_it_was_given() {
+    let heard = Heard::default();
+
+    let _monitor = hearing(&heard, NullBackend::rounding(config()));
+
+    assert_eq!(heard.config(), Some(config()));
+}
+
+#[test]
+fn a_monitor_with_no_device_to_open_builds_no_path() {
+    let heard = Heard::default();
+
+    let _monitor = hearing(&heard, NullBackend::rounding(deaf()));
+
+    assert_eq!(heard.config(), None);
 }
 
 #[test]
@@ -396,14 +456,14 @@ fn the_wrapped_application_still_draws() {
 
 #[test]
 fn an_application_filling_its_region_leaves_the_status_row_alone() {
-    let mut monitor = Monitor::opened(Filling, NullBackend::rounding(config()), request());
+    let mut monitor = filling();
 
     assert_eq!(status(&covering(&mut monitor)), "audio playing");
 }
 
 #[test]
 fn an_application_filling_its_region_keeps_every_row_it_was_given() {
-    let mut monitor = Monitor::opened(Filling, NullBackend::rounding(config()), request());
+    let mut monitor = filling();
     let frame = covering(&mut monitor);
     let screen = DeviceProfile::TARGET.screen;
 
@@ -471,6 +531,7 @@ fn a_monitor_stops_the_stream_when_the_run_ends() {
         Counted::default(),
         RecordingBackend(asked.clone()),
         request(),
+        Passthrough::new,
     ));
 
     assert_eq!(asked.of(), ["open", "start", "stop"]);

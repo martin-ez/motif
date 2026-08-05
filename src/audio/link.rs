@@ -54,6 +54,9 @@ impl fmt::Display for AudioState {
 /// Nothing here runs on the audio thread. It is the application-thread end of
 /// the boundary: it reads the fault a callback latched, and it does the
 /// stopping, dropping and rebuilding that a callback may not.
+///
+/// Only opening a stream needs to know what the path is, so whatever holds a
+/// link can poll, stop and drop one without naming what it plays.
 pub struct DeviceLink<B: AudioBackend, F> {
     backend: B,
     request: StreamRequest,
@@ -86,46 +89,6 @@ where
             stream: None,
             state: AudioState::Closed,
         }
-    }
-
-    /// What the audio path is doing, as of the last [`poll`](Self::poll).
-    ///
-    /// A device that went away since then still reads as whatever it was doing
-    /// before it did: a fault is latched on the audio thread and noticed on
-    /// this one.
-    pub fn state(&self) -> AudioState {
-        self.state
-    }
-
-    /// The configuration every stream this link opens is asked for.
-    pub fn request(&self) -> StreamRequest {
-        self.request
-    }
-
-    /// The backend every stream this link opens comes from.
-    ///
-    /// Lent rather than cloned, so a [`DeviceCatalog`](super::DeviceCatalog)
-    /// can be refreshed through the same backend the link is playing through.
-    pub fn backend(&self) -> &B {
-        &self.backend
-    }
-
-    /// The devices and channels the link is opening, or last tried to.
-    ///
-    /// A selection a device refused stays here rather than being rolled back,
-    /// so a link in [`AudioState::Lost`] says both what was tried and why it
-    /// failed, and [`open`](Self::open) is a retry of the same thing.
-    pub fn selection(&self) -> &DeviceSelection {
-        &self.selection
-    }
-
-    /// The stream currently serving the link, or `None` where none is open.
-    ///
-    /// This is the route to what a stream knows and the link does not: the
-    /// configuration the device granted, the levels, the dropout counts, the
-    /// callback's headroom.
-    pub fn stream(&self) -> Option<&B::Stream> {
-        self.stream.as_ref()
     }
 
     /// Open a stream, replacing whichever one the link is holding.
@@ -166,6 +129,48 @@ where
     pub fn select(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
         self.selection = selection;
         self.open()
+    }
+}
+
+impl<B: AudioBackend, F> DeviceLink<B, F> {
+    /// What the audio path is doing, as of the last [`poll`](Self::poll).
+    ///
+    /// A device that went away since then still reads as whatever it was doing
+    /// before it did: a fault is latched on the audio thread and noticed on
+    /// this one.
+    pub fn state(&self) -> AudioState {
+        self.state
+    }
+
+    /// The configuration every stream this link opens is asked for.
+    pub fn request(&self) -> StreamRequest {
+        self.request
+    }
+
+    /// The backend every stream this link opens comes from.
+    ///
+    /// Lent rather than cloned, so a [`DeviceCatalog`](super::DeviceCatalog)
+    /// can be refreshed through the same backend the link is playing through.
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    /// The devices and channels the link is opening, or last tried to.
+    ///
+    /// A selection a device refused stays here rather than being rolled back,
+    /// so a link in [`AudioState::Lost`] says both what was tried and why it
+    /// failed, and [`open`](Self::open) is a retry of the same thing.
+    pub fn selection(&self) -> &DeviceSelection {
+        &self.selection
+    }
+
+    /// The stream currently serving the link, or `None` where none is open.
+    ///
+    /// This is the route to what a stream knows and the link does not: the
+    /// configuration the device granted, the levels, the dropout counts, the
+    /// callback's headroom.
+    pub fn stream(&self) -> Option<&B::Stream> {
+        self.stream.as_ref()
     }
 
     /// Stop and drop the stream, leaving the link [`AudioState::Closed`].
