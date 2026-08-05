@@ -12,7 +12,7 @@ use std::rc::Rc;
 use motif::device::Button;
 use motif::ui::{
     App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Legend, Mode, NullRenderer, Page,
-    Renderer, ScriptedClock, ScriptedControls, Shell,
+    Region, Renderer, ScriptedClock, ScriptedControls, Shell,
 };
 
 const MARKER: char = '*';
@@ -70,8 +70,8 @@ impl Page for Marked {
         Legend::blank().answering(self.answers)
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
-        frame.set(0, 0, Cell::new(self.glyph));
+    fn draw(&mut self, mut region: Region<'_>) {
+        region.set(0, 0, Cell::new(self.glyph));
     }
 }
 
@@ -99,7 +99,7 @@ fn driven_by(shell: &mut Shell, events: impl IntoIterator<Item = ControlEvent>) 
 
 fn drawn(shell: &mut Shell) -> Frame {
     let mut frame = Frame::blank();
-    shell.draw(&mut frame);
+    shell.draw(frame.region());
 
     frame
 }
@@ -206,7 +206,7 @@ fn a_control_a_page_answers_does_not_end_the_run() {
 fn a_draw_does_not_end_the_run() {
     let (mut shell, _) = showing(MARKER);
 
-    assert_eq!(shell.draw(&mut Frame::blank()), Flow::Continue);
+    assert_eq!(shell.draw(Frame::blank().region()), Flow::Continue);
 }
 
 #[test]

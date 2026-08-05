@@ -22,7 +22,7 @@ use motif::audio::{
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, NullRenderer, RunReport,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, NullRenderer, Region, RunReport,
     ScriptedClock, ScriptedControls,
 };
 
@@ -55,6 +55,8 @@ fn deaf() -> StreamConfig {
         ..config()
     }
 }
+
+const FILL: char = '#';
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -102,12 +104,38 @@ impl App for Counted {
         Legend::blank().answering(Button::Record)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
+    fn draw(&mut self, mut region: Region<'_>) -> Flow {
         self.drawn += 1;
-        frame.set(0, 0, Cell::new('m'));
+        region.set(0, 0, Cell::new('m'));
 
         if self.lasts > 0 && self.drawn >= self.lasts {
             return Flow::Exit;
+        }
+
+        Flow::Continue
+    }
+}
+
+/// An application that writes into every cell of the region it is handed.
+///
+/// A page that fills what it was given is the case the monitor's status row used
+/// to be safe from by luck, so it is the one that says the region is a region.
+struct Filling;
+
+impl App for Filling {
+    fn control(&mut self, _event: ControlEvent) -> Flow {
+        Flow::Continue
+    }
+
+    fn legend(&self) -> Legend {
+        Legend::blank().answering(Button::Record)
+    }
+
+    fn draw(&mut self, mut region: Region<'_>) -> Flow {
+        for row in 0..region.rows() {
+            for column in 0..region.columns() {
+                region.set(column, row, Cell::new(FILL));
+            }
         }
 
         Flow::Continue
@@ -236,13 +264,20 @@ fn unplug(monitor: &Monitor<Counted, NullBackend>) {
 
 fn drawn(monitor: &mut Monitor<Counted, NullBackend>) -> Frame {
     let mut frame = Frame::blank();
-    monitor.draw(&mut frame);
+    monitor.draw(frame.region());
+
+    frame
+}
+
+fn covering(monitor: &mut Monitor<Filling, NullBackend>) -> Frame {
+    let mut frame = Frame::blank();
+    monitor.draw(frame.region());
 
     frame
 }
 
 fn status(frame: &Frame) -> String {
-    let row = DeviceProfile::TARGET.screen.rows - 2;
+    let row = DeviceProfile::TARGET.screen.rows - 1;
 
     (0..DeviceProfile::TARGET.screen.columns)
         .filter_map(|column| frame.get(column, row))
@@ -357,6 +392,28 @@ fn the_wrapped_application_still_draws() {
     let mut monitor = playing();
 
     assert_eq!(drawn(&mut monitor).get(0, 0), Some(Cell::new('m')));
+}
+
+#[test]
+fn an_application_filling_its_region_leaves_the_status_row_alone() {
+    let mut monitor = Monitor::opened(Filling, NullBackend::rounding(config()), request());
+
+    assert_eq!(status(&covering(&mut monitor)), "audio playing");
+}
+
+#[test]
+fn an_application_filling_its_region_keeps_every_row_it_was_given() {
+    let mut monitor = Monitor::opened(Filling, NullBackend::rounding(config()), request());
+    let frame = covering(&mut monitor);
+    let screen = DeviceProfile::TARGET.screen;
+
+    let filled = (0..screen.rows)
+        .filter(|row| {
+            (0..screen.columns).all(|column| frame.get(column, *row) == Some(Cell::new(FILL)))
+        })
+        .count();
+
+    assert_eq!(filled, screen.rows - 1);
 }
 
 #[test]

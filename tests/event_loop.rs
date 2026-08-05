@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use motif::device::{Button, DeviceProfile};
 use motif::ui::{
     App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, Legend,
-    NullRenderer, Panel, RenderError, Renderer, ScriptedClock, ScriptedControls,
+    NullRenderer, Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls,
 };
 
 /// The edge of a key, which is drawn for every control whether the page answers
@@ -68,8 +68,8 @@ impl App for Page {
         Legend::blank().answering(Button::Play)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
-        frame.set(0, self.drawn, Cell::new('*'));
+    fn draw(&mut self, mut region: Region<'_>) -> Flow {
+        region.set(0, self.drawn, Cell::new('*'));
         self.drawn += 1;
 
         if self.drawn >= self.draws_before_exit {
@@ -418,10 +418,9 @@ impl App for Filling {
         Legend::blank().answering(Button::Play)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
-        let screen = DeviceProfile::TARGET.screen;
-        for column in 0..screen.columns {
-            frame.set(column, screen.rows - 1, Cell::new('#'));
+    fn draw(&mut self, mut region: Region<'_>) -> Flow {
+        for column in 0..region.columns() {
+            region.set(column, region.rows() - 1, Cell::new('#'));
         }
 
         Flow::Exit
