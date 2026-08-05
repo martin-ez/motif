@@ -7,9 +7,11 @@
 //! recorded, costing the callback one pass over a block it already has.
 //!
 //! Buckets are fixed in count and not in width, because a loop's length is not
-//! known until recording stops. A bucket starts at one frame and doubles
-//! whenever the loop outgrows the count, folding pairs together: the summary
-//! spans the whole loop at every length, for a bounded pass over an array.
+//! known until recording stops. A bucket starts at one frame and widens to the
+//! next power of two that covers the loop, folding the buckets it swallows
+//! together: the summary spans the whole loop at every length, and it does so
+//! in one bounded pass over an array rather than a loop that runs until it
+//! fits.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
@@ -121,11 +123,20 @@ impl LoopWaveform {
     ///
     /// A bucket entered at its first frame is replaced rather than merged into,
     /// so a layer sweeping the loop a second time repaints the buckets it
-    /// passes instead of piling onto them. Buckets halve in count when the loop
-    /// outgrows them, which is what keeps them spanning the whole of it.
-    pub fn take(&mut self, from: usize, samples: impl IntoIterator<Item = f32>) {
-        for (offset, sample) in samples.into_iter().enumerate() {
-            self.taking(from + offset, sample);
+    /// passes instead of piling onto them. The buckets are widened first, in a
+    /// single pass over the array, which is what keeps them spanning the whole
+    /// loop however far this call carries its end.
+    pub fn take<S>(&mut self, from: usize, samples: S)
+    where
+        S: IntoIterator<Item = f32>,
+        S::IntoIter: ExactSizeIterator,
+    {
+        let samples = samples.into_iter();
+        self.length = self.length.max(from + samples.len());
+        self.spread_over(self.length.div_ceil(BUCKET_COUNT).next_power_of_two());
+
+        for (offset, sample) in samples.enumerate() {
+            self.folding(from + offset, sample);
         }
     }
 
@@ -155,12 +166,7 @@ impl LoopWaveform {
             .collect()
     }
 
-    fn taking(&mut self, frame: usize, sample: f32) {
-        self.length = self.length.max(frame + 1);
-        while self.length > BUCKET_COUNT.saturating_mul(self.width) {
-            self.halve();
-        }
-
+    fn folding(&mut self, frame: usize, sample: f32) {
         let bucket = frame / self.width;
         if frame.is_multiple_of(self.width) {
             self.buckets[bucket] = Extremes::SILENT;
@@ -168,12 +174,20 @@ impl LoopWaveform {
         self.buckets[bucket] = self.buckets[bucket].including(sample);
     }
 
-    fn halve(&mut self) {
-        for bucket in 0..BUCKET_COUNT / 2 {
-            self.buckets[bucket] = self.buckets[2 * bucket].merged(self.buckets[2 * bucket + 1]);
+    fn spread_over(&mut self, width: usize) {
+        let factor = width / self.width;
+        let kept = BUCKET_COUNT / factor;
+
+        for bucket in 0..kept {
+            let from = bucket * factor;
+            self.buckets[bucket] = self.buckets[from..from + factor]
+                .iter()
+                .fold(Extremes::SILENT, |merged, extremes| {
+                    merged.merged(*extremes)
+                });
         }
-        self.buckets[BUCKET_COUNT / 2..].fill(Extremes::SILENT);
-        self.width *= 2;
+        self.buckets[kept..].fill(Extremes::SILENT);
+        self.width = width;
     }
 
     fn column(&self, at: usize, columns: usize) -> Extremes {

@@ -9,6 +9,9 @@
 //! the tests state both directions: narrower keeps the extreme in each column,
 //! wider interpolates between the buckets either side.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use motif::looper::{Extremes, LoopWaveform, waveform_meter};
 
 const BUCKETS: usize = LoopWaveform::BUCKETS;
@@ -136,22 +139,31 @@ fn reading_a_waveform_leaves_it_published() {
 /// fast as two threads manage. Half of one and half of the other is a summary
 /// neither thread ever held, and the only way to read one is to catch a publish
 /// partway through.
+///
+/// The reader runs for as long as the writer does rather than for a count of
+/// its own, so a machine with nothing to spare shortens the test instead of
+/// leaving one thread spinning after the other has finished.
 #[test]
 fn a_summary_read_against_a_publish_is_never_halves_of_two() {
-    const ROUNDS: usize = 20_000;
+    const ROUNDS: usize = 200_000;
 
     let (mut writer, reader) = waveform_meter();
     let loud = summarising(&vec![1.0; BUCKETS]);
     let quiet = summarising(&vec![0.25; BUCKETS]);
     writer.publish(&loud);
 
-    let publishing = std::thread::spawn(move || {
-        for round in 0..ROUNDS {
-            writer.publish(if round % 2 == 0 { &loud } else { &quiet });
-        }
-    });
+    let published = Arc::new(AtomicBool::new(false));
+    let publishing = {
+        let published = Arc::clone(&published);
+        std::thread::spawn(move || {
+            for round in 0..ROUNDS {
+                writer.publish(if round % 2 == 0 { &loud } else { &quiet });
+            }
+            published.store(true, Ordering::Release);
+        })
+    };
 
-    for _ in 0..ROUNDS {
+    while !published.load(Ordering::Acquire) {
         let read = reader.read();
         let first = read.buckets()[0];
         assert!(
