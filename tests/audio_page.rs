@@ -252,13 +252,18 @@ fn row_of(frame: &Frame, row: usize) -> String {
         .collect()
 }
 
-fn drawn(page: &mut StudioPage) -> Vec<String> {
+fn drawn_into(page: &mut StudioPage, rows: usize) -> Vec<String> {
     let mut frame = Frame::blank();
-    page.draw(&mut frame);
+    let (region, _below) = frame.region().split_top(rows);
+    page.draw(region);
 
     (0..SCREEN.rows)
         .map(|row| row_of(&frame, row).trim_end().to_string())
         .collect()
+}
+
+fn drawn(page: &mut StudioPage) -> Vec<String> {
+    drawn_into(page, SCREEN.rows)
 }
 
 fn input_of(page: &StudioPage) -> String {
@@ -551,6 +556,20 @@ fn the_reason_is_drawn_under_the_settings() {
 
     assert_eq!(rows[last], "");
     assert!(rows[last + 1].contains("cannot open"), "{}", rows[last + 1]);
+}
+
+#[test]
+fn a_page_given_fewer_rows_draws_nothing_below_them() {
+    let mut page = moved(AudioSetting::Input, repeated(pressed(Button::Right), 2));
+    let band = 2;
+
+    let rows = drawn_into(&mut page, band);
+
+    assert!(
+        rows[band..].iter().all(String::is_empty),
+        "{:?}",
+        &rows[band..],
+    );
 }
 
 #[test]
