@@ -41,8 +41,8 @@ fn a_listed_device_is_named() {
     let hosts = backend.hosts(48_000);
 
     assert!(!hosts[0].name.is_empty());
-    assert!(!hosts[0].inputs[0].name.is_empty());
-    assert!(!hosts[0].outputs[0].name.is_empty());
+    assert!(!hosts[0].inputs[0].id.name.is_empty());
+    assert!(!hosts[0].outputs[0].id.name.is_empty());
 }
 
 #[test]
@@ -76,8 +76,8 @@ fn a_backend_defaults_to_devices_it_lists() {
     let chosen = backend.defaults(48_000).expect("a listed device is chosen");
 
     assert_eq!(chosen.host, hosts[0].name);
-    assert_eq!(chosen.input, hosts[0].inputs[0].name);
-    assert_eq!(chosen.output, hosts[0].outputs[0].name);
+    assert_eq!(chosen.input, hosts[0].inputs[0].id);
+    assert_eq!(chosen.output, hosts[0].outputs[0].id);
 }
 
 #[test]

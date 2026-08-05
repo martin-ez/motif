@@ -11,7 +11,7 @@
 //! [`DeviceCatalog`] sits in front of an [`AudioBackend`] rather than behind
 //! it, so `hosts` stays the live query its own documentation says it is.
 
-use super::{AudioBackend, AudioDevice, AudioHost, DeviceSelection};
+use super::{AudioBackend, AudioDevice, AudioHost, DeviceId, DeviceSelection};
 
 /// A listing, and the choice of when to pay for another one.
 ///
@@ -58,7 +58,7 @@ impl DeviceCatalog {
         self.listed
     }
 
-    /// Enumerate again, keeping whatever `held` names that the new listing
+    /// Enumerate again, keeping whatever `held` identifies that the new listing
     /// lost.
     ///
     /// `held` is the selection a stream is open on, and bounds what a refresh
@@ -123,9 +123,13 @@ impl DeviceCatalog {
     }
 }
 
-fn lost<'a>(before: &'a [AudioDevice], name: &str, now: &[AudioDevice]) -> Option<&'a AudioDevice> {
-    if now.iter().any(|device| device.name == name) {
+fn lost<'a>(
+    before: &'a [AudioDevice],
+    id: &DeviceId,
+    now: &[AudioDevice],
+) -> Option<&'a AudioDevice> {
+    if now.iter().any(|device| device.id == *id) {
         return None;
     }
-    before.iter().find(|device| device.name == name)
+    before.iter().find(|device| device.id == *id)
 }

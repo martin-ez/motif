@@ -2,7 +2,7 @@
 //! behind it so that it runs where no audio device exists.
 
 use motif::audio::{
-    AudioBackend, ChannelSelection, DeviceError, DeviceSelection, DuplexStream, Levels,
+    AudioBackend, ChannelSelection, DeviceError, DeviceId, DeviceSelection, DuplexStream, Levels,
     NullBackend, StreamConfig, StreamRequest, StreamState,
 };
 
@@ -190,7 +190,7 @@ fn an_input_device_the_host_does_not_have_is_an_error() {
 
     let opened = backend.open(
         &DeviceSelection {
-            input: "a device nobody has".to_owned(),
+            input: DeviceId::named("a device nobody has"),
             ..selection()
         },
         request(),
@@ -205,7 +205,7 @@ fn an_output_device_the_host_does_not_have_is_an_error() {
 
     let opened = backend.open(
         &DeviceSelection {
-            output: "a device nobody has".to_owned(),
+            output: DeviceId::named("a device nobody has"),
             ..selection()
         },
         request(),

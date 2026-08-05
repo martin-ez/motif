@@ -80,11 +80,56 @@ pub struct AudioHost {
     pub outputs: Vec<AudioDevice>,
 }
 
+/// Which device a listing meant, where a name is not enough to say.
+///
+/// Two interfaces of one model describe themselves identically, and on ALSA the
+/// `hw:` and `plughw:` entries for one card share a first description line. The
+/// name is what a player reads; this is what selects between the rows carrying
+/// it, and no two devices in one direction of a host share one.
+///
+/// ```
+/// use motif::audio::DeviceId;
+///
+/// let first = DeviceId::named("interface");
+/// let second = DeviceId { nth: 1, ..first.clone() };
+///
+/// assert_ne!(first, second);
+/// assert_eq!(second.to_string(), "interface (2)");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceId {
+    /// What the host calls the device.
+    pub name: String,
+    /// Which device of this name, counted from zero in the order the host
+    /// enumerates them.
+    pub nth: usize,
+}
+
+impl DeviceId {
+    /// The first device of a name, which is the whole of it where a name is
+    /// unique.
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            nth: 0,
+        }
+    }
+}
+
+impl fmt::Display for DeviceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.nth {
+            0 => f.write_str(&self.name),
+            nth => write!(f, "{} ({})", self.name, nth + 1),
+        }
+    }
+}
+
 /// A device, and the channel counts it can be opened with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioDevice {
-    /// What the host calls this device.
-    pub name: String,
+    /// Which device this is, name included.
+    pub id: DeviceId,
     /// Channel counts the device can be opened with, ascending and without
     /// repeats.
     pub channels: Vec<u16>,
@@ -131,9 +176,9 @@ impl ChannelSelection {
 
 /// Which devices to open, and which of their channels carry audio.
 ///
-/// The names are [`AudioHost::name`] and [`AudioDevice::name`] as
+/// The host is [`AudioHost::name`] and the devices are [`AudioDevice::id`] as
 /// [`AudioBackend::hosts`] gives them, so a selection is built straight out of a
-/// listing and nothing has to translate between the two.
+/// listing and nothing has to recover from a string what the listing knew.
 ///
 /// A listing was true when it was drawn and nothing promises it still is, so a
 /// selection naming a device that has since gone is the ordinary case rather
@@ -143,11 +188,11 @@ pub struct DeviceSelection {
     /// The host both devices are reached through.
     pub host: String,
     /// The device audio is captured from.
-    pub input: String,
+    pub input: DeviceId,
     /// Which of the input device's channels are captured.
     pub input_channels: ChannelSelection,
     /// The device audio is played to.
-    pub output: String,
+    pub output: DeviceId,
     /// Which of the output device's channels are played to.
     pub output_channels: ChannelSelection,
 }
@@ -171,9 +216,9 @@ pub enum StreamState {
 pub enum DeviceError {
     /// The backend has no host by the name that was selected.
     NoSuchHost,
-    /// The host has no input device by the name that was selected.
+    /// The host has no input device the selection identifies.
     NoInputDevice,
-    /// The host has no output device by the name that was selected.
+    /// The host has no output device the selection identifies.
     NoOutputDevice,
     /// The device cannot run at the requested configuration.
     UnsupportedConfig,
@@ -191,8 +236,8 @@ impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let described = match self {
             Self::NoSuchHost => "there is no host by that name",
-            Self::NoInputDevice => "the host has no input device by that name",
-            Self::NoOutputDevice => "the host has no output device by that name",
+            Self::NoInputDevice => "the host has no such input device",
+            Self::NoOutputDevice => "the host has no such output device",
             Self::UnsupportedConfig => "the device cannot run at the requested configuration",
             Self::DeviceNotAvailable => "the device is not available",
             Self::PermissionDenied => "access to the device was refused",
@@ -329,6 +374,7 @@ pub struct NullBackend {
     granted: StreamConfig,
     rejects_mismatch: bool,
     widths: Option<Vec<u16>>,
+    twin: Option<Vec<u16>>,
 }
 
 impl NullBackend {
@@ -339,6 +385,7 @@ impl NullBackend {
             granted,
             rejects_mismatch: false,
             widths: None,
+            twin: None,
         }
     }
 
@@ -349,6 +396,27 @@ impl NullBackend {
             granted,
             rejects_mismatch: true,
             widths: None,
+            twin: None,
+        }
+    }
+
+    /// A rounding backend whose device in each direction is followed by a twin:
+    /// a second device of the same name, opening at any of `widths`.
+    ///
+    /// Two devices describing themselves identically is the case a name alone
+    /// cannot select between, and modelling it takes no hardware. The twin
+    /// grants a width of its own so that which of the pair was opened is
+    /// visible in a [`DuplexStream::config`].
+    pub fn twinned(granted: StreamConfig, widths: Vec<u16>) -> Self {
+        let mut widths = widths;
+        widths.sort_unstable();
+        widths.dedup();
+
+        Self {
+            granted,
+            rejects_mismatch: false,
+            widths: None,
+            twin: Some(widths),
         }
     }
 
@@ -368,6 +436,7 @@ impl NullBackend {
             granted,
             rejects_mismatch: false,
             widths: Some(widths),
+            twin: None,
         }
     }
 
@@ -380,21 +449,31 @@ impl NullBackend {
             None => vec![natural],
         }
     }
+
+    fn null_devices(&self, name: &str, natural: u16) -> Vec<AudioDevice> {
+        let offered = self.offered(natural);
+        if offered.is_empty() {
+            return Vec::new();
+        }
+
+        std::iter::once(offered)
+            .chain(self.twin.clone())
+            .filter(|channels| !channels.is_empty())
+            .enumerate()
+            .map(|(nth, channels)| AudioDevice {
+                id: DeviceId {
+                    name: name.to_owned(),
+                    nth,
+                },
+                channels,
+            })
+            .collect()
+    }
 }
 
 const NULL_HOST: &str = "null";
 const NULL_INPUT: &str = "null input";
 const NULL_OUTPUT: &str = "null output";
-
-fn null_device(name: &str, channels: Vec<u16>) -> Vec<AudioDevice> {
-    if channels.is_empty() {
-        return Vec::new();
-    }
-    vec![AudioDevice {
-        name: name.to_owned(),
-        channels,
-    }]
-}
 
 impl AudioBackend for NullBackend {
     type Stream = NullStream;
@@ -410,8 +489,8 @@ impl AudioBackend for NullBackend {
 
         let host = AudioHost {
             name: NULL_HOST.to_owned(),
-            inputs: null_device(NULL_INPUT, self.offered(self.granted.input_channels)),
-            outputs: null_device(NULL_OUTPUT, self.offered(self.granted.output_channels)),
+            inputs: self.null_devices(NULL_INPUT, self.granted.input_channels),
+            outputs: self.null_devices(NULL_OUTPUT, self.granted.output_channels),
         };
 
         if host.inputs.is_empty() && host.outputs.is_empty() {
@@ -428,17 +507,16 @@ impl AudioBackend for NullBackend {
         let output = host.outputs.first()?;
 
         Some(DeviceSelection {
-            input: input.name.clone(),
+            input: input.id.clone(),
             input_channels: ChannelSelection::all(self.granted.input_channels),
-            output: output.name.clone(),
+            output: output.id.clone(),
             output_channels: ChannelSelection::all(self.granted.output_channels),
             host: host.name,
         })
     }
 
-    /// Names are checked against the device this backend has whatever the rate
-    /// asked for, so that a rounding device can still be asked for a rate it
-    /// does not list and grant its own.
+    /// Devices are looked up whatever the rate asked for, so that a rounding
+    /// device can still be asked for a rate it does not list and grant its own.
     fn open(
         &self,
         selection: &DeviceSelection,
@@ -448,15 +526,15 @@ impl AudioBackend for NullBackend {
             return Err(DeviceError::NoSuchHost);
         }
 
-        let inputs = null_device(NULL_INPUT, self.offered(self.granted.input_channels));
+        let inputs = self.null_devices(NULL_INPUT, self.granted.input_channels);
         let input = inputs
             .iter()
-            .find(|device| device.name == selection.input)
+            .find(|device| device.id == selection.input)
             .ok_or(DeviceError::NoInputDevice)?;
-        let outputs = null_device(NULL_OUTPUT, self.offered(self.granted.output_channels));
+        let outputs = self.null_devices(NULL_OUTPUT, self.granted.output_channels);
         let output = outputs
             .iter()
-            .find(|device| device.name == selection.output)
+            .find(|device| device.id == selection.output)
             .ok_or(DeviceError::NoOutputDevice)?;
 
         let input_channels = opened_width(

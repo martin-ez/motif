@@ -8,7 +8,7 @@
 use std::cell::{Cell, RefCell};
 
 use motif::audio::{
-    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceCatalog, DeviceError,
+    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceCatalog, DeviceError, DeviceId,
     DeviceSelection, NullStream, StreamRequest,
 };
 
@@ -64,7 +64,17 @@ impl AudioBackend for CountingBackend {
 
 fn device(name: &str, channels: Vec<u16>) -> AudioDevice {
     AudioDevice {
-        name: name.to_owned(),
+        id: DeviceId::named(name),
+        channels,
+    }
+}
+
+fn second_of(name: &str, channels: Vec<u16>) -> AudioDevice {
+    AudioDevice {
+        id: DeviceId {
+            name: name.to_owned(),
+            nth: 1,
+        },
         channels,
     }
 }
@@ -96,19 +106,47 @@ fn without_the_interface_output() -> Vec<AudioHost> {
 fn held() -> DeviceSelection {
     DeviceSelection {
         host: "alsa".to_owned(),
-        input: "interface".to_owned(),
+        input: DeviceId::named("interface"),
         input_channels: ChannelSelection::all(2),
-        output: "interface".to_owned(),
+        output: DeviceId::named("interface"),
         output_channels: ChannelSelection::all(2),
     }
 }
 
-fn input_names(catalog: &DeviceCatalog) -> Vec<String> {
+fn two_interfaces() -> Vec<AudioHost> {
+    vec![AudioHost {
+        name: "alsa".to_owned(),
+        inputs: vec![
+            device("interface", vec![2, 4]),
+            second_of("interface", vec![2]),
+        ],
+        outputs: vec![device("interface", vec![2])],
+    }]
+}
+
+fn holding_the_second_interface() -> DeviceSelection {
+    DeviceSelection {
+        input: DeviceId {
+            name: "interface".to_owned(),
+            nth: 1,
+        },
+        ..held()
+    }
+}
+
+fn input_ids(catalog: &DeviceCatalog) -> Vec<DeviceId> {
     catalog
         .hosts()
         .iter()
         .flat_map(|host| host.inputs.iter())
-        .map(|device| device.name.clone())
+        .map(|device| device.id.clone())
+        .collect()
+}
+
+fn input_names(catalog: &DeviceCatalog) -> Vec<String> {
+    input_ids(catalog)
+        .iter()
+        .map(|id| id.name.clone())
         .collect()
 }
 
@@ -227,7 +265,7 @@ fn a_held_device_that_goes_missing_keeps_the_channels_it_was_listed_with() {
     let carried = catalog.hosts()[0]
         .inputs
         .iter()
-        .find(|device| device.name == "interface")
+        .find(|device| device.id == held().input)
         .expect("a held device stays listed");
     assert_eq!(carried.channels, vec![2, 4]);
 }
@@ -310,6 +348,29 @@ fn a_held_device_that_was_never_listed_is_not_invented() {
     catalog.refresh(&backend, Some(&held()));
 
     assert!(!input_names(&catalog).contains(&"interface".to_owned()));
+}
+
+#[test]
+fn a_held_device_is_carried_though_its_name_is_still_on_another() {
+    let backend = CountingBackend::new(two_interfaces());
+    let mut catalog = DeviceCatalog::new(48_000);
+    catalog.refresh(&backend, None);
+
+    backend.now_lists(one_host());
+    catalog.refresh(&backend, Some(&holding_the_second_interface()));
+
+    assert!(input_ids(&catalog).contains(&holding_the_second_interface().input));
+}
+
+#[test]
+fn a_held_device_the_backend_still_lists_is_not_carried_beside_its_namesake() {
+    let backend = CountingBackend::new(two_interfaces());
+    let mut catalog = DeviceCatalog::new(48_000);
+    catalog.refresh(&backend, None);
+
+    catalog.refresh(&backend, Some(&held()));
+
+    assert_eq!(catalog.hosts(), two_interfaces().as_slice());
 }
 
 #[test]
