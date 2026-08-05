@@ -1,37 +1,32 @@
-# Mutating the binary entry point reports a miss that no test could ever catch:
-# main is a shell over the library, and there is nothing in it to constrain.
-# Keeping it that thin is deliberate — the behaviour worth testing lives in the
-# library, where tests/ can reach it as an external consumer.
-#
-# The cpal backend is excluded for the same reason, one layer down: it is a
-# shell over cpal's API, and the runners have no audio device, so every test
-# that could constrain it is #[ignore]d and cargo-mutants would report misses
-# nothing could ever catch. The behaviour that is not cpal's — the lifecycle,
-# the granted configuration, the errors — lives behind AudioBackend and is
-# tested through NullBackend, which is mutated normally.
-# The terminal screen is excluded on the same grounds, one layer further out:
-# it is a shell over libc's termios calls, and a runner has no terminal, so the
-# only test that could constrain it would have to seize a real one — worse than
-# no test. Which cells get written is not libc's decision and not excluded: that
-# lives in FrameWriter, which is mutated normally and tested against a sink that
-# is not a terminal at all.
+# A thin shell over an API a runner cannot exercise, where a mutant is a miss no
+# test could ever catch. The behaviour that is not the API's own lives elsewhere
+# and is mutated normally.
 exclude_globs = [
+  # A shell over the library; what is worth testing is reachable from tests/.
   "src/main.rs",
+  # A shell over cpal, and the runners have no audio device. The lifecycle, the
+  # granted configuration and the errors sit behind AudioBackend, tested through
+  # NullBackend.
   "src/audio/cpal_backend.rs",
+  # A shell over libc's termios, and constraining it would mean seizing a real
+  # terminal. Which cells get written is FrameWriter's, tested against a sink.
   "src/ui/terminal/screen.rs",
 ]
 
-# A command is packed into one word as a tag above bit 32 and a payload below
-# it. The two fields never share a bit, so `|` and `^` compute the same word for
-# every command that exists, and no test can tell them apart — the mutant is
-# equivalent to the code it replaces rather than uncaught by it. Excluded by
-# name so that every other mutation of the encoding still has to be caught.
-#
-# A level pair is packed the same way, peak above bit 32 and RMS below it, and
-# is equivalent for the same reason: two disjoint halves of a word. So is a loop
-# position, playhead above bit 32 and recorded length below it.
+# Equivalent to the code it replaces rather than uncaught by it: the two compute
+# the same result for every input, so no test can tell them apart. Named one
+# mutation at a time, so every other mutation of the same item is still caught.
 exclude_re = [
+  # A tag above bit 32 and a payload below never share a bit, so `|` and `^`
+  # pack the same word.
   'replace \| with \^ in Command::to_bits',
+  # The last block's load above bit 32 and the recent peak below.
+  'replace \| with \^ in Headroom::packed',
+  # Peak above bit 32 and RMS below: disjoint halves again.
   'replace \| with \^ in Levels::packed',
+  # Playhead above bit 32 and recorded length below.
   'replace \| with \^ in LoopPosition::packed',
+  # `<=` admits only the selection sitting on the offset, where the assignment
+  # it admits sets the offset to the value it already holds.
+  'replace < with <= in ListPage::keep_the_selection_visible',
 ]
