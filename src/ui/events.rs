@@ -187,6 +187,10 @@ impl<K: Clock> EventLoop<K> {
     /// A loop given no meter measures nothing, which is what makes the two
     /// clock reads it already takes the whole cost of this: the readings are
     /// taken for the budget either way.
+    ///
+    /// A meter belongs to one run. Its recent window advances with the frames
+    /// it is given and nothing resets it, so running the same loop again would
+    /// open with a peak the previous run left behind.
     #[cfg(feature = "frame-pace")]
     pub fn metering(mut self, pace: PaceWriter) -> Self {
         self.pace = Some(pace);

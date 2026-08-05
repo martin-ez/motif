@@ -1,3 +1,9 @@
+# Every feature is built and tested, because cargo-mutants reads the source
+# rather than the cfgs: a mutant inside a feature that is off still enumerates,
+# still builds, and is then reported as missed by a suite that never compiled
+# it. A feature nobody mutates is a feature nobody tests.
+additional_cargo_args = ["--all-features"]
+
 # A thin shell over an API a runner cannot exercise, where a mutant is a miss no
 # test could ever catch. The behaviour that is not the API's own lives elsewhere
 # and is mutated normally.

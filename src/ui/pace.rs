@@ -134,10 +134,10 @@ impl PaceReader {
     /// been measured yet.
     ///
     /// Reading takes nothing: a peak stays readable until the window it belongs
-    /// to has passed, so two readers see the same spike and neither hides it
-    /// from the other. The window advances with the frames that are measured
-    /// rather than with the clock, so a loop that has stopped keeps reporting
-    /// the window it stopped in.
+    /// to has passed, so looking twice in a frame reports it twice rather than
+    /// the second look finding it gone. The window advances with the frames
+    /// that are measured rather than with the clock, so a loop that has stopped
+    /// keeps reporting the window it stopped in.
     pub fn read(&self) -> Pace {
         self.published.get()
     }

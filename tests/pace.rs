@@ -23,6 +23,11 @@ use motif::ui::{
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
 
+/// A second of frames at the target's 30 Hz, stated rather than taken from
+/// [`Pace::RECENT_FRAMES`]: a window sized from the constant it is meant to
+/// pin down moves whenever the constant does, and pins down nothing.
+const RECENT_FRAMES: usize = 30;
+
 /// Frames enough to close the recent window twice over, so that whatever the
 /// window holds has been replaced rather than merely added to.
 const PAST_THE_WINDOW: usize = 128;
@@ -133,9 +138,14 @@ fn a_spike_survives_the_window_it_landed_in_closing() {
     let (mut writer, reader) = pace_meter();
 
     writer.measured(BUDGET, 0);
-    quiet_frames(&mut writer, Pace::RECENT_FRAMES);
+    quiet_frames(&mut writer, RECENT_FRAMES);
 
     assert_eq!(reader.read().peak, 1.0);
+}
+
+#[test]
+fn the_recent_window_spans_a_second_of_frames() {
+    assert_eq!(Pace::RECENT_FRAMES, RECENT_FRAMES);
 }
 
 #[test]
