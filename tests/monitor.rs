@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use motif::audio::{
-    AudioBackend, AudioDevice, AudioHost, AudioState, ChannelSelection, DeviceError,
+    AudioBackend, AudioDevice, AudioHost, AudioState, ChannelSelection, DeviceError, DeviceId,
     DeviceSelection, DuplexStream, Headroom, Levels, NullBackend, StreamConfig, StreamRequest,
     StreamState, Xruns,
 };
@@ -139,11 +139,11 @@ impl AudioBackend for RecordingBackend {
         vec![AudioHost {
             name: "recording".to_owned(),
             inputs: vec![AudioDevice {
-                name: "in".to_owned(),
+                id: DeviceId::named("in"),
                 channels: vec![2],
             }],
             outputs: vec![AudioDevice {
-                name: "out".to_owned(),
+                id: DeviceId::named("out"),
                 channels: vec![2],
             }],
         }]
@@ -152,9 +152,9 @@ impl AudioBackend for RecordingBackend {
     fn defaults(&self, _sample_rate: u32) -> Option<DeviceSelection> {
         Some(DeviceSelection {
             host: "recording".to_owned(),
-            input: "in".to_owned(),
+            input: DeviceId::named("in"),
             input_channels: ChannelSelection::all(2),
-            output: "out".to_owned(),
+            output: DeviceId::named("out"),
             output_channels: ChannelSelection::all(2),
         })
     }
