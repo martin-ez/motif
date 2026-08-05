@@ -1,10 +1,11 @@
 //! Configuring the application from a page, starting with the audio path.
 //!
-//! [`AudioPage`] holds the [`DeviceLink`] it is configuring rather than
-//! reporting a choice for something else to apply, because applying one is
-//! opening a stream: the listing, the choice and the device that has to answer
-//! for it are one mechanism, and splitting them puts a stale selection between
-//! the two halves.
+//! [`AudioPage`] applies a choice to the [`SharedLink`] it is given rather than
+//! reporting one for something else to apply, because applying one is opening a
+//! stream: the listing, the choice and the device that has to answer for it are
+//! one mechanism, and splitting them puts a stale selection between the halves.
+//! The link is shared rather than owned because a run has one device, and
+//! whatever draws what that device is doing is holding the same link.
 //!
 //! The listing comes from a [`DeviceCatalog`] refreshed before the first stream
 //! opens, which is what keeps enumeration off a running device. A listing was
@@ -14,7 +15,7 @@
 
 use crate::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceCatalog,
-    DeviceError, DeviceId, DeviceLink, DeviceSelection,
+    DeviceError, DeviceId, DeviceLink, DeviceSelection, SharedLink,
 };
 use crate::closed_set::closed_set;
 use crate::device::{Button, Encoder};
@@ -115,7 +116,7 @@ fn taken_whole(device: &AudioDevice) -> ChannelSelection {
 ///
 /// ```
 /// use motif::audio::{
-///     AudioBackend, DeviceLink, NullBackend, Passthrough, StreamConfig, StreamRequest,
+///     AudioBackend, DeviceLink, NullBackend, Passthrough, SharedLink, StreamConfig, StreamRequest,
 /// };
 /// use motif::settings::{AudioPage, AudioSetting};
 ///
@@ -129,13 +130,15 @@ fn taken_whole(device: &AudioDevice) -> ChannelSelection {
 /// let backend = NullBackend::rounding(granted);
 /// let selection = backend.defaults(48_000).expect("the null backend has both directions");
 ///
-/// let page = AudioPage::opened(DeviceLink::new(backend, request, selection, Passthrough::new));
+/// let page = AudioPage::listing(SharedLink::new(
+///     DeviceLink::new(backend, request, selection, Passthrough::new),
+/// ));
 ///
 /// assert_eq!(page.selected(), AudioSetting::Host);
 /// assert_eq!(page.value(AudioSetting::InputChannels), "1-2");
 /// ```
 pub struct AudioPage<B: AudioBackend, F> {
-    link: DeviceLink<B, F>,
+    link: SharedLink<B, F>,
     catalog: DeviceCatalog,
     row: usize,
     refused: Option<DeviceError>,
@@ -146,29 +149,23 @@ where
     F: FnMut() -> P,
     P: AudioPath,
 {
-    /// List what `link` could be opened on, then open and start it.
+    /// List what `link` could be opened on, leaving the opening to whatever
+    /// holds it for the run.
     ///
     /// Enumerating before the first stream is what keeps a running device out
     /// of the listing's way: on ALSA, listing a device a stream holds takes
-    /// `EBUSY` and drops the one row the page must not lose.
-    ///
-    /// This cannot fail. A link whose device refuses is left in
-    /// [`AudioState::Lost`] carrying why, that being something to draw rather
-    /// than a reason not to run.
-    pub fn opened(link: DeviceLink<B, F>) -> Self {
-        let mut page = Self {
-            catalog: DeviceCatalog::new(link.request().sample_rate),
+    /// `EBUSY` and drops the one row the page must not lose. Build the page
+    /// before whatever opens the link, and that ordering comes for free.
+    pub fn listing(link: SharedLink<B, F>) -> Self {
+        let mut catalog = DeviceCatalog::new(link.read(DeviceLink::request).sample_rate);
+        link.read(|held| catalog.refresh(held.backend(), None));
+
+        Self {
             link,
+            catalog,
             row: 0,
             refused: None,
-        };
-
-        page.catalog.refresh(page.link.backend(), None);
-        if page.link.open().is_ok() {
-            let _started = page.link.start();
         }
-
-        page
     }
 
     /// Enumerate again, keeping whatever the link is open on.
@@ -177,8 +174,10 @@ where
     /// plugged in after the page opened is reachable only once this has been
     /// called. Blocks and allocates; never reach it from the audio callback.
     pub fn refresh(&mut self) {
-        self.catalog
-            .refresh(self.link.backend(), Some(self.link.selection()));
+        let catalog = &mut self.catalog;
+
+        self.link
+            .read(|held| catalog.refresh(held.backend(), Some(held.selection())));
     }
 
     /// Which setting the player is on.
@@ -188,10 +187,10 @@ where
 
     /// What the page draws for `setting`, taken from what the link is open on.
     pub fn value(&self, setting: AudioSetting) -> String {
-        let selection = self.link.selection();
+        let selection = self.selection();
 
         match setting {
-            AudioSetting::Host => selection.host.clone(),
+            AudioSetting::Host => selection.host,
             AudioSetting::Input => selection.input.to_string(),
             AudioSetting::InputChannels => counted(selection.input_channels),
             AudioSetting::Output => selection.output.to_string(),
@@ -204,18 +203,18 @@ where
         self.catalog.hosts()
     }
 
-    /// The link the page is configuring.
+    /// A handle on the link the page is configuring.
     ///
     /// This is the route to what the stream knows and the page does not: the
     /// selection it is open on, the configuration the device granted, the
     /// levels and the dropout counts.
-    pub fn link(&self) -> &DeviceLink<B, F> {
+    pub fn link(&self) -> &SharedLink<B, F> {
         &self.link
     }
 
     /// What the audio path is doing.
     pub fn state(&self) -> AudioState {
-        self.link.state()
+        self.link.read(DeviceLink::state)
     }
 
     /// Why the last choice could not be opened, or `None` where the last one
@@ -227,17 +226,21 @@ where
         self.refused
     }
 
-    fn host(&self) -> Option<&AudioHost> {
-        let named = &self.link.selection().host;
+    fn selection(&self) -> DeviceSelection {
+        self.link.read(|held| held.selection().clone())
+    }
 
-        self.listed().iter().find(|host| host.name == *named)
+    fn host(&self) -> Option<&AudioHost> {
+        let named = self.selection().host;
+
+        self.listed().iter().find(|host| host.name == named)
     }
 
     fn adjust(&mut self, forward: bool) {
         let Some(chosen) = self.chosen(forward) else {
             return;
         };
-        if chosen == *self.link.selection() {
+        if chosen == self.selection() {
             return;
         }
 
@@ -255,7 +258,7 @@ where
     }
 
     fn on_another_host(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.link.selection();
+        let selection = self.selection();
         let at = self
             .listed()
             .iter()
@@ -275,31 +278,31 @@ where
     }
 
     fn on_another_input(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.link.selection();
+        let selection = self.selection();
         let devices = &self.host()?.inputs;
         let device = &devices[stepped(found(devices, &selection.input), devices.len(), forward)?];
 
         Some(DeviceSelection {
             input: device.id.clone(),
             input_channels: taken_whole(device),
-            ..selection.clone()
+            ..selection
         })
     }
 
     fn on_another_output(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.link.selection();
+        let selection = self.selection();
         let devices = &self.host()?.outputs;
         let device = &devices[stepped(found(devices, &selection.output), devices.len(), forward)?];
 
         Some(DeviceSelection {
             output: device.id.clone(),
             output_channels: taken_whole(device),
-            ..selection.clone()
+            ..selection
         })
     }
 
     fn across_other_input_channels(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.link.selection();
+        let selection = self.selection();
         let devices = &self.host()?.inputs;
         let offered = runs(widest(&devices[found(devices, &selection.input)?]));
         let at = offered
@@ -308,12 +311,12 @@ where
 
         Some(DeviceSelection {
             input_channels: offered[stepped(at, offered.len(), forward)?],
-            ..selection.clone()
+            ..selection
         })
     }
 
     fn across_other_output_channels(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.link.selection();
+        let selection = self.selection();
         let devices = &self.host()?.outputs;
         let offered = runs(widest(&devices[found(devices, &selection.output)?]));
         let at = offered
@@ -322,12 +325,12 @@ where
 
         Some(DeviceSelection {
             output_channels: offered[stepped(at, offered.len(), forward)?],
-            ..selection.clone()
+            ..selection
         })
     }
 
     fn apply(&mut self, chosen: DeviceSelection) {
-        let running = self.link.selection().clone();
+        let running = self.selection();
 
         match self.serve(chosen) {
             Ok(()) => self.refused = None,
@@ -339,8 +342,8 @@ where
     }
 
     fn serve(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
-        self.link.select(selection)?;
-        self.link.start()
+        self.link.change(|held| held.select(selection))?;
+        self.link.change(DeviceLink::start)
     }
 }
 

@@ -38,7 +38,7 @@ pub use fault::{FaultReader, FaultReporter, fault_channel};
 pub use gain::Gain;
 pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
-pub use link::{AudioState, DeviceLink};
+pub use link::{AudioState, DeviceLink, SharedLink};
 pub use path::{AudioPath, Commanded, InputMonitor, Passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};

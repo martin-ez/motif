@@ -3,17 +3,20 @@
 //!
 //! A stream is the wrong thing to hand the rest of the application, because a
 //! device that vanishes takes it with it. What survives is the intent to play
-//! through a chosen device — the backend, the choice, the configuration asked
-//! of it, and whichever stream serves that intent. That is [`DeviceLink`], and
-//! [`AudioState`] is what it looks like from outside.
+//! through a chosen device, and whichever stream serves it: that is
+//! [`DeviceLink`], and [`AudioState`] is what it looks like from outside.
 //!
 //! Recovery is a replacement, never a repair: a faulted stream is stopped and
 //! dropped on the application thread, where dropping is allowed and is what
 //! joins the callback threads. [`open`](DeviceLink::open) replaces the stream
 //! whatever the reason and [`select`](DeviceLink::select) is that call after
 //! changing the choice, so a lost device and a changed one are one mechanism.
+//!
+//! One run, one device, one link: [`SharedLink`] is how its holders share it.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 
 use super::{AudioBackend, AudioPath, DeviceError, DeviceSelection, DuplexStream, StreamRequest};
 
@@ -251,5 +254,95 @@ impl<B: AudioBackend, F> DeviceLink<B, F> {
     fn lose(&mut self, error: DeviceError) -> DeviceError {
         self.state = AudioState::Lost(error);
         error
+    }
+}
+
+/// One [`DeviceLink`], held by everything in a run that reaches the device.
+///
+/// Both ends sit on the application thread — the event loop calls them in turn,
+/// so there is nothing here to cross and the shared cell says so. What it
+/// guards is two owners rather than two threads: a run holding a link each
+/// would open two streams on one interface and disagree about which is playing.
+///
+/// Access is scoped to a closure, and [`change`](Self::change) takes the handle
+/// by `&mut`, so no borrow outlives its call or is reached from inside another.
+///
+/// ```
+/// use motif::audio::{
+///     AudioState, DeviceLink, NullBackend, Passthrough, SharedLink, StreamConfig, StreamRequest,
+/// };
+///
+/// let granted = StreamConfig {
+///     sample_rate: 48_000,
+///     block_size: 256,
+///     input_channels: 2,
+///     output_channels: 2,
+/// };
+/// let request = StreamRequest { sample_rate: 48_000, block_size: 256 };
+///
+/// let mut link = SharedLink::defaulting(NullBackend::rounding(granted), request, Passthrough::new)
+///     .expect("the null backend has a device in each direction");
+/// let watching = link.clone();
+///
+/// let _opened = link.change(DeviceLink::open);
+///
+/// assert_eq!(watching.read(DeviceLink::state), AudioState::Idle);
+/// ```
+pub struct SharedLink<B: AudioBackend, F> {
+    link: Rc<RefCell<DeviceLink<B, F>>>,
+}
+
+impl<B: AudioBackend, F> Clone for SharedLink<B, F> {
+    /// Another handle on the same link, never a second link.
+    fn clone(&self) -> Self {
+        Self {
+            link: Rc::clone(&self.link),
+        }
+    }
+}
+
+impl<B: AudioBackend, F, P> SharedLink<B, F>
+where
+    F: FnMut() -> P,
+    P: AudioPath,
+{
+    /// A shared link on what `backend` would open at `request` if nobody chose,
+    /// or `None` where it has nothing to offer.
+    ///
+    /// Touches no device beyond listing them, so what comes back has opened
+    /// nothing: the first [`DeviceLink::open`] through it is where a device
+    /// gets a say.
+    pub fn defaulting(backend: B, request: StreamRequest, path: F) -> Option<Self> {
+        let selection = backend.defaults(request.sample_rate)?;
+
+        Some(Self::new(DeviceLink::new(
+            backend, request, selection, path,
+        )))
+    }
+}
+
+impl<B: AudioBackend, F> SharedLink<B, F> {
+    /// Share `link`, so that more than one part of a run can reach it.
+    pub fn new(link: DeviceLink<B, F>) -> Self {
+        Self {
+            link: Rc::new(RefCell::new(link)),
+        }
+    }
+
+    /// Read the link through `f`, and report what `f` returned.
+    ///
+    /// Reads nest, so a caller that reaches the link twice over one expression
+    /// is fine. Nothing borrowed from the link escapes: `f` returns a value.
+    pub fn read<R>(&self, f: impl FnOnce(&DeviceLink<B, F>) -> R) -> R {
+        f(&self.link.borrow())
+    }
+
+    /// Change the link through `f`, and report what `f` returned.
+    ///
+    /// The route to opening, starting, stopping and polling. It takes the
+    /// handle by `&mut` so that a change cannot be reached from inside a read
+    /// or another change on the same one.
+    pub fn change<R>(&mut self, f: impl FnOnce(&mut DeviceLink<B, F>) -> R) -> R {
+        f(&mut self.link.borrow_mut())
     }
 }

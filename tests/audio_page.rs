@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
-    DeviceId, DeviceLink, DeviceSelection, NullBackend, NullStream, Passthrough, StreamConfig,
-    StreamRequest,
+    DeviceId, DeviceLink, DeviceSelection, NullBackend, NullStream, Passthrough, SharedLink,
+    StreamConfig, StreamRequest,
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::settings::{AudioPage, AudioSetting};
@@ -170,35 +170,40 @@ impl AudioBackend for Studio {
 
 type StudioPage = AudioPage<Studio, fn() -> Passthrough>;
 
-fn page() -> StudioPage {
+/// A page over the studio, listed and then playing, as a run composes it.
+///
+/// The page lists what there is to choose from and leaves the first open to
+/// whatever holds the link for the run, so a test wanting a page over a running
+/// device opens it here, in the order a monitor would.
+fn listed_at(request: StreamRequest) -> StudioPage {
     let studio = Studio::new();
     let selection = studio
         .defaults(RATE)
         .expect("the studio has both directions");
-
-    AudioPage::opened(DeviceLink::new(
+    let mut link = SharedLink::new(DeviceLink::new(
         studio,
-        request(),
+        request,
         selection,
         Passthrough::new as fn() -> _,
-    ))
+    ));
+
+    let page = AudioPage::listing(link.clone());
+    if link.change(DeviceLink::open).is_ok() {
+        let _started = link.change(DeviceLink::start);
+    }
+
+    page
+}
+
+fn page() -> StudioPage {
+    listed_at(request())
 }
 
 fn unlisted_page() -> StudioPage {
-    let studio = Studio::new();
-    let selection = studio
-        .defaults(RATE)
-        .expect("the studio has both directions");
-
-    AudioPage::opened(DeviceLink::new(
-        studio,
-        StreamRequest {
-            sample_rate: 44_100,
-            ..request()
-        },
-        selection,
-        Passthrough::new as fn() -> _,
-    ))
+    listed_at(StreamRequest {
+        sample_rate: 44_100,
+        ..request()
+    })
 }
 
 fn pressed(button: Button) -> ControlEvent {
@@ -267,15 +272,23 @@ fn drawn(page: &mut StudioPage) -> Vec<String> {
 }
 
 fn input_of(page: &StudioPage) -> String {
-    page.link().selection().input.to_string()
+    page.link().read(|held| held.selection().input.to_string())
 }
 
 fn output_of(page: &StudioPage) -> String {
-    page.link().selection().output.to_string()
+    page.link().read(|held| held.selection().output.to_string())
 }
 
 fn host_of(page: &StudioPage) -> String {
-    page.link().selection().host.clone()
+    page.link().read(|held| held.selection().host.clone())
+}
+
+fn input_channels_of(page: &StudioPage) -> ChannelSelection {
+    page.link().read(|held| held.selection().input_channels)
+}
+
+fn output_channels_of(page: &StudioPage) -> ChannelSelection {
+    page.link().read(|held| held.selection().output_channels)
 }
 
 #[test]
@@ -461,10 +474,7 @@ fn a_new_input_device_is_taken_whole() {
     driven_by(&mut page, [pressed(Button::Left)]);
     driven_by(&mut page, [pressed(Button::Up), pressed(Button::Right)]);
 
-    assert_eq!(
-        page.link().selection().input_channels,
-        ChannelSelection::all(2)
-    );
+    assert_eq!(input_channels_of(&page), ChannelSelection::all(2));
 }
 
 #[test]
@@ -474,10 +484,7 @@ fn a_new_output_device_is_taken_whole() {
     driven_by(&mut page, [pressed(Button::Left)]);
     driven_by(&mut page, [pressed(Button::Up), pressed(Button::Right)]);
 
-    assert_eq!(
-        page.link().selection().output_channels,
-        ChannelSelection::all(2)
-    );
+    assert_eq!(output_channels_of(&page), ChannelSelection::all(2));
 }
 
 #[test]
@@ -485,7 +492,7 @@ fn moving_the_input_channels_narrows_what_is_captured() {
     let page = moved(AudioSetting::InputChannels, [pressed(Button::Left)]);
 
     assert_eq!(
-        page.link().selection().input_channels,
+        input_channels_of(&page),
         ChannelSelection { first: 1, count: 1 }
     );
 }
@@ -497,10 +504,7 @@ fn the_input_channels_stop_at_the_whole_device() {
         repeated(pressed(Button::Right), 3),
     );
 
-    assert_eq!(
-        page.link().selection().input_channels,
-        ChannelSelection::all(2)
-    );
+    assert_eq!(input_channels_of(&page), ChannelSelection::all(2));
 }
 
 #[test]
@@ -508,7 +512,7 @@ fn moving_the_output_channels_narrows_what_is_played() {
     let page = moved(AudioSetting::OutputChannels, [pressed(Button::Left)]);
 
     assert_eq!(
-        page.link().selection().output_channels,
+        output_channels_of(&page),
         ChannelSelection { first: 1, count: 1 }
     );
 }
@@ -595,14 +599,14 @@ fn a_setting_with_nothing_listed_does_not_move() {
     let mut page = unlisted_page();
     driven_by(&mut page, [pressed(Button::Right)]);
 
-    assert_eq!(page.link().selection().host, FIRST);
+    assert_eq!(host_of(&page), FIRST);
     assert_eq!(page.state(), AudioState::Playing);
 }
 
 #[test]
 fn refreshing_lists_a_device_that_arrived() {
     let mut page = page();
-    page.link().backend().arrive();
+    page.link().read(|held| held.backend().arrive());
 
     page.refresh();
 
@@ -617,7 +621,7 @@ fn refreshing_lists_a_device_that_arrived() {
 #[test]
 fn refreshing_keeps_the_device_that_is_open() {
     let mut page = moved(AudioSetting::Input, [pressed(Button::Right)]);
-    page.link().backend().depart();
+    page.link().read(|held| held.backend().depart());
 
     page.refresh();
 

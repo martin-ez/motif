@@ -1,13 +1,17 @@
 //! Holding a stream open across a device that goes away, exercised against a
 //! backend with no hardware behind it so that it runs where no audio device
 //! exists.
+//!
+//! A run has one device and so one link, which the parts that reach it share.
+//! What the shared handle says is that sharing one is not copying one: what is
+//! opened through either handle is the stream both of them see.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use motif::audio::{
     AudioBackend, AudioState, ChannelSelection, DeviceError, DeviceLink, DeviceSelection,
-    DuplexStream, NullBackend, Passthrough, StreamConfig, StreamRequest, StreamState,
+    DuplexStream, NullBackend, Passthrough, SharedLink, StreamConfig, StreamRequest, StreamState,
 };
 
 /// A link over the null backend, playing what it captures.
@@ -361,4 +365,85 @@ fn every_stream_a_link_opens_gets_a_path_of_its_own() {
     link.open().expect("null backend reopens");
 
     assert_eq!(built.load(Ordering::Relaxed), 2);
+}
+
+/// A shared link over the null backend, playing what it captures.
+type Shared = SharedLink<NullBackend, fn() -> Passthrough>;
+
+fn shared() -> Shared {
+    SharedLink::defaulting(
+        NullBackend::rounding(config()),
+        request(),
+        Passthrough::new as fn() -> Passthrough,
+    )
+    .expect("the null backend has a device in each direction")
+}
+
+fn deaf() -> StreamConfig {
+    StreamConfig {
+        input_channels: 0,
+        ..config()
+    }
+}
+
+#[test]
+fn a_shared_link_has_opened_nothing() {
+    assert_eq!(shared().read(DeviceLink::state), AudioState::Closed);
+}
+
+#[test]
+fn a_backend_with_no_default_device_shares_no_link() {
+    let none: Option<Shared> = SharedLink::defaulting(
+        NullBackend::rounding(deaf()),
+        request(),
+        Passthrough::new as fn() -> Passthrough,
+    );
+
+    assert!(none.is_none());
+}
+
+#[test]
+fn a_stream_opened_through_one_handle_is_seen_through_the_other() {
+    let mut link = shared();
+    let watching = link.clone();
+
+    link.change(DeviceLink::open).expect("null backend opens");
+
+    assert_eq!(watching.read(DeviceLink::state), AudioState::Idle);
+}
+
+#[test]
+fn a_handle_closed_leaves_the_other_holding_no_stream() {
+    let mut link = shared();
+    let mut watching = link.clone();
+    link.change(DeviceLink::open).expect("null backend opens");
+
+    watching.change(DeviceLink::close);
+
+    assert_eq!(link.read(DeviceLink::state), AudioState::Closed);
+    assert!(link.read(|held| held.stream().is_none()));
+}
+
+#[test]
+fn a_shared_link_opens_one_stream_however_many_handles_hold_it() {
+    let built = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&built);
+    let mut link = SharedLink::new(DeviceLink::new(
+        NullBackend::rounding(config()),
+        request(),
+        selection(),
+        move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Passthrough::new()
+        },
+    ));
+    let mut watching = link.clone();
+
+    link.change(DeviceLink::open).expect("null backend opens");
+    watching
+        .change(DeviceLink::open)
+        .expect("null backend reopens");
+
+    assert_eq!(built.load(Ordering::Relaxed), 2);
+    assert_eq!(link.read(DeviceLink::state), AudioState::Idle);
 }
