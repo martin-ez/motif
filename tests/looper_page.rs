@@ -827,12 +827,12 @@ fn a_quiet_loop_is_drawn_shorter_than_a_loud_one() {
 }
 
 #[test]
-fn the_gain_readout_sits_under_the_loop() {
+fn the_gain_readout_sits_directly_under_the_loop() {
     let mut page = page_drawing(&recorded_at_full_scale());
     let gain = row_starting_with(&mut page, "IN");
+    let lowest = *shape_rows(&mut page)
+        .last()
+        .expect("the page draws the loop");
 
-    assert!(
-        shape_rows(&mut page).iter().all(|row| *row < gain),
-        "the loop is drawn over the gain readout"
-    );
+    assert_eq!(gain, lowest + 1);
 }

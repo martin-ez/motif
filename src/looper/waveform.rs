@@ -14,14 +14,13 @@
 //! fits.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering, fence};
 
 const BUCKET_COUNT: usize = 128;
 const FULL_SCALE: f32 = 2.0;
 const LEVELS_PER_CELL: usize = 8;
 const BLANK: char = ' ';
 const BLOCKS: [char; LEVELS_PER_CELL] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-const BITS_PER_SAMPLE: u32 = 32;
 
 /// The largest and smallest sample in a span of the loop.
 ///
@@ -68,17 +67,6 @@ impl Extremes {
 
     fn span(self) -> f32 {
         self.peak - self.trough
-    }
-
-    fn packed(self) -> u64 {
-        u64::from(self.peak.to_bits()) << BITS_PER_SAMPLE | u64::from(self.trough.to_bits())
-    }
-
-    fn unpacked(packed: u64) -> Self {
-        Self {
-            peak: f32::from_bits((packed >> BITS_PER_SAMPLE) as u32),
-            trough: f32::from_bits(packed as u32),
-        }
     }
 }
 
@@ -248,7 +236,8 @@ fn glyph(extremes: Extremes, row: usize, rows: usize) -> char {
 pub fn waveform_meter() -> (WaveformWriter, WaveformReader) {
     let published = Arc::new(Published {
         sequence: AtomicU32::new(0),
-        buckets: [const { AtomicU64::new(0) }; BUCKET_COUNT],
+        peaks: [const { AtomicU32::new(0) }; BUCKET_COUNT],
+        troughs: [const { AtomicU32::new(0) }; BUCKET_COUNT],
         width: AtomicUsize::new(LoopWaveform::EMPTY.width),
         length: AtomicUsize::new(LoopWaveform::EMPTY.length),
     });
@@ -263,7 +252,8 @@ pub fn waveform_meter() -> (WaveformWriter, WaveformReader) {
 
 struct Published {
     sequence: AtomicU32,
-    buckets: [AtomicU64; BUCKET_COUNT],
+    peaks: [AtomicU32; BUCKET_COUNT],
+    troughs: [AtomicU32; BUCKET_COUNT],
     width: AtomicUsize,
     length: AtomicUsize,
 }
@@ -293,8 +283,11 @@ impl WaveformWriter {
         self.published.sequence.store(writing, Ordering::Relaxed);
         fence(Ordering::Release);
 
-        for (cell, bucket) in self.published.buckets.iter().zip(waveform.buckets) {
-            cell.store(bucket.packed(), Ordering::Relaxed);
+        for (cell, bucket) in self.published.peaks.iter().zip(waveform.buckets) {
+            cell.store(bucket.peak.to_bits(), Ordering::Relaxed);
+        }
+        for (cell, bucket) in self.published.troughs.iter().zip(waveform.buckets) {
+            cell.store(bucket.trough.to_bits(), Ordering::Relaxed);
         }
         self.published
             .width
@@ -332,8 +325,11 @@ impl WaveformReader {
             }
 
             let mut waveform = LoopWaveform::EMPTY;
-            for (bucket, cell) in waveform.buckets.iter_mut().zip(&self.published.buckets) {
-                *bucket = Extremes::unpacked(cell.load(Ordering::Relaxed));
+            for (bucket, cell) in waveform.buckets.iter_mut().zip(&self.published.peaks) {
+                bucket.peak = f32::from_bits(cell.load(Ordering::Relaxed));
+            }
+            for (bucket, cell) in waveform.buckets.iter_mut().zip(&self.published.troughs) {
+                bucket.trough = f32::from_bits(cell.load(Ordering::Relaxed));
             }
             waveform.width = self.published.width.load(Ordering::Relaxed);
             waveform.length = self.published.length.load(Ordering::Relaxed);

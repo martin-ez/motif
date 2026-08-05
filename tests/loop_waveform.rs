@@ -103,6 +103,30 @@ fn a_resweep_replaces_the_buckets_it_passes() {
     assert_eq!(waveform.buckets()[3].peak, 1.0);
 }
 
+/// A loop grown to eight frames a bucket over two takes rather than one, so the
+/// second widening starts from buckets that are already two frames wide. Frame
+/// 150 is in the nineteenth bucket of the loop that results, and the take that
+/// recorded it ended long before.
+#[test]
+fn widening_again_keeps_what_an_earlier_take_recorded() {
+    let mut first = vec![0.0; BUCKETS * 2];
+    first[150] = 1.0;
+
+    let mut waveform = LoopWaveform::EMPTY;
+    waveform.take(0, first.iter().copied());
+    waveform.take(BUCKETS * 2, vec![0.0; BUCKETS * 6]);
+
+    let loud: Vec<usize> = waveform
+        .buckets()
+        .iter()
+        .enumerate()
+        .filter(|(_at, bucket)| bucket.peak == 1.0)
+        .map(|(at, _bucket)| at)
+        .collect();
+
+    assert_eq!(loud, [18]);
+}
+
 #[test]
 fn a_waveform_nobody_published_reads_as_empty() {
     assert_eq!(waveform_meter().1.read(), LoopWaveform::EMPTY);
@@ -210,6 +234,20 @@ fn a_region_narrower_than_the_buckets_keeps_the_extreme() {
 #[test]
 fn a_region_wider_than_the_buckets_interpolates() {
     assert_eq!(summarising(&[0.0, 1.0]).drawn(3, 1), [" ▂▄"]);
+}
+
+/// The peak stays at zero throughout, so nothing but the trough can put ink on
+/// the row: a swing drawn from the peak alone would draw this loop as silence.
+#[test]
+fn interpolation_carries_the_trough_as_well_as_the_peak() {
+    assert_eq!(summarising(&[-1.0, 0.0]).drawn(3, 1), ["▄▂ "]);
+}
+
+/// Three buckets over five columns, so a column lands between the second and
+/// third rather than between the only two there are.
+#[test]
+fn interpolation_walks_the_buckets_it_passes() {
+    assert_eq!(summarising(&[0.0, 0.0, 1.0]).drawn(5, 1), ["   ▂▄"]);
 }
 
 #[test]

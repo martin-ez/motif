@@ -131,7 +131,9 @@ impl LoopBuffer {
                     .chunks_exact(capacity)
                     .zip(written)
                     .take(depth)
-                    .map(|(layer, recorded)| if frame < recorded { layer[frame] } else { 0.0 })
+                    .map(|(layer, recorded)| {
+                        layer[..recorded].get(frame).copied().unwrap_or_default()
+                    })
                     .sum::<f32>()
             }),
         );
