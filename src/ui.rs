@@ -11,6 +11,9 @@
 //! [`DeviceProfile::TARGET`], so it is a fixed-size array. [`ListPage`] and
 //! [`Mode`] are here too, belonging to no one screen.
 //!
+//! A [`Page`] is one screen and a [`Shell`] holds one per [`Mode`], forwarding
+//! to whichever is showing, so an `App` is implemented once and not per screen.
+//!
 //! ```
 //! use motif::ui::{Cell, Frame, NullRenderer, RenderError, Renderer};
 //!
@@ -34,6 +37,8 @@ mod input;
 mod legend;
 mod list;
 mod mode;
+mod page;
+mod shell;
 mod terminal;
 
 pub use clock::{Clock, ScriptedClock, SystemClock};
@@ -42,6 +47,8 @@ pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
 pub use legend::Legend;
 pub use list::ListPage;
 pub use mode::Mode;
+pub use page::Page;
+pub use shell::Shell;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 
 /// One character cell of the screen.

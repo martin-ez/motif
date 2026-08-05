@@ -12,7 +12,7 @@
 
 use crate::device::{Button, DeviceProfile};
 use crate::looper::{PositionReader, Transport};
-use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Legend};
+use crate::ui::{Cell, ControlEvent, Frame, Legend, Page};
 
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
@@ -76,13 +76,10 @@ fn bar(playhead: u32, recorded: u32) -> String {
 /// it keeping what was recorded. Every other control is left alone, so the page
 /// can sit under a shell that uses them for something else.
 ///
-/// The page never ends the run. Quitting is the shell's to decide, not a
-/// screen's.
-///
 /// ```
 /// use motif::device::Button;
 /// use motif::looper::{LooperPage, Transport, position_meter};
-/// use motif::ui::{App, ControlEvent};
+/// use motif::ui::{ControlEvent, Page};
 ///
 /// let (_writer, reader) = position_meter();
 /// let mut page = LooperPage::new(reader);
@@ -117,8 +114,8 @@ impl LooperPage {
     }
 }
 
-impl App for LooperPage {
-    fn control(&mut self, event: ControlEvent) -> Flow {
+impl Page for LooperPage {
+    fn control(&mut self, event: ControlEvent) {
         if let ControlEvent::Pressed { button, .. } = event {
             self.transport = match button {
                 Button::Record => self.transport.record(),
@@ -135,8 +132,6 @@ impl App for LooperPage {
                 | Button::Shift => self.transport,
             };
         }
-
-        Flow::Continue
     }
 
     fn legend(&self) -> Legend {
@@ -146,7 +141,7 @@ impl App for LooperPage {
             .answering(Button::Record)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
+    fn draw(&mut self, frame: &mut Frame) {
         let position = self.position.read();
 
         write(frame, 0, STATE_ROW, named(self.transport));
@@ -166,7 +161,5 @@ impl App for LooperPage {
             BAR_ROW,
             &bar(position.playhead(), position.recorded()),
         );
-
-        Flow::Continue
     }
 }

@@ -6,9 +6,7 @@
 //! result is read back off the frame the page drew.
 
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
-use motif::ui::{
-    App, ControlEvent, Controls, Flow, Frame, Legend, ListPage, ScriptedControls, Turn,
-};
+use motif::ui::{ControlEvent, Controls, Frame, Legend, ListPage, Page, ScriptedControls, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const MARKER: char = '>';
@@ -303,24 +301,4 @@ fn the_selection_is_always_on_screen() {
         assert_eq!(marked(&mut page).len(), 1);
         driven_by(&mut page, [turned(Encoder::Main, Turn::Anticlockwise)]);
     }
-}
-
-#[test]
-fn a_control_never_ends_the_run() {
-    let mut page = page_of(4);
-
-    for button in Button::ALL {
-        assert_eq!(page.control(pressed(button)), Flow::Continue);
-    }
-    for encoder in Encoder::ALL {
-        assert_eq!(
-            page.control(turned(encoder, Turn::Clockwise)),
-            Flow::Continue
-        );
-    }
-}
-
-#[test]
-fn a_draw_never_ends_the_run() {
-    assert_eq!(page_of(4).draw(&mut Frame::blank()), Flow::Continue);
 }
