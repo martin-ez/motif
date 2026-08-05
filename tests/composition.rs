@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
-    DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, Passthrough, SharedLink,
+    DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, Passthrough, Placed, SharedLink,
     StreamConfig, StreamRequest, StreamState, Xruns, sample_clock,
 };
 use motif::device::{Button, DeviceProfile};
@@ -142,6 +142,10 @@ impl DuplexStream for CountingStream {
 
     fn headroom(&self) -> Headroom {
         Headroom::IDLE
+    }
+
+    fn placement(&self) -> Placed {
+        Placed::UNASKED
     }
 
     fn fault(&self) -> Option<DeviceError> {

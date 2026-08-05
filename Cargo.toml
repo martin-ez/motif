@@ -24,11 +24,12 @@ path = "src/main.rs"
 frame-pace = []
 
 [dependencies]
-cpal = "0.18.1"
+cpal = { version = "0.18.1", features = ["realtime"] }
 libc = "0.2.189"
 unicode-width = "0.2"
 
 [dev-dependencies]
+libc = "0.2.189"
 
 [lints.rust]
 missing_docs = "warn"

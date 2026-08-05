@@ -14,9 +14,10 @@ use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, ChannelSelection, DeviceError, DeviceId,
-    DeviceSelection, DuplexStream, FaultReader, Headroom, HeadroomReader, LevelReader, Levels,
-    StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, boundary, fault_channel,
-    headroom_meter, level_meter, opened_width, xrun_counter,
+    DeviceSelection, DuplexStream, FaultReader, FaultReporter, Grant, Headroom, HeadroomReader,
+    LevelReader, Levels, Placed, Placement, PriorityReader, PriorityReporter, StreamConfig,
+    StreamRequest, StreamState, XrunReader, Xruns, boundary, fault_channel, headroom_meter,
+    level_meter, opened_width, pinning, priority_latch, xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -36,6 +37,13 @@ impl CpalBackend {
 impl Default for CpalBackend {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn reported(error: &cpal::Error, faults: &FaultReporter, denials: &PriorityReporter) {
+    match error.kind() {
+        ErrorKind::RealtimeDenied => denials.denied(),
+        _ => faults.report(classify(error)),
     }
 }
 
@@ -308,9 +316,12 @@ impl AudioBackend for CpalBackend {
         let (reporter, faults) = fault_channel();
         let input_faults = reporter.clone();
         let output_faults = reporter;
+        let (denials, priority) = priority_latch();
+        let input_denials = denials.clone();
+        let output_denials = denials;
 
-        let input_stream = input
-            .build_input_stream_raw(
+        let (affinity, built) = pinning(Placement::available(), || {
+            let input_stream = input.build_input_stream_raw(
                 input_config,
                 SampleFormat::F32,
                 move |data: &Data, _: &_| {
@@ -322,13 +333,10 @@ impl AudioBackend for CpalBackend {
                         capture_headroom.measured(started.elapsed(), offered);
                     }
                 },
-                move |failed| input_faults.report(classify(&failed)),
+                move |failed| reported(&failed, &input_faults, &input_denials),
                 None,
-            )
-            .map_err(|e| classify(&e))?;
-
-        let output_stream = output
-            .build_output_stream_raw(
+            );
+            let output_stream = output.build_output_stream_raw(
                 output_config,
                 SampleFormat::F32,
                 move |data: &mut Data, _: &_| {
@@ -339,10 +347,16 @@ impl AudioBackend for CpalBackend {
                         render_headroom.measured(started.elapsed(), wanted);
                     }
                 },
-                move |failed| output_faults.report(classify(&failed)),
+                move |failed| reported(&failed, &output_faults, &output_denials),
                 None,
-            )
-            .map_err(|e| classify(&e))?;
+            );
+
+            (input_stream, output_stream)
+        });
+
+        let (input_stream, output_stream) = built;
+        let input_stream = input_stream.map_err(|e| classify(&e))?;
+        let output_stream = output_stream.map_err(|e| classify(&e))?;
 
         let block_size = output_stream.buffer_size().map_err(|e| classify(&e))?;
         let captured_block_size = input_stream.buffer_size().map_err(|e| classify(&e))?;
@@ -365,6 +379,8 @@ impl AudioBackend for CpalBackend {
             xruns,
             capture_load,
             render_load,
+            affinity,
+            priority,
             faults,
         })
     }
@@ -380,6 +396,8 @@ pub struct CpalStream {
     xruns: XrunReader,
     capture_load: HeadroomReader,
     render_load: HeadroomReader,
+    affinity: Grant,
+    priority: PriorityReader,
     faults: FaultReader,
 }
 
@@ -420,6 +438,16 @@ impl DuplexStream for CpalStream {
     /// then finished quickly reads as headroom, and shows up as an xrun instead.
     fn headroom(&self) -> Headroom {
         self.capture_load.read().worse_of(self.render_load.read())
+    }
+
+    /// The core is asked for while the streams are built and inherited by both
+    /// callback threads, so this answers for the pair and no syscall is made on
+    /// either. The scheduling class is whatever the layer below granted.
+    fn placement(&self) -> Placed {
+        Placed {
+            affinity: self.affinity,
+            priority: self.priority.read(),
+        }
     }
 
     /// Whichever of the two streams noticed first. The input and the output are

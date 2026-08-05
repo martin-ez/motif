@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, Command,
     DeviceError, DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend,
-    Passthrough, SharedLink, StreamConfig, StreamRequest, StreamState, Xruns,
+    Passthrough, Placed, SharedLink, StreamConfig, StreamRequest, StreamState, Xruns,
 };
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
@@ -264,6 +264,10 @@ impl DuplexStream for RecordingStream {
         Headroom::IDLE
     }
 
+    fn placement(&self) -> Placed {
+        Placed::UNASKED
+    }
+
     fn fault(&self) -> Option<DeviceError> {
         None
     }
@@ -330,6 +334,10 @@ impl DuplexStream for LoudStream {
 
     fn headroom(&self) -> Headroom {
         Headroom::IDLE
+    }
+
+    fn placement(&self) -> Placed {
+        Placed::UNASKED
     }
 
     fn fault(&self) -> Option<DeviceError> {

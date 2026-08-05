@@ -1,17 +1,17 @@
 //! Opening a duplex audio stream, the boundary between its callback and the
 //! rest of the system, and the [`AudioPath`] a caller runs on it.
 //!
-//! Devices are reached through [`AudioBackend`] rather than directly, so a
-//! backend with no hardware behind it can stand in where none exists, and
-//! [`DeviceCatalog`] holds what one last listed rather than asking again.
+//! Devices are reached through [`AudioBackend`], so one with no hardware behind
+//! it can stand in where none exists, and [`DeviceCatalog`] caches a listing.
 //!
 //! Everything crossing the callback boundary does so over a lock-free channel
 //! built here: [`sample_ring`] for the audio, [`command_channel`] for changes
 //! going the other way, [`level_meter`], [`headroom_meter`] and [`sample_clock`]
 //! for how loud it was, how close the deadline came and how many frames have
-//! gone by, [`xrun_counter`] and [`fault_channel`] for the two ways the boundary
-//! fails. A fault outlives the stream it came from, so [`DeviceLink`] holds what
-//! it takes to open another and is what the rest of the application talks to.
+//! gone by, [`priority_latch`] for the class the callback runs at, and
+//! [`xrun_counter`] and [`fault_channel`] for the two ways the boundary fails.
+//! A fault outlives the stream it came from, so [`DeviceLink`] holds what it
+//! takes to open another and is what the rest of the application talks to.
 
 use std::fmt;
 
@@ -26,6 +26,7 @@ mod headroom;
 mod level;
 mod link;
 mod path;
+mod placement;
 mod ring;
 mod xrun;
 
@@ -40,6 +41,10 @@ pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use link::{AudioState, DeviceLink, SharedLink};
 pub use path::{AudioPath, Commanded, InputMonitor, Passthrough};
+pub use placement::{
+    Grant, HOSTED_PRIORITY, Placed, Placement, PriorityReader, PriorityReporter, pinning,
+    priority_latch,
+};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};
 
@@ -367,6 +372,14 @@ pub trait DuplexStream {
     /// so a stopped stream keeps reporting the window it stopped in.
     fn headroom(&self) -> Headroom;
 
+    /// Where the callback thread ended up, and what the host would not do.
+    ///
+    /// Asked once, on the first block a callback runs, so a stream that has run
+    /// none reports [`Placed::UNASKED`]. A host that placed nothing is a stream
+    /// that runs anyway: a placement is an advantage the callback takes where
+    /// it is offered, not something it needs to work.
+    fn placement(&self) -> Placed;
+
     /// Why the device failed, or `None` while it has not.
     ///
     /// This is the fault a callback reported, latched and read here rather than
@@ -665,6 +678,12 @@ impl DuplexStream for NullStream {
     /// always [`Headroom::IDLE`].
     fn headroom(&self) -> Headroom {
         Headroom::IDLE
+    }
+
+    /// A stream with no device behind it has no callback thread to place, so
+    /// this is always [`Placed::UNASKED`].
+    fn placement(&self) -> Placed {
+        Placed::UNASKED
     }
 
     /// Nothing, until [`fail`](Self::fail) says otherwise: a device that does
