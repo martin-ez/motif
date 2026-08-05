@@ -1,12 +1,19 @@
 //! The [`AudioBackend`] implementation backed by real devices.
+//!
+//! `cpal` hands out no identifier of its own, so a [`DeviceId`] is a name and
+//! the place of the device among those sharing it, counted in the host's own
+//! enumeration order. Listing and opening walk that order and count the same
+//! way, before any filter by rate or format, so an identifier a listing gave
+//! out reaches the device that listing meant.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceError, DeviceSelection,
+    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceError, DeviceId, DeviceSelection,
     DuplexStream, FaultReader, Headroom, HeadroomReader, LevelReader, Levels, StreamConfig,
     StreamRequest, StreamState, XrunReader, Xruns, fault_channel, headroom_meter, level_meter,
     opened_width, passthrough, xrun_counter,
@@ -58,14 +65,11 @@ fn channel_counts(
     counts
 }
 
-fn named_device(device: &cpal::Device, channels: Vec<u16>) -> Option<AudioDevice> {
+fn offering_device(id: DeviceId, channels: Vec<u16>) -> Option<AudioDevice> {
     if channels.is_empty() {
         return None;
     }
-    Some(AudioDevice {
-        name: device.description().ok()?.name().to_owned(),
-        channels,
-    })
+    Some(AudioDevice { id, channels })
 }
 
 fn offered_selection(offered: &[u16], preferred: u16) -> Option<ChannelSelection> {
@@ -77,18 +81,18 @@ fn listed_default(
     listed: Vec<AudioDevice>,
     default: Option<&cpal::Device>,
     preferred: Option<u16>,
-) -> Option<(String, ChannelSelection)> {
+) -> Option<(DeviceId, ChannelSelection)> {
     let named = default
         .and_then(|device| device.description().ok())
         .map(|description| description.name().to_owned());
 
     let device = named
-        .and_then(|name| listed.iter().find(|device| device.name == name))
+        .and_then(|name| listed.iter().find(|device| device.id.name == name))
         .or_else(|| listed.first())?;
 
     let width = preferred.unwrap_or(*device.channels.last()?);
     Some((
-        device.name.clone(),
+        device.id.clone(),
         offered_selection(&device.channels, width)?,
     ))
 }
@@ -104,25 +108,35 @@ fn host_named(name: &str) -> Option<cpal::Host> {
         .and_then(|id| cpal::host_from_id(id).ok())
 }
 
-fn device_named(
-    mut devices: impl Iterator<Item = cpal::Device>,
-    name: &str,
-) -> Option<cpal::Device> {
-    devices.find(|device| {
-        device
-            .description()
-            .is_ok_and(|description| description.name() == name)
+fn identified(
+    devices: impl Iterator<Item = cpal::Device>,
+) -> impl Iterator<Item = (DeviceId, cpal::Device)> {
+    let mut counted: HashMap<String, usize> = HashMap::new();
+
+    devices.filter_map(move |device| {
+        let name = device.description().ok()?.name().to_owned();
+        let nth = counted.entry(name.clone()).or_default();
+        let id = DeviceId { name, nth: *nth };
+        *nth += 1;
+        Some((id, device))
     })
+}
+
+fn device_identified(
+    devices: impl Iterator<Item = cpal::Device>,
+    id: &DeviceId,
+) -> Option<cpal::Device> {
+    identified(devices).find_map(|(found, device)| (found == *id).then_some(device))
 }
 
 fn input_devices(host: &cpal::Host, sample_rate: u32) -> Vec<AudioDevice> {
     let Ok(devices) = host.input_devices() else {
         return Vec::new();
     };
-    devices
-        .filter_map(|device| {
+    identified(devices)
+        .filter_map(|(id, device)| {
             let supported = device.supported_input_configs().ok()?;
-            named_device(&device, channel_counts(supported, sample_rate))
+            offering_device(id, channel_counts(supported, sample_rate))
         })
         .collect()
 }
@@ -131,10 +145,10 @@ fn output_devices(host: &cpal::Host, sample_rate: u32) -> Vec<AudioDevice> {
     let Ok(devices) = host.output_devices() else {
         return Vec::new();
     };
-    devices
-        .filter_map(|device| {
+    identified(devices)
+        .filter_map(|(id, device)| {
             let supported = device.supported_output_configs().ok()?;
-            named_device(&device, channel_counts(supported, sample_rate))
+            offering_device(id, channel_counts(supported, sample_rate))
         })
         .collect()
 }
@@ -232,12 +246,12 @@ impl AudioBackend for CpalBackend {
         }
 
         let host = host_named(&selection.host).ok_or(DeviceError::NoSuchHost)?;
-        let input = device_named(
+        let input = device_identified(
             host.input_devices().map_err(|e| classify(&e))?,
             &selection.input,
         )
         .ok_or(DeviceError::NoInputDevice)?;
-        let output = device_named(
+        let output = device_identified(
             host.output_devices().map_err(|e| classify(&e))?,
             &selection.output,
         )

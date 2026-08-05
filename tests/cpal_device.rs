@@ -5,8 +5,8 @@
 //! has one.
 
 use motif::audio::{
-    AudioBackend, AudioDevice, ChannelSelection, CpalBackend, DeviceError, DeviceSelection,
-    DuplexStream, StreamRequest, StreamState,
+    AudioBackend, AudioDevice, ChannelSelection, CpalBackend, DeviceError, DeviceId,
+    DeviceSelection, DuplexStream, StreamRequest, StreamState,
 };
 
 fn request() -> StreamRequest {
@@ -95,12 +95,8 @@ fn a_default_selection_names_devices_the_backend_lists() {
         .find(|host| host.name == chosen.host)
         .expect("the default host is listed");
 
-    assert!(host.inputs.iter().any(|device| device.name == chosen.input));
-    assert!(
-        host.outputs
-            .iter()
-            .any(|device| device.name == chosen.output)
-    );
+    assert!(host.inputs.iter().any(|device| device.id == chosen.input));
+    assert!(host.outputs.iter().any(|device| device.id == chosen.output));
 }
 
 #[test]
@@ -115,9 +111,9 @@ fn a_device_opens_against_a_selection_taken_from_the_listing() {
     let stream = CpalBackend::new().open(
         &DeviceSelection {
             host: host.name.clone(),
-            input: host.inputs[0].name.clone(),
+            input: host.inputs[0].id.clone(),
             input_channels: ChannelSelection::all(host.inputs[0].channels[0]),
-            output: host.outputs[0].name.clone(),
+            output: host.outputs[0].id.clone(),
             output_channels: ChannelSelection::all(host.outputs[0].channels[0]),
         },
         request(),
@@ -145,7 +141,7 @@ fn a_host_no_backend_has_is_an_error_rather_than_a_default() {
 fn a_device_no_host_has_is_an_error_rather_than_a_default() {
     let opened = CpalBackend::new().open(
         &DeviceSelection {
-            input: "a device nobody has".to_owned(),
+            input: DeviceId::named("a device nobody has"),
             ..selection()
         },
         request(),
@@ -192,8 +188,8 @@ fn a_machine_with_a_device_lists_a_host_to_reach_it_through() {
 #[ignore = "requires an audio device"]
 fn every_listed_device_offers_a_channel_count() {
     for device in listed_devices(48_000) {
-        assert!(!device.name.is_empty());
-        assert!(!device.channels.is_empty(), "{} lists none", device.name);
+        assert!(!device.id.name.is_empty());
+        assert!(!device.channels.is_empty(), "{} lists none", device.id);
     }
 }
 
@@ -204,9 +200,23 @@ fn channel_counts_ascend_without_repeats() {
         assert!(
             device.channels.windows(2).all(|pair| pair[0] < pair[1]),
             "{} lists {:?}",
-            device.name,
+            device.id,
             device.channels
         );
+    }
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn no_two_devices_of_one_host_and_direction_share_an_identity() {
+    for host in CpalBackend::new().hosts(48_000) {
+        for direction in [host.inputs, host.outputs] {
+            let mut identities: Vec<DeviceId> = Vec::new();
+            for device in direction {
+                assert!(!identities.contains(&device.id), "{} twice", device.id);
+                identities.push(device.id);
+            }
+        }
     }
 }
 
