@@ -6,12 +6,11 @@
 //! longer than the buffer is reported short rather than growing the buffer or
 //! panicking, and that recording allocates nothing.
 //!
-//! Layers are the other half. A loop is heard as the sum of the layers under it,
-//! so what the tests state about them is what is heard: an overdub lies over the
-//! take without lengthening it, undo takes the newest one away and leaves the
-//! rest playing, the stack stops at a stated depth, and clear empties the whole
-//! loop. Each of those runs on the thread that may not allocate, so they are
-//! counted as well as checked.
+//! Layers are the other half, and a loop is heard as their sum, so the tests
+//! state what is heard: an overdub lies over the take without lengthening it,
+//! undo leaves the rest playing, the stack stops at a stated depth, and clear
+//! empties the loop. All of it runs on the thread that may not allocate, so the
+//! allocations are counted as well.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -76,8 +75,8 @@ fn eight_frame_profile() -> AudioProfile {
 
 /// The whole loop as it would be played: every layer summed, from the start.
 ///
-/// The sample values below are binary fractions, so a sum of them is exact and
-/// the comparison against one can be too.
+/// The sample values below are binary fractions, so summing them is exact and
+/// so is comparing against the result.
 fn heard(buffer: &LoopBuffer) -> Vec<f32> {
     let mut block = vec![0.0; buffer.len()];
     buffer.mix_into(&mut block, 0);
