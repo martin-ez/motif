@@ -16,7 +16,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use motif::audio::{
-    AudioBackend, DuplexStream, Headroom, NullBackend, StreamConfig, StreamRequest, headroom_meter,
+    AudioBackend, DuplexStream, Headroom, NullBackend, Passthrough, StreamConfig, StreamRequest,
+    headroom_meter,
 };
 use motif::device::DeviceProfile;
 
@@ -360,6 +361,7 @@ fn a_stream_that_moves_no_samples_reports_an_idle_callback() {
                 sample_rate: GRANTED.sample_rate,
                 block_size: GRANTED.block_size,
             },
+            Passthrough::new(),
         )
         .expect("a rounding backend opens whatever it is asked for");
 

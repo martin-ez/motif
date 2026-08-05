@@ -20,7 +20,8 @@
 use std::io::{self, Write};
 
 use motif::audio::{
-    AudioBackend, ChannelSelection, CpalBackend, DeviceError, DuplexStream, StreamRequest,
+    AudioBackend, ChannelSelection, CpalBackend, DeviceError, DuplexStream, Passthrough,
+    StreamRequest,
 };
 use motif::device::DeviceProfile;
 
@@ -52,7 +53,7 @@ fn main() -> Result<(), DeviceError> {
         described(selection.output_channels)
     );
 
-    let mut stream = backend.open(&selection, request)?;
+    let mut stream = backend.open(&selection, request, Passthrough::new())?;
 
     let granted = stream.config();
     println!(

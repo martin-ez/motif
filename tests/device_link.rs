@@ -2,10 +2,16 @@
 //! backend with no hardware behind it so that it runs where no audio device
 //! exists.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use motif::audio::{
     AudioBackend, AudioState, ChannelSelection, DeviceError, DeviceLink, DeviceSelection,
-    DuplexStream, NullBackend, StreamConfig, StreamRequest, StreamState,
+    DuplexStream, NullBackend, Passthrough, StreamConfig, StreamRequest, StreamState,
 };
+
+/// A link over the null backend, playing what it captures.
+type Link = DeviceLink<NullBackend, fn() -> Passthrough>;
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -36,13 +42,22 @@ fn one_input_channel() -> DeviceSelection {
     }
 }
 
-fn opened() -> DeviceLink<NullBackend> {
-    let mut link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
+fn closed() -> Link {
+    DeviceLink::new(
+        NullBackend::rounding(config()),
+        request(),
+        selection(),
+        Passthrough::new,
+    )
+}
+
+fn opened() -> Link {
+    let mut link = closed();
     link.open().expect("null backend opens");
     link
 }
 
-fn unplug(link: &DeviceLink<NullBackend>) {
+fn unplug(link: &Link) {
     link.stream()
         .expect("an open link has a stream")
         .fail(DeviceError::DeviceNotAvailable);
@@ -50,7 +65,7 @@ fn unplug(link: &DeviceLink<NullBackend>) {
 
 #[test]
 fn a_new_link_has_opened_nothing() {
-    let link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
+    let link = closed();
 
     assert_eq!(link.state(), AudioState::Closed);
 }
@@ -106,7 +121,7 @@ fn an_open_link_reports_the_configuration_the_device_granted() {
 
 #[test]
 fn a_link_remembers_what_it_was_asked_for() {
-    let link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
+    let link = closed();
 
     assert_eq!(link.request(), request());
 }
@@ -160,7 +175,7 @@ fn polling_a_healthy_link_leaves_it_alone() {
 
 #[test]
 fn polling_a_link_that_was_never_opened_is_harmless() {
-    let mut link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
+    let mut link = closed();
 
     assert_eq!(link.poll(), AudioState::Closed);
 }
@@ -207,6 +222,7 @@ fn a_reopen_the_device_refuses_leaves_the_link_lost() {
             block_size: 256,
         },
         selection(),
+        Passthrough::new,
     );
 
     assert_eq!(link.open().err(), Some(DeviceError::UnsupportedConfig));
@@ -232,7 +248,7 @@ fn opening_an_already_open_link_replaces_its_stream() {
 
 #[test]
 fn a_link_remembers_the_selection_it_was_given() {
-    let link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
+    let link = closed();
 
     assert_eq!(link.selection(), &selection());
 }
@@ -325,4 +341,24 @@ fn a_lost_state_describes_what_went_wrong_with_it() {
         AudioState::Lost(DeviceError::DeviceNotAvailable).to_string(),
         "lost: the device is not available"
     );
+}
+
+#[test]
+fn every_stream_a_link_opens_gets_a_path_of_its_own() {
+    let built = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&built);
+    let mut link = DeviceLink::new(
+        NullBackend::rounding(config()),
+        request(),
+        selection(),
+        move || {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Passthrough::new()
+        },
+    );
+
+    link.open().expect("null backend opens");
+    link.open().expect("null backend reopens");
+
+    assert_eq!(built.load(Ordering::Relaxed), 2);
 }

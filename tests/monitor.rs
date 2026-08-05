@@ -15,9 +15,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use motif::audio::{
-    AudioBackend, AudioDevice, AudioHost, AudioState, ChannelSelection, DeviceError, DeviceId,
-    DeviceSelection, DuplexStream, Headroom, Levels, NullBackend, StreamConfig, StreamRequest,
-    StreamState, Xruns,
+    AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
+    DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend, StreamConfig,
+    StreamRequest, StreamState, Xruns,
 };
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
@@ -159,10 +159,11 @@ impl AudioBackend for RecordingBackend {
         })
     }
 
-    fn open(
+    fn open<P: AudioPath>(
         &self,
         _selection: &DeviceSelection,
         _request: StreamRequest,
+        _path: P,
     ) -> Result<Self::Stream, DeviceError> {
         self.0.record("open");
 

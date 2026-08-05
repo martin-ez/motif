@@ -15,7 +15,7 @@
 
 use std::fmt;
 
-use super::{AudioBackend, DeviceError, DeviceSelection, DuplexStream, StreamRequest};
+use super::{AudioBackend, AudioPath, DeviceError, DeviceSelection, DuplexStream, StreamRequest};
 
 /// What the audio path is doing, as far as the rest of the application is
 /// concerned.
@@ -48,31 +48,41 @@ impl fmt::Display for AudioState {
     }
 }
 
-/// A duplex stream, and the backend and request needed to open another one like
-/// it.
+/// A duplex stream, and the backend, request and path needed to open another
+/// one like it.
 ///
 /// Nothing here runs on the audio thread. It is the application-thread end of
 /// the boundary: it reads the fault a callback latched, and it does the
 /// stopping, dropping and rebuilding that a callback may not.
-pub struct DeviceLink<B: AudioBackend> {
+pub struct DeviceLink<B: AudioBackend, F> {
     backend: B,
     request: StreamRequest,
     selection: DeviceSelection,
+    path: F,
     stream: Option<B::Stream>,
     state: AudioState,
 }
 
-impl<B: AudioBackend> DeviceLink<B> {
-    /// A link that will open `selection` at `request` on `backend`, having
-    /// opened nothing yet.
+impl<B: AudioBackend, F, P> DeviceLink<B, F>
+where
+    F: FnMut() -> P,
+    P: AudioPath,
+{
+    /// A link that will open `selection` at `request` on `backend`, playing
+    /// through what `path` builds, and having opened nothing yet.
+    ///
+    /// A path is built rather than held, because opening a stream moves one to
+    /// where the callback can reach it and nothing brings it back: every stream
+    /// the link opens gets one of its own.
     ///
     /// Touches no device, so this cannot fail; the first
     /// [`open`](Self::open) is where a device gets a say.
-    pub fn new(backend: B, request: StreamRequest, selection: DeviceSelection) -> Self {
+    pub fn new(backend: B, request: StreamRequest, selection: DeviceSelection, path: F) -> Self {
         Self {
             backend,
             request,
             selection,
+            path,
             stream: None,
             state: AudioState::Closed,
         }
@@ -132,7 +142,8 @@ impl<B: AudioBackend> DeviceLink<B> {
     pub fn open(&mut self) -> Result<(), DeviceError> {
         self.close();
 
-        match self.backend.open(&self.selection, self.request) {
+        let path = (self.path)();
+        match self.backend.open(&self.selection, self.request, path) {
             Ok(stream) => {
                 self.stream = Some(stream);
                 self.state = AudioState::Idle;

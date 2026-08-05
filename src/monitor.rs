@@ -11,11 +11,13 @@
 //! plausible idle screen over a dead audio path would be worse, so the state
 //! goes on the frame and the run carries on.
 
-use crate::audio::{AudioBackend, AudioState, DeviceError, DeviceLink, StreamRequest};
+use crate::audio::{AudioBackend, AudioState, DeviceError, DeviceLink, Passthrough, StreamRequest};
 use crate::device::DeviceProfile;
 use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Legend};
 
 const LABEL: &str = "audio ";
+
+type MonitorLink<B> = DeviceLink<B, fn() -> Passthrough>;
 
 fn status_row() -> usize {
     DeviceProfile::TARGET.screen.rows.saturating_sub(2)
@@ -30,9 +32,9 @@ fn write(frame: &mut Frame, row: usize, text: &str) {
 /// An application with an audio device held open behind it.
 ///
 /// Everything it does with the device happens on the application thread, which
-/// is where opening, starting, stopping and dropping a stream belong. It adds
-/// nothing to the callback: the passthrough path is built inside the stream it
-/// opens, and a monitor is what keeps that stream alive long enough to hear.
+/// is where opening, starting, stopping and dropping a stream belong. What it
+/// puts on the callback is [`Passthrough`] and nothing else, and a monitor is
+/// what keeps that stream alive long enough to hear.
 ///
 /// ```
 /// use motif::audio::{AudioState, NullBackend, StreamConfig, StreamRequest};
@@ -73,7 +75,7 @@ fn write(frame: &mut Frame, row: usize, text: &str) {
 /// ```
 pub struct Monitor<A: App, B: AudioBackend> {
     app: A,
-    link: Option<DeviceLink<B>>,
+    link: Option<MonitorLink<B>>,
 }
 
 impl<A: App, B: AudioBackend> Monitor<A, B> {
@@ -89,7 +91,7 @@ impl<A: App, B: AudioBackend> Monitor<A, B> {
             return Self { app, link: None };
         };
 
-        let mut link = DeviceLink::new(backend, request, selection);
+        let mut link = DeviceLink::new(backend, request, selection, Passthrough::new as fn() -> _);
         if link.open().is_ok() {
             let _started = link.start();
         }
@@ -118,7 +120,7 @@ impl<A: App, B: AudioBackend> Monitor<A, B> {
     /// This is the route to what the stream knows and the monitor does not: the
     /// configuration the device granted, the levels, the dropout counts, the
     /// callback's headroom.
-    pub fn link(&self) -> Option<&DeviceLink<B>> {
+    pub fn link(&self) -> Option<&MonitorLink<B>> {
         self.link.as_ref()
     }
 

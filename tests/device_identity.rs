@@ -7,7 +7,7 @@
 
 use motif::audio::{
     AudioBackend, ChannelSelection, DeviceError, DeviceId, DeviceSelection, DuplexStream,
-    NullBackend, StreamConfig, StreamRequest,
+    NullBackend, Passthrough, StreamConfig, StreamRequest,
 };
 
 fn config() -> StreamConfig {
@@ -100,7 +100,11 @@ fn a_selection_taking_the_first_device_of_a_name_opens_that_one() {
     let (inputs, outputs) = devices(&twinned());
 
     let stream = twinned()
-        .open(&selecting(inputs[0].clone(), outputs[0].clone()), request())
+        .open(
+            &selecting(inputs[0].clone(), outputs[0].clone()),
+            request(),
+            Passthrough::new(),
+        )
         .expect("a listed device opens");
 
     assert_eq!(stream.config().input_channels, 2);
@@ -111,7 +115,11 @@ fn a_selection_taking_the_second_device_of_a_name_opens_that_one() {
     let (inputs, outputs) = devices(&twinned());
 
     let stream = twinned()
-        .open(&selecting(inputs[1].clone(), outputs[0].clone()), request())
+        .open(
+            &selecting(inputs[1].clone(), outputs[0].clone()),
+            request(),
+            Passthrough::new(),
+        )
         .expect("a listed device opens");
 
     assert_eq!(stream.config().input_channels, 4);
@@ -122,7 +130,11 @@ fn the_second_device_of_a_name_is_reachable_in_both_directions() {
     let (inputs, outputs) = devices(&twinned());
 
     let stream = twinned()
-        .open(&selecting(inputs[0].clone(), outputs[1].clone()), request())
+        .open(
+            &selecting(inputs[0].clone(), outputs[1].clone()),
+            request(),
+            Passthrough::new(),
+        )
         .expect("a listed device opens");
 
     assert_eq!(stream.config().output_channels, 4);
@@ -138,6 +150,7 @@ fn opening_what_a_listing_offered_reaches_the_device_it_meant() {
             .open(
                 &selecting(input.id.clone(), host.outputs[0].id.clone()),
                 request(),
+                Passthrough::new(),
             )
             .expect("listed means openable");
 
@@ -158,7 +171,11 @@ fn a_device_of_a_name_that_was_never_listed_is_not_opened() {
         ..inputs[0].clone()
     };
 
-    let opened = twinned().open(&selecting(past_the_last, outputs[0].clone()), request());
+    let opened = twinned().open(
+        &selecting(past_the_last, outputs[0].clone()),
+        request(),
+        Passthrough::new(),
+    );
 
     assert_eq!(opened.err(), Some(DeviceError::NoInputDevice));
 }
@@ -171,7 +188,11 @@ fn an_output_of_a_name_that_was_never_listed_is_not_opened() {
         ..outputs[0].clone()
     };
 
-    let opened = twinned().open(&selecting(inputs[0].clone(), past_the_last), request());
+    let opened = twinned().open(
+        &selecting(inputs[0].clone(), past_the_last),
+        request(),
+        Passthrough::new(),
+    );
 
     assert_eq!(opened.err(), Some(DeviceError::NoOutputDevice));
 }

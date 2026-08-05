@@ -1,5 +1,5 @@
-//! Opening a duplex audio stream, and the boundary between its callback and
-//! the rest of the system.
+//! Opening a duplex audio stream, the boundary between its callback and the
+//! rest of the system, and the [`AudioPath`] a caller runs on it.
 //!
 //! Devices are reached through [`AudioBackend`] rather than directly, so a
 //! backend with no hardware behind it can stand in where none exists, and
@@ -15,6 +15,7 @@
 
 use std::fmt;
 
+mod boundary;
 mod catalog;
 mod clock;
 mod command;
@@ -23,10 +24,11 @@ mod fault;
 mod headroom;
 mod level;
 mod link;
-mod passthrough;
+mod path;
 mod ring;
 mod xrun;
 
+pub use boundary::{BlockCapture, BlockPlayback, boundary};
 pub use catalog::DeviceCatalog;
 pub use clock::{SampleClockReader, SampleClockWriter, sample_clock};
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
@@ -35,7 +37,7 @@ pub use fault::{FaultReader, FaultReporter, fault_channel};
 pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use link::{AudioState, DeviceLink};
-pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
+pub use path::{AudioPath, Passthrough};
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};
 
@@ -279,21 +281,22 @@ pub trait AudioBackend {
     /// Blocks and allocates; never reach it from the audio callback.
     fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection>;
 
-    /// Open an input and an output stream on `selection` at `request`, leaving
-    /// channels outside the selection opened but untouched.
+    /// Open an input and an output stream on `selection` at `request`, playing
+    /// what `path` plays and leaving other channels opened but untouched.
     ///
-    /// Each is opened at the narrowest count reaching both the selection and
-    /// the width it runs at by default — in mono, a stereo device folds a pair.
+    /// Each is opened at the narrowest count reaching both the selection and the
+    /// width it runs at by default — in mono, a stereo device folds a pair.
+    /// `path` is prepared with what the stream was opened for, then moved in.
     ///
     /// # Errors
     ///
     /// Returns [`DeviceError`] for a host or device that is not there, an
-    /// unreachable selection, or a `request` the device cannot run. Never a
-    /// panic.
-    fn open(
+    /// unreachable selection, or a `request` it cannot run. Never a panic.
+    fn open<P: AudioPath>(
         &self,
         selection: &DeviceSelection,
         request: StreamRequest,
+        path: P,
     ) -> Result<Self::Stream, DeviceError>;
 }
 
@@ -517,10 +520,11 @@ impl AudioBackend for NullBackend {
 
     /// Devices are looked up whatever the rate asked for, so that a rounding
     /// device can still be asked for a rate it does not list and grant its own.
-    fn open(
+    fn open<P: AudioPath>(
         &self,
         selection: &DeviceSelection,
         request: StreamRequest,
+        mut path: P,
     ) -> Result<Self::Stream, DeviceError> {
         if selection.host != NULL_HOST {
             return Err(DeviceError::NoSuchHost);
@@ -557,26 +561,30 @@ impl AudioBackend for NullBackend {
         }
 
         let (reporter, faults) = fault_channel();
+        let config = StreamConfig {
+            input_channels,
+            output_channels,
+            ..self.granted
+        };
+        path.prepare(config);
 
         Ok(NullStream {
-            config: StreamConfig {
-                input_channels,
-                output_channels,
-                ..self.granted
-            },
+            config,
             state: StreamState::Stopped,
             reporter,
             faults,
+            path: Box::new(path),
         })
     }
 }
 
-/// A stream that moves no samples, opened by [`NullBackend`].
+/// A stream with no device behind it, opened by [`NullBackend`].
 pub struct NullStream {
     config: StreamConfig,
     state: StreamState,
     reporter: FaultReporter,
     faults: FaultReader,
+    path: Box<dyn AudioPath>,
 }
 
 impl NullStream {
@@ -592,6 +600,22 @@ impl NullStream {
     pub fn fail(&self, error: DeviceError) {
         self.reporter.report(error);
     }
+
+    /// Hand `captured` to the path this stream was opened with, and fill
+    /// `playing` with what it plays.
+    ///
+    /// A stream with no device behind it is never called back, so this stands in
+    /// for the callback as [`fail`](Self::fail) stands in for the unplugging,
+    /// and promises the path what a callback does: `playing` silenced first, and
+    /// a frame of it for every frame handed over, so two lengths become the
+    /// shorter of them rather than a broken contract.
+    pub fn block(&mut self, captured: &[f32], playing: &mut [f32]) {
+        playing.fill(0.0);
+
+        let frames = captured.len().min(playing.len());
+        self.path
+            .render(&captured[..frames], &mut playing[..frames]);
+    }
 }
 
 impl DuplexStream for NullStream {
@@ -603,20 +627,20 @@ impl DuplexStream for NullStream {
         self.state
     }
 
-    /// A stream that moves no samples has nothing to measure, so this is always
+    /// A stream with no device behind it meters nothing, so this is always
     /// [`Levels::SILENT`].
     fn levels(&self) -> Levels {
         Levels::SILENT
     }
 
-    /// A stream that moves no samples can lose none, so this is always
-    /// [`Xruns::NONE`].
+    /// A stream with no device behind it has no deadline to miss, so this is
+    /// always [`Xruns::NONE`].
     fn xruns(&self) -> Xruns {
         Xruns::NONE
     }
 
-    /// A stream that moves no samples does no work, so this is always
-    /// [`Headroom::IDLE`].
+    /// A stream with no device behind it has no deadline to use up, so this is
+    /// always [`Headroom::IDLE`].
     fn headroom(&self) -> Headroom {
         Headroom::IDLE
     }
