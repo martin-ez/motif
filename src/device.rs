@@ -1,27 +1,15 @@
 //! The shape of the machine `motif` is built for, stated once.
 //!
 //! Screen, audio and cores are frozen in [`DeviceProfile::TARGET`], and the
-//! panel is frozen in [`Encoder`] and [`Button`]. The rest of the crate sizes
-//! itself from those rather than from whatever the host it happens to be
-//! running on reports. A terminal that is 200 columns wide still draws a
-//! [`ScreenProfile::columns`]-wide frame, because the screen being aimed at is
-//! not the terminal.
+//! panel — twelve buttons and one encoder — in [`Encoder`] and [`Button`]. The
+//! rest of the crate sizes itself from those rather than from whatever host it
+//! happens to run on: a terminal 200 columns wide still draws a
+//! [`ScreenProfile::columns`]-wide frame.
 //!
 //! The numbers are allowed to be wrong. They are not allowed to be implicit,
-//! scattered, or discovered at runtime: a profile field is a decision that a
-//! future hardware backend has to meet, so changing one is a change to the
-//! product rather than to a default.
-//!
-//! A control is a closed set rather than a count, so a backend that maps input
-//! onto the panel can be checked by the compiler: a `match` stops compiling
-//! when the panel gains a control, and a control the panel lacks cannot be
-//! named at all.
-//!
-//! The panel is twelve buttons and one encoder: four to navigate, four scenes,
-//! three for the transport, shift, and the encoder beside them. That shape was
-//! settled the way the screen was, by drawing it — a
-//! [`Legend`](crate::ui::Legend) makes a picture of the panel, and a control
-//! with nowhere to sit in that picture is a control the panel does not have.
+//! scattered, or discovered at runtime — a profile field is a decision a future
+//! hardware backend has to meet. A control is a closed set rather than a count,
+//! so a `match` stops compiling when the panel gains one.
 //!
 //! Everything is available in a constant expression, so buffers can be sized by
 //! the compiler:
@@ -90,10 +78,8 @@ closed_set! {
     /// consumer. Unlike a [`Button`] it carries no meaning of its own — it
     /// adjusts whatever the page beneath it is showing.
     ///
-    /// The set is declared once, and [`ALL`](Self::ALL) is generated from that
-    /// declaration. An encoder cannot be added to the panel and left out of the
-    /// array, which would compile and then index past the end of anything sized
-    /// by `ALL.len()`.
+    /// [`ALL`](Self::ALL) is generated from the declaration, so an encoder
+    /// cannot be added to the panel and left out of the array.
     enum Encoder;
     /// Every encoder, left to right.
     ///
@@ -108,23 +94,13 @@ closed_set! {
     /// A button on the panel, named for what it does rather than numbered.
     ///
     /// Naming them is what lets a backend's key mapping be checked: a `match`
-    /// over this enum stops compiling when the panel gains a button, so the
-    /// terminal's table of keys cannot silently fall behind the device. As with
-    /// [`Encoder`], the set is declared once and [`ALL`](Self::ALL) is
-    /// generated from it, so the two cannot drift apart.
+    /// over this enum stops compiling when the panel gains a button. The scene
+    /// buttons are the exception, named for where they sit, because which scene
+    /// a button selects is a fact about the song rather than about the panel.
     ///
-    /// The scene buttons are the exception, and are named for where they sit:
-    /// which scene a button selects is a fact about the song rather than about
-    /// the panel, so the fourth button is the fourth button whatever is loaded
-    /// under it.
-    ///
-    /// Shift is here because the panel has a button there, under the player's
-    /// thumb, and a set that leaves it out cannot describe the hardware. It is
-    /// still resolved as a modifier rather than reported: it changes what
-    /// another control means rather than meaning anything alone, so a backend
-    /// folds it into [`ControlEvent::is_shifted`](crate::ui::ControlEvent) and
-    /// never sends it as a press of its own. It is a button one can point at
-    /// and not a state every consumer has to track.
+    /// Shift is a button the panel has, so it is named here, but a backend folds
+    /// it into [`ControlEvent::is_shifted`](crate::ui::ControlEvent) rather than
+    /// sending it as a press of its own.
     enum Button;
     /// Every button, in panel order.
     ///
@@ -262,24 +238,14 @@ pub struct DeviceProfile {
 impl DeviceProfile {
     /// The device `motif` is built for.
     ///
-    /// The screen is a 5-inch 800×480 IPS panel drawn with a 12×24 cell, which
-    /// is 66 columns by 20 rows. The cell is what fixes the two numbers: at that
-    /// size and resolution it puts a character at 1.63 × 3.27 mm, which is where
-    /// the instruments this is built after already sit — a Teenage Engineering
-    /// OP-1 is 1.59 × 3.18 mm and a Polyend Tracker 1.52 × 3.05 mm, both from
-    /// panels near 130 PPI rather than dense ones. A whole frame and the border
-    /// a terminal draws around it still fit inside a default 80×24 terminal.
+    /// A 5-inch 800×480 IPS panel drawn with a 12×24 cell: 66 columns by 20 rows,
+    /// a character of 1.63 × 3.27 mm, and a frame that still fits an 80×24
+    /// terminal. That character size is where the instruments this is built after
+    /// sit — an OP-1 at 1.59 × 3.18 mm, a Polyend Tracker at 1.52 × 3.05 mm.
     ///
-    /// It refreshes 30 times a second, which is a frame every 33 ms: enough for
-    /// a meter to look continuous, and slow enough to leave the cores it shares
-    /// with analysis room to work. The audio device is the configuration a
-    /// class-compliant USB interface offers everywhere: 48 kHz in blocks of
-    /// 256 frames, which is 5.33 ms of deadline per callback. Four cores is a
-    /// quad-core ARM board of the kind this would be built on.
-    ///
-    /// The panel is not here. [`Encoder`] and [`Button`] are closed sets, so
-    /// they state it themselves and a field repeating their length would be a
-    /// second place to change.
+    /// It refreshes 30 times a second, and the audio is what a class-compliant
+    /// USB interface offers everywhere: 48 kHz in 256-frame blocks, a 5.33 ms
+    /// deadline. The panel is not here; [`Encoder`] and [`Button`] state it.
     pub const TARGET: Self = Self {
         screen: ScreenProfile {
             columns: 66,

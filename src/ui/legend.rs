@@ -1,25 +1,18 @@
 //! The panel as a screen without one draws it: which controls do something here.
 //!
 //! Two halves meet here and neither knows the other. A page declares which
-//! controls it answers; a backend says what to call the way each one is
-//! reached, in glyphs that belong to the panel. The legend puts the two
-//! together, which is what keeps a key out of every page and a page out of
-//! every backend.
+//! controls it answers; a backend says what to call the way each one is reached,
+//! in glyphs that belong to the panel. The legend puts the two together, which
+//! is what keeps a key out of every page and a page out of every backend.
 //!
-//! What it draws is a picture of the panel — the navigation cross the player's
-//! thumb sits in, the scene buttons with the transport under them, the encoder
-//! beside — and no words at all. Every key wears the glyph that reaches it and
-//! nothing else, so the picture is a map of the panel wherever the player is;
-//! the keys the page answers are drawn with a heavy edge and the rest with a
-//! light one. That is deliberately all it says: a screen that explains its
-//! controls in prose can go on being unreadable, where one that says only
-//! *which* controls are live has to make the rest obvious where the player is
-//! already looking.
+//! What it draws is a picture of the panel — the navigation cross, the scene
+//! buttons with the transport under them, the encoder beside — and no words at
+//! all. Every key wears the glyph that reaches it, drawn with a heavy edge where
+//! the page answers it and a light one where it does not: a screen that has to
+//! explain its controls in prose can go on being unreadable.
 //!
-//! The picture is a surface of its own rather than part of a [`Frame`]. The
-//! device has the keys under the player's hands and the screen shows the page
-//! alone, so a picture drawn into the frame would cost a page rows that the
-//! hardware never charges it.
+//! The picture is a surface of its own, never part of a frame. The device's keys
+//! cost the screen no rows, so the terminal's picture of them may not either.
 
 use crate::device::{Button, Control, Encoder};
 use crate::ui::{Cell, Controls, Hint};
@@ -255,13 +248,12 @@ impl Legend {
     /// The picture of the panel this page makes, each key wearing the glyph
     /// `controls` reaches it by and nothing else.
     ///
-    /// A key the page answers is drawn with a heavy edge and one it ignores
-    /// with a light one, so both are in the picture and it is a map of the
-    /// panel wherever the player is. Every key keeps a place of its own, so
-    /// nothing moves from page to page and only the weight changes. The encoder
-    /// is rounded, never square, so that it does not read as a button — and it
-    /// lights by doubling its edge rather than thickening it, there being no
-    /// heavy rounded corner to draw.
+    /// A key the page answers is drawn with a heavy edge and one it ignores with
+    /// a light one, so both are in the picture. Every key keeps a place of its
+    /// own, so nothing moves from page to page and only the weight changes.
+    ///
+    /// The encoder is rounded, never square, so it does not read as a button,
+    /// and lights by doubling its edge — there is no heavy rounded corner.
     ///
     /// ```
     /// use motif::device::Button;

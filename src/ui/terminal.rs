@@ -23,12 +23,10 @@ pub use viewport::Viewport;
 ///
 /// Only cells that differ from the last frame are written, and cells that
 /// changed next to each other on a row go out as one run after a single cursor
-/// move. Writing the whole screen every frame is what makes a terminal UI feel
-/// slow, and on the target device the screen is the slowest thing in the loop.
+/// move. On the target device the screen is the slowest thing in the loop.
 ///
-/// The first frame has nothing to compare against, so it is written in full. So
-/// is the frame after a failed write, because a screen that rejected part of a
-/// frame is no longer known to match anything.
+/// The first frame has nothing to compare against, so it is written in full, as
+/// is the frame after a failed write.
 pub struct FrameWriter<W: Write> {
     sink: W,
     previous: Option<Frame>,

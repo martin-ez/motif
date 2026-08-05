@@ -21,34 +21,12 @@ const PANEL_GAP: usize = 1;
 /// screen, and the keys the terminal stands in for under it.
 ///
 /// A terminal is nearly always larger than the panel, so a frame drawn straight
-/// into it has no edges: 40 columns of content in an 80-column window looks like
-/// a layout with room to spare, and on the panel it is the whole screen. The
-/// border is where the screen actually ends, which is what makes a layout
-/// judgeable before there is hardware to judge it on.
+/// into it has no edges and a layout is judged against the wrong screen.
 ///
-/// The box is sized from [`DeviceProfile::TARGET`]. Where it sits is the
-/// caller's to say, through [`at`](Self::at) and [`place`](Self::place), and
-/// only where — a frame is the size of the panel wherever it is drawn, so no
-/// dimension here ever comes from the terminal. That split is what lets a
-/// backend centre the box in the window it has without the screen the
-/// application draws into changing size underneath it.
-///
-/// The border is drawn once, before the first frame, and again after a failed
-/// write or a move, on the same reasoning the frame itself is redrawn in full:
-/// a screen that rejected part of a write, or that the box has moved across, is
-/// no longer known to show anything in particular. Every frame after that
-/// writes only the cells that changed.
-///
-/// The keys go under the box, one row clear of it, and never through a
-/// [`Frame`]. They are a picture of hardware this backend does not have, so on
-/// the device they are the player's hands' business and the screen shows the
-/// page alone; drawing them into the frame would take rows from every other
-/// backend to pay for one backend's missing keys.
-///
-/// The border never passes through a [`Frame`] either, for the same reason: the
-/// device's screen has no border, so drawing one into the cells the application
-/// owns would put a decoration of this backend's into every other backend's
-/// output.
+/// The box is sized from [`DeviceProfile::TARGET`]; only where it sits is the
+/// caller's, through [`at`](Self::at) and [`place`](Self::place). Box and keys
+/// are drawn again after a failed write or a move, and neither passes through a
+/// [`Frame`] — the device has no border, and its keys cost the screen no rows.
 pub struct Viewport<W: Write> {
     writer: FrameWriter<W>,
     bordered: bool,

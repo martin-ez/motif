@@ -7,12 +7,10 @@
 //! atomic store against one atomic load: wait-free at both ends, and a fixed cost
 //! per block on the end that may not wait.
 //!
-//! The playhead and the length travel packed into a single [`AtomicU64`] rather
-//! than in two atomics side by side. Read separately they can straddle two
-//! blocks, and the pair that comes back is then one no block ever had — a
-//! playhead beyond the end of the loop it sits in, which a bar would draw past
-//! its own end. Packed, there is nothing to straddle. Two frame counts fill the
-//! word exactly, so nothing is stolen from either to tag it.
+//! The playhead and the length travel packed into a single [`AtomicU64`]. Read
+//! as two atomics they can straddle two blocks and come back as a pair no block
+//! ever had — a playhead beyond the end of its own loop. Two frame counts fill
+//! the word exactly, so nothing is stolen from either to tag it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
