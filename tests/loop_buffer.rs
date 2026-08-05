@@ -12,11 +12,10 @@
 //! empties the loop. All of it runs on the thread that may not allocate, so the
 //! allocations are counted as well.
 //!
-//! Playing the loop is where the boundary matters. A loop whose length is not a
-//! multiple of the block size crosses its own end part-way through a block, so
-//! the tests state where the playhead lands and what the seam sounds like: a
-//! block filled across the boundary, and many blocks of it that still tile the
-//! loop exactly, which is what says there is no drift and no gap.
+//! Playing is where the boundary matters: a loop whose length is not a multiple
+//! of the block size crosses its own end part-way through a block. The tests
+//! state where the playhead lands, and that many blocks of it still tile the
+//! loop exactly — no drift, and no gap at the seam.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

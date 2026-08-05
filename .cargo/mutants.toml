@@ -34,7 +34,6 @@ exclude_re = [
   # makes the two differ, and this line should go when one arrives.
   'replace \+ with - in Control::position',
   # `<=` admits a playhead of exactly the loop's length, which leaves no run
-  # before the boundary, so the block is filled from the start of the loop and
-  # ends on the same frame as the playhead of nothing the strict reading takes.
+  # before the boundary, so the block is filled from the start either way.
   'replace < with <= in LoopBuffer::play_into',
 ]

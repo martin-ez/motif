@@ -189,8 +189,8 @@ impl LoopBuffer {
     /// loop alone passes silence.
     ///
     /// A result below the length of `block` means the loop ended inside it,
-    /// leaving the rest as it was. The loop does not repeat here; a block
-    /// filled across the boundary is [`play_into`](Self::play_into).
+    /// leaving the rest as it was. The loop does not repeat here; that is
+    /// [`play_into`](Self::play_into).
     pub fn mix_into(&self, block: &mut [f32], from: usize) -> usize {
         let wanted = block.len().min(self.len().saturating_sub(from));
         if wanted == 0 {
@@ -208,28 +208,16 @@ impl LoopBuffer {
     /// Play the loop into the whole of `block`, from frame `from`, and report
     /// the frame it left the playhead on.
     ///
-    /// The loop repeats here: a boundary falling inside `block` is crossed
-    /// inside it, so a loop whose length is not a multiple of the block size
-    /// repeats without the drift or the seam that rounding the boundary up to
-    /// the next block would leave. A loop shorter than `block` is heard as many
-    /// times as it fits.
-    ///
-    /// The playhead comes back inside the loop, ready to pass to the next
-    /// block. It counts frames as [`len`](Self::len) does, so publishing it
-    /// through [`LoopPosition`] is the caller's own narrowing to `u32`.
-    ///
-    /// A `from` at or past the end of the loop starts at the beginning of it.
-    /// A playhead is only meaningful in the loop it was taken from, and one
-    /// kept across a change of length would otherwise land at an arbitrary
-    /// offset into the new loop and hold that phase for the life of it.
+    /// A boundary falling inside `block` is crossed there, so a loop whose
+    /// length is not a multiple of the block size repeats without drift or a
+    /// seam, and one shorter than `block` is heard as often as it fits.
     ///
     /// Layers are summed into what `block` already holds, as
-    /// [`mix_into`](Self::mix_into) does. An empty loop leaves it alone and
-    /// reports a playhead of nothing.
+    /// [`mix_into`](Self::mix_into) does. An empty loop is left alone.
     ///
-    /// The block is filled as the run up to the boundary and then one whole
-    /// loop at a time, so the work is a walk over `block` and nothing about it
-    /// is open-ended. That is what makes it safe on the audio callback.
+    /// A `from` at or past the end starts at the beginning of the loop: a
+    /// playhead kept across a change of length would otherwise hold a phase of
+    /// its own for the life of the new one.
     ///
     /// ```
     /// use motif::device::DeviceProfile;
