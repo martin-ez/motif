@@ -10,7 +10,8 @@ use std::cell::Cell;
 use std::thread;
 
 use motif::audio::{
-    AudioBackend, DuplexStream, NullBackend, StreamConfig, StreamRequest, Xruns, xrun_counter,
+    AudioBackend, DuplexStream, NullBackend, Passthrough, StreamConfig, StreamRequest, Xruns,
+    xrun_counter,
 };
 
 thread_local! {
@@ -290,6 +291,7 @@ fn a_stream_that_moves_no_samples_reports_no_xruns() {
                 sample_rate: GRANTED.sample_rate,
                 block_size: GRANTED.block_size,
             },
+            Passthrough::new(),
         )
         .expect("a rounding backend opens whatever it is asked for");
 

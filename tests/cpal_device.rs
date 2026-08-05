@@ -6,7 +6,7 @@
 
 use motif::audio::{
     AudioBackend, AudioDevice, ChannelSelection, CpalBackend, DeviceError, DeviceSelection,
-    DuplexStream, StreamRequest, StreamState,
+    DuplexStream, Passthrough, StreamRequest, StreamState,
 };
 
 fn request() -> StreamRequest {
@@ -27,7 +27,7 @@ fn selection() -> DeviceSelection {
 fn a_device_grants_a_configuration_it_can_run() {
     let backend = CpalBackend::new();
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("a default device opens");
 
     let config = stream.config();
@@ -42,7 +42,7 @@ fn a_device_grants_a_configuration_it_can_run() {
 fn a_device_stream_starts_and_stops() {
     let backend = CpalBackend::new();
     let mut stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("a default device opens");
 
     assert_eq!(stream.state(), StreamState::Stopped);
@@ -63,6 +63,7 @@ fn a_block_size_of_zero_is_an_error_rather_than_a_panic() {
             sample_rate: 48_000,
             block_size: 0,
         },
+        Passthrough::new(),
     );
 
     assert!(opened.is_err());
@@ -79,6 +80,7 @@ fn a_sample_rate_no_device_supports_is_an_error() {
             sample_rate: 1,
             block_size: 256,
         },
+        Passthrough::new(),
     );
 
     assert!(opened.is_err());
@@ -121,6 +123,7 @@ fn a_device_opens_against_a_selection_taken_from_the_listing() {
             output_channels: ChannelSelection::all(host.outputs[0].channels[0]),
         },
         request(),
+        Passthrough::new(),
     );
 
     assert!(stream.is_ok(), "listed means openable");
@@ -135,6 +138,7 @@ fn a_host_no_backend_has_is_an_error_rather_than_a_default() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::NoSuchHost));
@@ -149,6 +153,7 @@ fn a_device_no_host_has_is_an_error_rather_than_a_default() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::NoInputDevice));
@@ -166,6 +171,7 @@ fn a_selection_reaching_past_the_device_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));

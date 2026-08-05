@@ -8,7 +8,7 @@
 use std::cell::{Cell, RefCell};
 
 use motif::audio::{
-    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceCatalog, DeviceError,
+    AudioBackend, AudioDevice, AudioHost, AudioPath, ChannelSelection, DeviceCatalog, DeviceError,
     DeviceSelection, NullStream, StreamRequest,
 };
 
@@ -53,10 +53,11 @@ impl AudioBackend for CountingBackend {
         None
     }
 
-    fn open(
+    fn open<P: AudioPath>(
         &self,
         _selection: &DeviceSelection,
         _request: StreamRequest,
+        _path: P,
     ) -> Result<Self::Stream, DeviceError> {
         Err(DeviceError::DeviceNotAvailable)
     }

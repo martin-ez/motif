@@ -6,10 +6,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceError, DeviceSelection,
-    DuplexStream, FaultReader, Headroom, HeadroomReader, LevelReader, Levels, StreamConfig,
-    StreamRequest, StreamState, XrunReader, Xruns, fault_channel, headroom_meter, level_meter,
-    opened_width, passthrough, xrun_counter,
+    AudioBackend, AudioDevice, AudioHost, AudioPath, ChannelSelection, DeviceError,
+    DeviceSelection, DuplexStream, FaultReader, Headroom, HeadroomReader, LevelReader, Levels,
+    StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, boundary, fault_channel,
+    headroom_meter, level_meter, opened_width, xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -212,20 +212,21 @@ impl AudioBackend for CpalBackend {
         })
     }
 
-    /// The two callbacks are joined by a [`passthrough`] path with one block of
-    /// slack, the least that keeps playback from outrunning capture.
+    /// The two callbacks are joined by a [`boundary`] running `path`, with one
+    /// block of slack — the least that keeps playback from outrunning capture.
     ///
-    /// The path is sized from the request, not from what was granted: a stream
-    /// wants its callback as it is built and reports its block size only
+    /// The boundary is sized from the request, not from what was granted: a
+    /// stream wants its callback as it is built and reports its block size only
     /// afterwards, so a device granting a larger block is refused rather than
-    /// run against a path too small to feed it.
+    /// run against buffers too small to feed it.
     ///
-    /// Metering happens before the path folds the channels together, so a
-    /// channel at full scale cannot hide in the mean of its frame.
-    fn open(
+    /// Metering happens before the channels are folded together, so a channel at
+    /// full scale cannot hide in the mean of its frame.
+    fn open<P: AudioPath>(
         &self,
         selection: &DeviceSelection,
         request: StreamRequest,
+        path: P,
     ) -> Result<Self::Stream, DeviceError> {
         if request.block_size == 0 {
             return Err(DeviceError::UnsupportedConfig);
@@ -274,7 +275,7 @@ impl AudioBackend for CpalBackend {
             buffer_size: cpal::BufferSize::Fixed(request.block_size),
         };
 
-        let (mut passthrough_input, mut passthrough_output) = passthrough(
+        let (mut capture, mut playback) = boundary(
             StreamConfig {
                 sample_rate: request.sample_rate,
                 block_size: request.block_size,
@@ -284,6 +285,7 @@ impl AudioBackend for CpalBackend {
             selection.input_channels,
             selection.output_channels,
             request.block_size as usize,
+            path,
         );
         let (mut level_writer, levels) = level_meter();
         let (mut overruns, mut underruns, xruns) = xrun_counter();
@@ -302,7 +304,7 @@ impl AudioBackend for CpalBackend {
                     if let Some(samples) = data.as_slice::<f32>() {
                         level_writer.publish(samples);
                         let offered = samples.len() / input_channels as usize;
-                        overruns.captured(passthrough_input.capture(samples), offered);
+                        overruns.captured(capture.capture(samples), offered);
                         capture_headroom.measured(started.elapsed(), offered);
                     }
                 },
@@ -319,7 +321,7 @@ impl AudioBackend for CpalBackend {
                     let started = Instant::now();
                     if let Some(samples) = data.as_slice_mut::<f32>() {
                         let wanted = samples.len() / output_channels as usize;
-                        underruns.supplied(passthrough_output.render(samples), wanted);
+                        underruns.supplied(playback.render(samples), wanted);
                         render_headroom.measured(started.elapsed(), wanted);
                     }
                 },
@@ -390,7 +392,7 @@ impl DuplexStream for CpalStream {
         self.levels.read()
     }
 
-    /// Counted against the passthrough path rather than reported by the device,
+    /// Counted against the boundary rather than reported by the device,
     /// so a block the device drops before the callback sees it is invisible
     /// here — the callback is simply not called.
     fn xruns(&self) -> Xruns {

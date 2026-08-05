@@ -1,36 +1,39 @@
-//! Copying captured audio to the output, with a ring in between.
+//! Carrying a block between the two callbacks, with a ring and a path in
+//! between.
 //!
 //! A duplex device is two streams with two callbacks on two threads, so the
-//! path from input to output is not a copy but a hand-off: the capture end
-//! writes what the device gave it, the playback end takes whatever is there.
-//! Neither end allocates: the capture end folds into a buffer built with the
-//! path, and the playback end works in the buffer the device handed it.
+//! route from input to output is not a copy but a hand-off: the capture end
+//! writes what the device gave it, the playback end takes whatever is there and
+//! asks an [`AudioPath`] what to play. Neither end allocates: both work in
+//! buffers built with them, and the path is prepared before either runs.
 //!
 //! The ring carries one sample per frame, not one per channel. Channel counts
 //! differ between the two devices as a matter of course — a mono instrument
 //! into a stereo interface is the ordinary case — so the capture end folds a
-//! frame down and the playback end spreads it back out, and everything between
+//! frame down and the playback end spreads it back out, and the path between
 //! them is free of the device's channel layout.
 
 use std::ops::Range;
 
-use super::{ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, sample_ring};
+use super::{
+    AudioPath, ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, sample_ring,
+};
 
-/// Build the two ends of a passthrough path for a stream running at `config`,
-/// carrying `input` of its capture channels to `output` of its playback ones.
+/// Build the two ends of the boundary for a stream at `config`, carrying
+/// `input` of its capture channels to `path` and back out over `output`.
 ///
 /// `slack` is how many frames playback starts behind capture, and costs that in
-/// delay: without it the two independent callbacks race around an empty ring and
-/// playback crackles. The ring holds `slack` plus two blocks, allocated once.
+/// delay: without it the two callbacks race around an empty ring and playback
+/// crackles. The ring, the scratch and [`AudioPath::prepare`] happen here, once.
 ///
 /// # Panics
 ///
 /// Panics on a block size of zero, or a selection `config` cannot reach.
 ///
 /// ```
-/// use motif::audio::{ChannelSelection, StreamConfig, passthrough};
+/// use motif::audio::{ChannelSelection, Passthrough, StreamConfig, boundary};
 ///
-/// let (mut input, mut output) = passthrough(
+/// let (mut input, mut output) = boundary(
 ///     StreamConfig {
 ///         sample_rate: 48_000,
 ///         block_size: 2,
@@ -40,6 +43,7 @@ use super::{ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, samp
 ///     ChannelSelection::all(2),
 ///     ChannelSelection::all(1),
 ///     0,
+///     Passthrough::new(),
 /// );
 /// let mut played = [0.0; 2];
 ///
@@ -52,9 +56,9 @@ use super::{ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, samp
 /// Selecting one channel of the pair takes it at the level it arrived:
 ///
 /// ```
-/// use motif::audio::{ChannelSelection, StreamConfig, passthrough};
+/// use motif::audio::{ChannelSelection, Passthrough, StreamConfig, boundary};
 ///
-/// let (mut input, mut output) = passthrough(
+/// let (mut input, mut output) = boundary(
 ///     StreamConfig {
 ///         sample_rate: 48_000,
 ///         block_size: 2,
@@ -64,6 +68,7 @@ use super::{ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, samp
 ///     ChannelSelection { first: 0, count: 1 },
 ///     ChannelSelection::all(1),
 ///     0,
+///     Passthrough::new(),
 /// );
 /// let mut played = [0.0; 2];
 ///
@@ -72,45 +77,48 @@ use super::{ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, samp
 ///
 /// assert_eq!(played, [1.0, 0.4]);
 /// ```
-pub fn passthrough(
+pub fn boundary<P: AudioPath>(
     config: StreamConfig,
     input: ChannelSelection,
     output: ChannelSelection,
     slack: usize,
-) -> (PassthroughInput, PassthroughOutput) {
+    mut path: P,
+) -> (BlockCapture, BlockPlayback<P>) {
     let block = config.block_size as usize;
-    assert!(
-        block > 0,
-        "a passthrough path carries nothing block by block"
-    );
+    assert!(block > 0, "a stream carries nothing block by block");
     assert!(
         config.input_channels > 0 && config.output_channels > 0,
-        "a passthrough path carries nothing without channels"
+        "a stream carries nothing without channels"
     );
     assert!(
         input.count > 0 && output.count > 0,
-        "a passthrough path carries nothing without channels"
+        "a stream carries nothing without channels"
     );
     assert!(
         input.reach() <= u32::from(config.input_channels)
             && output.reach() <= u32::from(config.output_channels),
-        "a passthrough path cannot reach a channel the device has not got"
+        "a stream cannot reach a channel the device has not got"
     );
 
     let (mut producer, consumer) = sample_ring(slack + 2 * block);
     producer.write(&vec![0.0; slack]);
 
+    path.prepare(config);
+
     (
-        PassthroughInput {
+        BlockCapture {
             producer,
             channels: config.input_channels as usize,
             selected: selected(input),
             frames: vec![0.0; block].into_boxed_slice(),
         },
-        PassthroughOutput {
+        BlockPlayback {
             consumer,
+            path,
             channels: config.output_channels as usize,
             selected: selected(output),
+            captured: vec![0.0; block].into_boxed_slice(),
+            playing: vec![0.0; block].into_boxed_slice(),
         },
     )
 }
@@ -119,15 +127,15 @@ fn selected(selection: ChannelSelection) -> Range<usize> {
     selection.first as usize..selection.reach() as usize
 }
 
-/// The capture end of a passthrough path, held by the input callback.
-pub struct PassthroughInput {
+/// The capture end of the boundary, held by the input callback.
+pub struct BlockCapture {
     producer: SampleProducer,
     channels: usize,
     selected: Range<usize>,
     frames: Box<[f32]>,
 }
 
-impl PassthroughInput {
+impl BlockCapture {
     /// Fold each frame of `input` to one sample and write it to the ring, and
     /// report how many frames that was.
     ///
@@ -154,42 +162,55 @@ impl PassthroughInput {
         captured
     }
 
-    /// The most frames the path can hold between its two ends.
+    /// The most frames the boundary can hold between its two ends.
     pub fn capacity(&self) -> usize {
         self.producer.capacity()
     }
 }
 
-/// The playback end of a passthrough path, held by the output callback.
-pub struct PassthroughOutput {
+/// The playback end of the boundary, holding the path it plays through.
+pub struct BlockPlayback<P> {
     consumer: SampleConsumer,
+    path: P,
     channels: usize,
     selected: Range<usize>,
+    captured: Box<[f32]>,
+    playing: Box<[f32]>,
 }
 
-impl PassthroughOutput {
-    /// Fill `output` from the ring, one frame across the selected channels, and
-    /// report how many frames the ring supplied.
+impl<P: AudioPath> BlockPlayback<P> {
+    /// Ask the path what to play for the frames the ring supplied, spread the
+    /// answer across the selected channels of `output`, and report how many.
     ///
     /// A result below the frame count of `output` means the ring ran dry and the
-    /// rest is silence — silence rather than what the buffer last held, since a
-    /// device hands the same buffer back and leaving it plays a block twice.
+    /// path was handed silence for the rest. What the path leaves unwritten is
+    /// silent too: a device hands the same buffer back, and leaving it plays a
+    /// block twice.
     ///
-    /// Frames land in the head of `output` and are spread in place, last frame
-    /// first, so this end holds no buffer of its own and takes an `output` of
-    /// any length. Every slot outside the selection is silenced too.
+    /// `output` may be any length, worked over in blocks of the size the
+    /// boundary was built for. Every slot outside the selection is silenced.
     pub fn render(&mut self, output: &mut [f32]) -> usize {
-        let frames = output.len() / self.channels;
-        let supplied = self.consumer.read(&mut output[..frames]);
-        output[supplied..frames].fill(0.0);
+        let mut supplied = 0;
 
-        for frame in (0..frames).rev() {
-            let sample = output[frame];
-            let slot = &mut output[frame * self.channels..][..self.channels];
-            slot.fill(0.0);
-            slot[self.selected.clone()].fill(sample);
+        for chunk in output.chunks_mut(self.captured.len() * self.channels) {
+            let frames = chunk.len() / self.channels;
+
+            let captured = &mut self.captured[..frames];
+            let taken = self.consumer.read(captured);
+            captured[taken..].fill(0.0);
+
+            let playing = &mut self.playing[..frames];
+            playing.fill(0.0);
+            self.path.render(captured, playing);
+
+            for (slot, sample) in chunk.chunks_exact_mut(self.channels).zip(playing.iter()) {
+                slot.fill(0.0);
+                slot[self.selected.clone()].fill(*sample);
+            }
+            chunk[frames * self.channels..].fill(0.0);
+
+            supplied += taken;
         }
-        output[frames * self.channels..].fill(0.0);
 
         supplied
     }

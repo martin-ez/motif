@@ -2,7 +2,9 @@
 //! exercised against a backend with no hardware behind it so that it runs where
 //! no audio device exists.
 
-use motif::audio::{AudioBackend, ChannelSelection, NullBackend, StreamConfig, StreamRequest};
+use motif::audio::{
+    AudioBackend, ChannelSelection, NullBackend, Passthrough, StreamConfig, StreamRequest,
+};
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -101,6 +103,7 @@ fn a_default_selection_opens() {
             sample_rate: 48_000,
             block_size: 256,
         },
+        Passthrough::new(),
     );
 
     assert!(opened.is_ok());

@@ -3,7 +3,7 @@
 
 use motif::audio::{
     AudioBackend, ChannelSelection, DeviceError, DeviceSelection, DuplexStream, Levels,
-    NullBackend, StreamConfig, StreamRequest, StreamState,
+    NullBackend, Passthrough, StreamConfig, StreamRequest, StreamState,
 };
 
 fn config() -> StreamConfig {
@@ -32,7 +32,7 @@ fn selection() -> DeviceSelection {
 fn a_stream_is_stopped_before_it_is_started() {
     let backend = NullBackend::rounding(config());
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     assert_eq!(stream.state(), StreamState::Stopped);
@@ -42,7 +42,7 @@ fn a_stream_is_stopped_before_it_is_started() {
 fn a_started_stream_is_running() {
     let backend = NullBackend::rounding(config());
     let mut stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     stream.start().expect("null backend starts");
@@ -54,7 +54,7 @@ fn a_started_stream_is_running() {
 fn a_stopped_stream_is_stopped_again() {
     let backend = NullBackend::rounding(config());
     let mut stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     stream.start().expect("null backend starts");
@@ -67,7 +67,7 @@ fn a_stopped_stream_is_stopped_again() {
 fn a_stream_can_be_started_again_after_being_stopped() {
     let backend = NullBackend::rounding(config());
     let mut stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     stream.start().expect("null backend starts");
@@ -81,7 +81,7 @@ fn a_stream_can_be_started_again_after_being_stopped() {
 fn a_stream_that_moves_no_samples_reports_silence() {
     let backend = NullBackend::rounding(config());
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     assert_eq!(stream.levels(), Levels::SILENT);
@@ -91,7 +91,7 @@ fn a_stream_that_moves_no_samples_reports_silence() {
 fn the_granted_configuration_is_readable() {
     let backend = NullBackend::rounding(config());
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     assert_eq!(stream.config(), config());
@@ -107,6 +107,7 @@ fn a_granted_sample_rate_may_differ_from_the_request() {
                 sample_rate: 44_100,
                 block_size: 256,
             },
+            Passthrough::new(),
         )
         .expect("a rounding device grants what it has");
 
@@ -123,6 +124,7 @@ fn a_granted_block_size_may_differ_from_the_request() {
                 sample_rate: 48_000,
                 block_size: 512,
             },
+            Passthrough::new(),
         )
         .expect("a rounding device grants what it has");
 
@@ -139,6 +141,7 @@ fn a_device_that_cannot_meet_the_sample_rate_is_an_error() {
             sample_rate: 44_100,
             block_size: 256,
         },
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
@@ -154,6 +157,7 @@ fn a_device_that_cannot_meet_the_block_size_is_an_error() {
             sample_rate: 48_000,
             block_size: 512,
         },
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
@@ -163,7 +167,7 @@ fn a_device_that_cannot_meet_the_block_size_is_an_error() {
 fn a_rejecting_device_opens_when_the_request_matches_exactly() {
     let backend = NullBackend::rejecting(config());
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("an exact request is met");
 
     assert_eq!(stream.config(), config());
@@ -179,6 +183,7 @@ fn a_host_the_backend_does_not_have_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::NoSuchHost));
@@ -194,6 +199,7 @@ fn an_input_device_the_host_does_not_have_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::NoInputDevice));
@@ -209,6 +215,7 @@ fn an_output_device_the_host_does_not_have_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::NoOutputDevice));
@@ -224,6 +231,7 @@ fn a_selection_reaching_past_the_device_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
@@ -239,6 +247,7 @@ fn a_selection_of_no_channels_at_all_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
@@ -255,6 +264,7 @@ fn a_narrower_selection_still_opens_the_device_wide_enough_to_reach_it() {
                 ..selection()
             },
             request(),
+            Passthrough::new(),
         )
         .expect("channel two is inside a two-channel device");
 
@@ -274,6 +284,7 @@ fn a_selection_that_reaches_past_the_end_of_a_channel_count_is_an_error() {
             ..selection()
         },
         request(),
+        Passthrough::new(),
     );
 
     assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
@@ -302,6 +313,7 @@ fn opened_across(
                 ..chosen
             },
             request(),
+            Passthrough::new(),
         )
         .map(|stream| stream.config().input_channels)
 }
@@ -331,7 +343,7 @@ fn a_device_offering_nothing_that_wide_is_opened_across_the_selection_alone() {
 fn a_stream_whose_device_is_present_reports_no_fault() {
     let backend = NullBackend::rounding(config());
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     assert_eq!(stream.fault(), None);
@@ -341,7 +353,7 @@ fn a_stream_whose_device_is_present_reports_no_fault() {
 fn a_stream_whose_device_went_away_reports_the_fault() {
     let backend = NullBackend::rounding(config());
     let stream = backend
-        .open(&selection(), request())
+        .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
     stream.fail(DeviceError::DeviceNotAvailable);
