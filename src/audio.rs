@@ -7,15 +7,16 @@
 //!
 //! Everything crossing the callback boundary does so over a lock-free channel
 //! built here: [`sample_ring`] for the audio, [`command_channel`] for changes
-//! going the other way, [`level_meter`] and [`headroom_meter`] for how loud it
-//! was and how close the callback came to missing its deadline, [`xrun_counter`]
-//! and [`fault_channel`] for the two ways the boundary fails. A fault outlives
-//! the stream it came from, so [`DeviceLink`] holds what it takes to open
-//! another and is what the rest of the application talks to.
+//! going the other way, [`level_meter`], [`headroom_meter`] and [`sample_clock`]
+//! for how loud it was, how close the deadline came and how many frames have
+//! gone by, [`xrun_counter`] and [`fault_channel`] for the two ways the boundary
+//! fails. A fault outlives the stream it came from, so [`DeviceLink`] holds what
+//! it takes to open another and is what the rest of the application talks to.
 
 use std::fmt;
 
 mod catalog;
+mod clock;
 mod command;
 mod cpal_backend;
 mod fault;
@@ -27,6 +28,7 @@ mod ring;
 mod xrun;
 
 pub use catalog::DeviceCatalog;
+pub use clock::{SampleClockReader, SampleClockWriter, sample_clock};
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use fault::{FaultReader, FaultReporter, fault_channel};

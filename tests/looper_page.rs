@@ -5,12 +5,17 @@
 //! controls and read back off the frame it drew, which is the whole of what an
 //! application is allowed to know about either end.
 
+use motif::audio::{SampleClockWriter, sample_clock};
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{LoopPosition, LooperPage, Transport, position_meter};
+use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Frame, Page, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const SECOND: u32 = DeviceProfile::TARGET.audio.sample_rate;
+
+/// Half a second of frames, which is 120 BPM.
+const HALF_SECOND: usize = SECOND as usize / 2;
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -19,15 +24,48 @@ fn pressed(button: Button) -> ControlEvent {
     }
 }
 
+fn shifted(button: Button) -> ControlEvent {
+    ControlEvent::Pressed {
+        button,
+        shifted: true,
+    }
+}
+
 fn page() -> LooperPage {
-    LooperPage::new(position_meter().1)
+    LooperPage::new(position_meter().1, sample_clock(SECOND).1)
 }
 
 fn page_showing(position: LoopPosition) -> LooperPage {
     let (mut writer, reader) = position_meter();
     writer.publish(position);
 
-    LooperPage::new(reader)
+    LooperPage::new(reader, sample_clock(SECOND).1)
+}
+
+fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
+    let (frames, elapsed) = sample_clock(sample_rate);
+
+    (LooperPage::new(position_meter().1, elapsed), frames)
+}
+
+fn page_on_a_clock() -> (LooperPage, SampleClockWriter) {
+    page_on_a_clock_at(SECOND)
+}
+
+fn tapped(apart: &[usize]) -> LooperPage {
+    let (mut page, mut frames) = page_on_a_clock();
+
+    page.control(shifted(Button::Play));
+    for interval in apart {
+        frames.advance(*interval);
+        page.control(shifted(Button::Play));
+    }
+
+    page
+}
+
+fn tapped_steadily() -> LooperPage {
+    tapped(&[HALF_SECOND; TapTempo::TAPS_TO_A_TEMPO - 1])
 }
 
 fn driven_by(buttons: impl IntoIterator<Item = Button>) -> LooperPage {
@@ -209,6 +247,88 @@ fn an_empty_loop_draws_an_empty_bar() {
 #[test]
 fn the_bar_spans_the_screen() {
     assert_eq!(bar_of(&mut page()).width, SCREEN.columns - 2);
+}
+
+#[test]
+fn a_page_starts_with_nothing_tapped() {
+    let mut page = page();
+
+    assert!(page.grid().is_empty());
+    assert!(!screen_of(&mut page).contains("BPM"));
+}
+
+#[test]
+fn a_tap_lands_on_the_grid_where_the_clock_had_got_to() {
+    let page = tapped_steadily();
+
+    assert_eq!(
+        page.grid().beats(),
+        &[0, HALF_SECOND as u64, 2 * HALF_SECOND as u64]
+    );
+}
+
+#[test]
+fn taps_are_read_at_the_rate_the_clock_counts_at() {
+    let half_rate = SECOND / 2;
+    let (mut page, mut frames) = page_on_a_clock_at(half_rate);
+    for _ in 0..TapTempo::TAPS_TO_A_TEMPO {
+        page.control(shifted(Button::Play));
+        frames.advance(half_rate as usize / 2);
+    }
+
+    assert_eq!(page.grid().sample_rate(), half_rate);
+    assert!(screen_of(&mut page).contains("120.0 BPM"));
+}
+
+#[test]
+fn a_tapped_pulse_puts_its_tempo_on_the_screen() {
+    assert!(screen_of(&mut tapped_steadily()).contains("120.0 BPM"));
+}
+
+#[test]
+fn a_slower_pulse_reads_as_a_slower_tempo() {
+    let mut slower = tapped(&[SECOND as usize, SECOND as usize]);
+
+    assert!(screen_of(&mut slower).contains("60.0 BPM"));
+}
+
+#[test]
+fn a_pulse_nobody_has_stated_yet_shows_no_tempo() {
+    let mut page = tapped(&[HALF_SECOND]);
+
+    assert!(!screen_of(&mut page).contains("BPM"));
+}
+
+#[test]
+fn a_tap_after_a_long_silence_takes_the_tempo_off_the_screen() {
+    let (mut page, mut frames) = page_on_a_clock();
+    for _ in 0..TapTempo::TAPS_TO_A_TEMPO {
+        frames.advance(HALF_SECOND);
+        page.control(shifted(Button::Play));
+    }
+
+    frames.advance(SECOND as usize * TapTempo::STALE_AFTER_SECONDS as usize + 1);
+    page.control(shifted(Button::Play));
+
+    assert!(!screen_of(&mut page).contains("BPM"));
+}
+
+#[test]
+fn tapping_leaves_the_transport_alone() {
+    let (mut page, _frames) = page_on_a_clock();
+    page.control(pressed(Button::Record));
+
+    page.control(shifted(Button::Play));
+
+    assert_eq!(page.transport(), Transport::Recording);
+}
+
+#[test]
+fn play_without_shift_still_plays_rather_than_tapping() {
+    let page = driven_by([Button::Record, Button::Play]);
+
+    assert_eq!(page.transport(), Transport::Playing);
+    assert!(page.grid().is_empty());
 }
 
 #[test]

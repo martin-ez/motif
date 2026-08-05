@@ -11,5 +11,7 @@
 //! consumer is where rounding creeps in, so the grid does not offer one.
 
 mod grid;
+mod tap;
 
 pub use grid::{BeatGrid, Position};
+pub use tap::TapTempo;
