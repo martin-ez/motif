@@ -189,7 +189,8 @@ impl LoopBuffer {
     /// loop alone passes silence.
     ///
     /// A result below the length of `block` means the loop ended inside it,
-    /// leaving the rest as it was. The loop does not repeat here.
+    /// leaving the rest as it was. The loop does not repeat here; a block
+    /// filled across the boundary is [`play_into`](Self::play_into).
     pub fn mix_into(&self, block: &mut [f32], from: usize) -> usize {
         let wanted = block.len().min(self.len().saturating_sub(from));
         if wanted == 0 {
@@ -211,6 +212,56 @@ impl LoopBuffer {
         }
 
         wanted
+    }
+
+    /// Play the loop into the whole of `block`, from frame `from`, and report
+    /// the frame it left the playhead on.
+    ///
+    /// The loop repeats here: a boundary falling inside `block` is crossed
+    /// inside it, so a loop whose length is not a multiple of the block size
+    /// repeats without the drift or the seam that rounding the boundary up to
+    /// the next block would leave. A loop shorter than `block` is heard as many
+    /// times as it fits.
+    ///
+    /// The playhead comes back inside the loop, ready to pass to the next block
+    /// and to [`LoopPosition::new`] alongside [`len`](Self::len). A `from`
+    /// outside the loop is wrapped into it rather than heard as silence.
+    ///
+    /// Layers are summed into what `block` already holds, as
+    /// [`mix_into`](Self::mix_into) does. An empty loop leaves it alone and
+    /// reports a playhead of nothing.
+    ///
+    /// Each pass over the loop fills at least one frame, so the work is bounded
+    /// by the length of `block` and this is safe on the audio callback.
+    ///
+    /// ```
+    /// use motif::device::DeviceProfile;
+    /// use motif::looper::LoopBuffer;
+    ///
+    /// let mut captured = LoopBuffer::for_profile(DeviceProfile::TARGET.audio);
+    /// captured.record(&[0.25, 0.5, 0.75]);
+    ///
+    /// let mut heard = [0.0; 5];
+    /// let playhead = captured.play_into(&mut heard, 0);
+    ///
+    /// assert_eq!(heard, [0.25, 0.5, 0.75, 0.25, 0.5]);
+    /// assert_eq!(playhead, 2);
+    /// ```
+    pub fn play_into(&self, block: &mut [f32], from: usize) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+
+        let mut playhead = from % self.len();
+        let mut played = 0;
+
+        while played < block.len() {
+            let heard = self.mix_into(&mut block[played..], playhead);
+            played += heard;
+            playhead = (playhead + heard) % self.len();
+        }
+
+        playhead
     }
 
     /// How many frames long the loop is.
