@@ -17,6 +17,12 @@ exclude_globs = [
   # A shell over libc's termios, and constraining it would mean seizing a real
   # terminal. Which cells get written is FrameWriter's, tested against a sink.
   "src/ui/terminal/screen.rs",
+  # Reading and writing an affinity mask, one branch per host, of which a sweep
+  # compiles one: a mutant in a branch this runner does not build is inert, so
+  # it is missed by construction rather than for want of a test. Nothing that
+  # decides a Grant is here — which core is reserved, what an error number
+  # meant, and what is put back afterwards are in placement.rs, and mutated.
+  "src/audio/placement/host.rs",
 ]
 
 # Equivalent to the code it replaces rather than uncaught by it: the two compute
