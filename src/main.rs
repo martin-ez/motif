@@ -17,7 +17,8 @@ use motif::audio::sample_clock;
 use motif::device::DeviceProfile;
 use motif::looper::{LooperPage, position_meter};
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, Shell, TerminalScreen,
+    App, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, Shell, TerminalScreen,
+    columns_of,
 };
 
 const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
@@ -33,11 +34,9 @@ fn last_row() -> usize {
 
 fn write_right(frame: &mut Frame, row: usize, text: &str) {
     let screen = DeviceProfile::TARGET.screen;
-    let column = screen.columns.saturating_sub(text.chars().count());
+    let column = screen.columns.saturating_sub(columns_of(text));
 
-    for (offset, glyph) in text.chars().enumerate() {
-        frame.set(column + offset, row, Cell::new(glyph));
-    }
+    frame.write(column, row, text);
 }
 
 impl App for Chrome {
