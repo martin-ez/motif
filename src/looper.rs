@@ -126,13 +126,16 @@ impl LoopBuffer {
 
         waveform.take(
             from,
-            (from..from + taken).map(|frame| {
+            (0..taken).map(|offset| {
                 layers
                     .chunks_exact(capacity)
                     .zip(written)
                     .take(depth)
                     .map(|(layer, recorded)| {
-                        layer[..recorded].get(frame).copied().unwrap_or_default()
+                        layer[..recorded]
+                            .get(from + offset)
+                            .copied()
+                            .unwrap_or_default()
                     })
                     .sum::<f32>()
             }),
