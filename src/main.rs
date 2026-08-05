@@ -13,6 +13,7 @@
 
 use std::process::ExitCode;
 
+use motif::audio::sample_clock;
 use motif::device::DeviceProfile;
 use motif::looper::{LooperPage, position_meter};
 use motif::ui::{
@@ -64,7 +65,7 @@ impl App for Chrome {
 fn play() -> Result<(), RenderError> {
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();
-    let looper = LooperPage::new(position_meter().1);
+    let looper = LooperPage::new(position_meter().1, sample_clock().1);
     let mut chrome = Chrome {
         shell: Shell::new([Box::new(looper)]),
     };

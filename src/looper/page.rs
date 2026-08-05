@@ -10,12 +10,15 @@
 //! handed [`ControlEvent`]s and fills a [`Frame`], so the same page draws on a
 //! hardware panel once there is one.
 
+use crate::audio::SampleClockReader;
 use crate::device::{Button, DeviceProfile};
 use crate::looper::{PositionReader, Transport};
+use crate::seq::{BeatGrid, TapTempo};
 use crate::ui::{Cell, ControlEvent, Frame, Legend, Page};
 
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
+const TEMPO_ROW: usize = 1;
 const READOUT_ROW: usize = 2;
 const BAR_ROW: usize = 3;
 const ARMED: &str = "ARMED";
@@ -73,16 +76,18 @@ fn bar(playhead: u32, recorded: u32) -> String {
 ///
 /// Record opens the first take, records again to layer onto it, and drops back
 /// out of the layer; play closes whatever is open and runs the loop; stop halts
-/// it keeping what was recorded. Every other control is left alone, so the page
-/// can sit under a shell that uses them for something else.
+/// it keeping what was recorded. Held with shift, play taps a pulse instead of
+/// starting one. Every other control is left alone, so the page can sit under a
+/// shell that uses them for something else.
 ///
 /// ```
+/// use motif::audio::sample_clock;
 /// use motif::device::Button;
 /// use motif::looper::{LooperPage, Transport, position_meter};
 /// use motif::ui::{ControlEvent, Page};
 ///
 /// let (_writer, reader) = position_meter();
-/// let mut page = LooperPage::new(reader);
+/// let mut page = LooperPage::new(reader, sample_clock().1);
 ///
 /// page.control(ControlEvent::Pressed { button: Button::Record, shifted: false });
 ///
@@ -91,14 +96,22 @@ fn bar(playhead: u32, recorded: u32) -> String {
 pub struct LooperPage {
     transport: Transport,
     position: PositionReader,
+    elapsed: SampleClockReader,
+    taps: TapTempo,
 }
 
 impl LooperPage {
-    /// A page over an idle transport, reading its playhead from `position`.
-    pub fn new(position: PositionReader) -> Self {
+    /// A page over an idle transport, reading its playhead from `position` and
+    /// timing its taps by `elapsed`.
+    ///
+    /// A tap is stamped with the frame the device had reached, so the grid it
+    /// makes lines up with the audio captured around it.
+    pub fn new(position: PositionReader, elapsed: SampleClockReader) -> Self {
         Self {
             transport: Transport::default(),
             position,
+            elapsed,
+            taps: TapTempo::new(DeviceProfile::TARGET.audio.sample_rate),
         }
     }
 
@@ -112,10 +125,28 @@ impl LooperPage {
     pub const fn transport(&self) -> Transport {
         self.transport
     }
+
+    /// The beats the player has tapped.
+    ///
+    /// Public for the reason [`transport`](Self::transport) is: the grid is
+    /// what the engine has to be given, and the taps are the grid rather than a
+    /// tempo worked out from them.
+    pub const fn grid(&self) -> &BeatGrid {
+        self.taps.grid()
+    }
 }
 
 impl Page for LooperPage {
     fn control(&mut self, event: ControlEvent) {
+        if let ControlEvent::Pressed {
+            button: Button::Play,
+            shifted: true,
+        } = event
+        {
+            let _joined = self.taps.tap(self.elapsed.read());
+            return;
+        }
+
         if let ControlEvent::Pressed { button, .. } = event {
             self.transport = match button {
                 Button::Record => self.transport.record(),
@@ -147,6 +178,9 @@ impl Page for LooperPage {
         write(frame, 0, STATE_ROW, named(self.transport));
         if self.transport.captures_input() {
             write(frame, ARMED_COLUMN, STATE_ROW, ARMED);
+        }
+        if let Some(tempo) = self.taps.tempo() {
+            write(frame, 0, TEMPO_ROW, &format!("{tempo:.1} BPM"));
         }
 
         let readout = format!(
