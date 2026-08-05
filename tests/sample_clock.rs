@@ -8,12 +8,18 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use motif::audio::sample_clock;
+use motif::audio::{
+    AudioBackend, AudioPath, Counting, DeviceSelection, NullBackend, Passthrough, StreamConfig,
+    StreamRequest, sample_clock,
+};
+use motif::device::{AudioProfile, Button, DeviceProfile};
+use motif::looper::LooperPage;
+use motif::ui::{ControlEvent, Page};
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -63,6 +69,154 @@ const SAMPLE_RATE: u32 = 44_100;
 
 /// How long the two-thread test spends looking for a count that went backwards.
 const SEARCH: Duration = Duration::from_millis(50);
+
+const AUDIO: AudioProfile = DeviceProfile::TARGET.audio;
+
+fn granted() -> StreamConfig {
+    StreamConfig {
+        sample_rate: AUDIO.sample_rate,
+        block_size: AUDIO.block_size,
+        input_channels: 2,
+        output_channels: 2,
+    }
+}
+
+fn request() -> StreamRequest {
+    StreamRequest {
+        sample_rate: AUDIO.sample_rate,
+        block_size: AUDIO.block_size,
+    }
+}
+
+fn selection() -> DeviceSelection {
+    NullBackend::rounding(granted())
+        .defaults(AUDIO.sample_rate)
+        .expect("the null backend has a device in each direction")
+}
+
+fn shifted(button: Button) -> ControlEvent {
+    ControlEvent::Pressed {
+        button,
+        shifted: true,
+    }
+}
+
+/// A path that keeps the configuration it was prepared with, so that a test can
+/// read it back through the path wrapped around it.
+#[derive(Clone, Default)]
+struct Prepared(Arc<Mutex<Option<StreamConfig>>>);
+
+impl Prepared {
+    fn config(&self) -> Option<StreamConfig> {
+        *self.0.lock().expect("no test holds this across a panic")
+    }
+}
+
+impl AudioPath for Prepared {
+    fn prepare(&mut self, config: StreamConfig) {
+        *self.0.lock().expect("no test holds this across a panic") = Some(config);
+    }
+
+    fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
+}
+
+#[test]
+fn a_rendered_block_moves_the_clock_on_by_its_frames() {
+    let (frames, elapsed) = sample_clock(SAMPLE_RATE);
+    let mut path = Counting::new(frames, Passthrough::new());
+
+    path.render(&[0.0; BLOCK], &mut [0.0; BLOCK]);
+
+    assert_eq!(elapsed.read(), BLOCK as u64);
+}
+
+#[test]
+fn rendered_blocks_accumulate_on_the_clock() {
+    let (frames, elapsed) = sample_clock(SAMPLE_RATE);
+    let mut path = Counting::new(frames, Passthrough::new());
+
+    for _ in 0..4 {
+        path.render(&[0.0; BLOCK], &mut [0.0; BLOCK]);
+    }
+
+    assert_eq!(elapsed.read(), 4 * BLOCK as u64);
+}
+
+#[test]
+fn a_counting_path_plays_what_the_path_it_wraps_plays() {
+    let mut path = Counting::new(sample_clock(SAMPLE_RATE).0, Passthrough::new());
+    let mut played = [0.0; 3];
+
+    path.render(&[0.25, 0.5, 0.75], &mut played);
+
+    assert_eq!(played, [0.25, 0.5, 0.75]);
+}
+
+#[test]
+fn a_counting_path_prepares_the_path_it_wraps() {
+    let wrapped = Prepared::default();
+    let mut path = Counting::new(sample_clock(SAMPLE_RATE).0, wrapped.clone());
+
+    path.prepare(granted());
+
+    assert_eq!(wrapped.config(), Some(granted()));
+}
+
+#[test]
+fn a_block_counts_the_frames_both_its_slices_carried() {
+    let (frames, elapsed) = sample_clock(SAMPLE_RATE);
+    let mut path = Counting::new(frames, Passthrough::new());
+
+    path.render(&[0.0; BLOCK], &mut [0.0; BLOCK / 2]);
+
+    assert_eq!(elapsed.read(), BLOCK as u64 / 2);
+}
+
+#[test]
+fn rendering_through_a_counting_path_does_not_allocate() {
+    let (frames, elapsed) = sample_clock(SAMPLE_RATE);
+    let mut path = Counting::new(frames, Passthrough::new());
+    let mut played = [0.0; BLOCK];
+
+    let before = allocations();
+    for _ in 0..8 {
+        path.render(&[0.0; BLOCK], &mut played);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before, "rendering through the clock allocated");
+    assert_eq!(elapsed.read(), 8 * BLOCK as u64);
+}
+
+#[test]
+fn a_stream_advances_the_clock_its_path_was_given() {
+    let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
+    let mut stream = NullBackend::rounding(granted())
+        .open(
+            &selection(),
+            request(),
+            Counting::new(frames, Passthrough::new()),
+        )
+        .expect("null backend opens");
+
+    stream.block(&[0.0; BLOCK], &mut [0.0; BLOCK]);
+
+    assert_eq!(elapsed.read(), BLOCK as u64);
+}
+
+#[test]
+fn a_tap_is_stamped_with_the_frames_the_stream_has_played() {
+    let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
+    let (mut page, engine) = LooperPage::driving(AUDIO, elapsed);
+    let mut stream = NullBackend::rounding(granted())
+        .open(&selection(), request(), Counting::new(frames, engine))
+        .expect("null backend opens");
+    stream.block(&[0.0; BLOCK], &mut [0.0; BLOCK]);
+
+    page.control(shifted(Button::Play));
+
+    assert_eq!(page.grid().beats(), [BLOCK as u64]);
+}
 
 #[test]
 fn the_allocation_counter_counts_an_allocation() {
