@@ -52,6 +52,8 @@
 use std::time::Duration;
 
 use crate::device::DeviceProfile;
+#[cfg(feature = "frame-pace")]
+use crate::ui::PaceWriter;
 use crate::ui::{Clock, ControlEvent, Controls, Frame, Legend, RenderError, Renderer, SystemClock};
 
 /// The most control events one frame will take.
@@ -146,6 +148,8 @@ pub struct EventLoop<K: Clock = SystemClock> {
     clock: K,
     budget: Duration,
     frame: Frame,
+    #[cfg(feature = "frame-pace")]
+    pace: Option<PaceWriter>,
 }
 
 impl EventLoop<SystemClock> {
@@ -168,12 +172,29 @@ impl<K: Clock> EventLoop<K> {
             clock,
             budget: DeviceProfile::TARGET.screen.frame_budget(),
             frame: Frame::blank(),
+            #[cfg(feature = "frame-pace")]
+            pace: None,
         }
     }
 
     /// The clock the loop is pacing itself against.
     pub fn clock(&self) -> &K {
         &self.clock
+    }
+
+    /// Publish what each frame cost to `pace`.
+    ///
+    /// A loop given no meter measures nothing, which is what makes the two
+    /// clock reads it already takes the whole cost of this: the readings are
+    /// taken for the budget either way.
+    ///
+    /// A meter belongs to one run. Its recent window advances with the frames
+    /// it is given and nothing resets it, so running the same loop again would
+    /// open with a peak the previous run left behind.
+    #[cfg(feature = "frame-pace")]
+    pub fn metering(mut self, pace: PaceWriter) -> Self {
+        self.pace = Some(pace);
+        self
     }
 
     /// Run `app` until it asks to stop, drawing to `screen` and reading `controls`.
@@ -214,6 +235,7 @@ impl<K: Clock> EventLoop<K> {
             if spare.is_none() {
                 report.overruns += 1;
             }
+            self.measured(spent, report.overruns);
 
             if flow.is_exit() {
                 return Ok(report);
@@ -224,6 +246,16 @@ impl<K: Clock> EventLoop<K> {
             }
         }
     }
+
+    #[cfg(feature = "frame-pace")]
+    fn measured(&mut self, spent: Duration, overruns: u64) {
+        if let Some(pace) = &mut self.pace {
+            pace.measured(spent, overruns);
+        }
+    }
+
+    #[cfg(not(feature = "frame-pace"))]
+    fn measured(&mut self, _spent: Duration, _overruns: u64) {}
 }
 
 fn drain(app: &mut impl App, controls: &mut impl Controls) -> Flow {
