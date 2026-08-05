@@ -22,6 +22,7 @@ const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const RATE: u32 = 48_000;
 const FIRST: &str = "first";
 const SECOND: &str = "second";
+const THIRD: &str = "third";
 const MIC: &str = "mic";
 const LINE: &str = "line";
 const SPARE: &str = "spare";
@@ -30,6 +31,8 @@ const SPEAKERS: &str = "speakers";
 const PHONES: &str = "phones";
 const DESK: &str = "desk";
 const MONITOR: &str = "monitor";
+const BOOTH: &str = "booth";
+const WEDGE: &str = "wedge";
 
 /// A backend listing two hosts, whose devices can arrive and depart between
 /// enumerations, and whose spare input refuses to open.
@@ -113,6 +116,11 @@ impl AudioBackend for Studio {
                 name: SECOND.to_owned(),
                 inputs: vec![device(DESK, vec![2])],
                 outputs: vec![device(MONITOR, vec![2])],
+            },
+            AudioHost {
+                name: THIRD.to_owned(),
+                inputs: vec![device(BOOTH, vec![2])],
+                outputs: vec![device(WEDGE, vec![2])],
             },
         ]
     }
@@ -289,7 +297,7 @@ fn an_opened_page_has_listed_what_there_is_to_choose_from() {
         .map(|host| host.name.as_str())
         .collect();
 
-    assert_eq!(named, [FIRST, SECOND]);
+    assert_eq!(named, [FIRST, SECOND, THIRD]);
 }
 
 #[test]
@@ -399,10 +407,18 @@ fn moving_the_host_back_returns_to_the_first() {
 }
 
 #[test]
+fn the_host_steps_on_from_the_one_that_is_open() {
+    let page = moved(AudioSetting::Host, repeated(pressed(Button::Right), 2));
+
+    assert_eq!(host_of(&page), THIRD);
+    assert_eq!(input_of(&page), BOOTH);
+}
+
+#[test]
 fn the_host_stops_at_the_last_one_listed() {
     let page = moved(AudioSetting::Host, repeated(pressed(Button::Right), 4));
 
-    assert_eq!(host_of(&page), SECOND);
+    assert_eq!(host_of(&page), THIRD);
 }
 
 #[test]
@@ -442,6 +458,19 @@ fn a_new_input_device_is_taken_whole() {
 
     assert_eq!(
         page.link().selection().input_channels,
+        ChannelSelection::all(2)
+    );
+}
+
+#[test]
+fn a_new_output_device_is_taken_whole() {
+    let mut page = page();
+    driven_by(&mut page, on(AudioSetting::OutputChannels));
+    driven_by(&mut page, [pressed(Button::Left)]);
+    driven_by(&mut page, [pressed(Button::Up), pressed(Button::Right)]);
+
+    assert_eq!(
+        page.link().selection().output_channels,
         ChannelSelection::all(2)
     );
 }
@@ -511,6 +540,17 @@ fn a_choice_that_cannot_be_opened_says_why() {
             .iter()
             .any(|row| row.contains(&DeviceError::DeviceNotAvailable.to_string())),
     );
+}
+
+#[test]
+fn the_reason_is_drawn_under_the_settings() {
+    let mut page = moved(AudioSetting::Input, repeated(pressed(Button::Right), 2));
+    let last = AudioSetting::ALL.len();
+
+    let rows = drawn(&mut page);
+
+    assert_eq!(rows[last], "");
+    assert!(rows[last + 1].contains("cannot open"), "{}", rows[last + 1]);
 }
 
 #[test]
