@@ -1,8 +1,11 @@
 //! Running a candidate over the whole fixture set: what it scores, what it
 //! reports, and what it refuses to skip.
 
+use motif::fixtures::AnnotationError;
 use motif::fixtures::harness::{self, GroundTruth, Report, RunError, Target};
+use std::error::Error;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -247,6 +250,45 @@ fn a_missing_directory_fails_the_run() {
         .expect_err("a missing set fails the run");
 
     assert!(matches!(error, RunError::Directory { .. }), "{error:?}");
+}
+
+#[test]
+fn a_broken_annotation_carries_the_parse_error_as_its_cause() {
+    let directory = scratch("annotation-cause");
+    write(&directory, "broken", "0.0 downbeat\n1.0 offbeat\n");
+
+    let error = harness::measure(&directory, Target::Beats, |_| Vec::new())
+        .expect_err("a broken annotation fails the run");
+    let cause = error.source().expect("the parse error is the cause");
+
+    assert_eq!(
+        cause.downcast_ref::<AnnotationError>(),
+        Some(&AnnotationError::BeatKind { line: 2 })
+    );
+}
+
+#[test]
+fn a_missing_directory_carries_the_filesystem_error_as_its_cause() {
+    let directory = scratch("directory-cause").join("nowhere");
+
+    let error = harness::measure(&directory, Target::Beats, |_| Vec::new())
+        .expect_err("a missing set fails the run");
+    let cause = error.source().expect("the filesystem error is the cause");
+
+    assert_eq!(
+        cause.downcast_ref::<io::Error>().map(io::Error::kind),
+        Some(io::ErrorKind::NotFound)
+    );
+}
+
+#[test]
+fn a_set_with_no_fixtures_has_nothing_underlying_to_report() {
+    let directory = scratch("empty-cause");
+
+    let error = harness::measure(&directory, Target::Beats, |_| Vec::new())
+        .expect_err("a set with no fixtures fails the run");
+
+    assert!(error.source().is_none(), "{error:?}");
 }
 
 #[test]
