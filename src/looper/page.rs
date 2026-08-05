@@ -118,10 +118,9 @@ impl LooperPage {
     /// What the looper is doing.
     ///
     /// Public because the transport is what the engine has to be told: a
-    /// composition holding this page and a command queue forwards
-    /// [`Command::SetArmed`](crate::audio::Command::SetArmed) from
-    /// [`Transport::captures_input`] rather than tracking the presses a second
-    /// time.
+    /// composition holding this page and a command queue forwards this state
+    /// as [`Command::SetTransport`](crate::audio::Command::SetTransport) rather
+    /// than tracking the presses a second time.
     pub const fn transport(&self) -> Transport {
         self.transport
     }
