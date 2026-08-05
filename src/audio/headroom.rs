@@ -3,25 +3,23 @@
 //!
 //! Headroom rather than duration, because a duration says nothing on its own: a
 //! callback taking 2 ms is comfortable at 256 frames and hopeless at 64, and the
-//! same DSP has a different deadline again on the target board. A fraction of
-//! the period the block was allowed carries between machines, which is what
-//! makes it the number worth recording.
+//! same DSP has a different deadline again on the target board.
 //!
 //! What crosses the boundary is the last block's fraction and the largest over a
 //! recent window, packed into one word for the reason
 //! [`level_meter`](super::level_meter) packs its pair: read as two atomics they
-//! can straddle two blocks and come back as a pair no block ever had, a bar
-//! drawn past its own peak-hold mark. The running maximum is kept in the
-//! measuring end's own state rather than in the shared word, so the word has one
-//! writer and a plain store — never a compare-and-swap, whose retry loop the
-//! callback has no bound on.
+//! can straddle two blocks and come back as a pair no block ever had. The
+//! running maximum is kept in the measuring end's own state rather than in the
+//! shared word, so the word has one writer and a plain store — never a
+//! compare-and-swap, whose retry loop the callback has no bound on.
 //!
 //! The elapsed time arrives from the caller rather than being read here, so that
 //! a test can state a block that took half its period instead of spending one.
 //! The callback reads it with [`Instant::now`](std::time::Instant::now), which
-//! allocates on no platform and reaches the clock without trapping into the
-//! kernel: on Linux it resolves through the vDSO, and on macOS through the
-//! commpage.
+//! allocates on no platform and, on the clocksource a host usually selects,
+//! reaches the clock without trapping into the kernel: through the vDSO on Linux
+//! and the commpage on macOS. Where a host exports neither, the reading costs
+//! the callback a syscall per block.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -39,9 +37,8 @@ pub struct Headroom {
     pub load: f32,
     /// The largest [`load`](Self::load) over the recent window.
     ///
-    /// This is the one that says whether the deadline is safe: a mean hides the
-    /// single late block a player hears, and one late block is the whole of what
-    /// went wrong.
+    /// This is the one that says whether the deadline is safe: a mean would hide
+    /// the single late block, which is the whole of what a player hears.
     pub peak: f32,
 }
 
@@ -54,9 +51,9 @@ impl Headroom {
 
     /// The fraction of a block period the worst recent block left unused.
     ///
-    /// Negative where that block overran, which is a real reading rather than a
-    /// floor to clamp at: how far past the deadline it went is what says whether
-    /// the work is slightly or hopelessly too slow.
+    /// Negative where that block overran rather than clamped at zero: how far
+    /// past the deadline it went is the difference between work that is slightly
+    /// too slow and work that is hopelessly too slow.
     ///
     /// ```
     /// use motif::audio::Headroom;
@@ -109,6 +106,13 @@ impl Headroom {
 /// sharing a meter would need the retry loop keeping them apart out of the
 /// callback, and reading the pair back with [`Headroom::worse_of`] costs
 /// nothing.
+///
+/// The recent window spans two of [`DeviceProfile::TARGET`]'s screen frames, and
+/// a maximum survives the window after the one it landed in as well as its own.
+/// A maximum has to outlast the gap between two readings or a spike falls
+/// between them unseen, and the reader is a screen refreshing at that rate: a
+/// window of one frame would leave a reader that drew a moment late reading past
+/// its own spike.
 ///
 /// ```
 /// use std::time::Duration;
@@ -182,18 +186,19 @@ impl HeadroomReader {
     /// Reading takes nothing: a peak stays readable until the window it belongs
     /// to has passed, so two readers see the same spike and neither hides it
     /// from the other.
+    ///
+    /// The window advances with the blocks that are measured rather than with
+    /// the clock, so a callback that has stopped being called keeps reporting
+    /// the window it stopped in.
     pub fn read(&self) -> Headroom {
         Headroom::unpacked(self.published.load(Ordering::Acquire))
     }
 }
 
-/// The span a recent maximum covers, as the frames the target draws one frame
-/// in.
-///
-/// A maximum has to outlast the gap between two readings or a spike falls
-/// between them unseen, and the reader is a screen refreshing at
-/// [`DeviceProfile::TARGET`]'s rate.
-const RECENT: Duration = DeviceProfile::TARGET.screen.frame_budget();
+const RECENT: Duration = DeviceProfile::TARGET
+    .screen
+    .frame_budget()
+    .saturating_mul(2);
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 

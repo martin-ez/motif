@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use motif::audio::{
     AudioBackend, DuplexStream, Headroom, NullBackend, StreamConfig, StreamRequest, headroom_meter,
 };
+use motif::device::DeviceProfile;
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -72,6 +73,16 @@ const GRANTED: StreamConfig = StreamConfig {
     input_channels: 1,
     output_channels: 2,
 };
+
+fn frames_in(span: Duration) -> usize {
+    (u64::from(SAMPLE_RATE) * span.as_nanos() as u64 / 1_000_000_000) as usize
+}
+
+/// The frames the target's screen takes to draw one frame, which is the gap
+/// between two readings a recent maximum has to outlast.
+fn a_frame() -> usize {
+    frames_in(DeviceProfile::TARGET.screen.frame_budget())
+}
 
 fn quiet_blocks(writer: &mut motif::audio::HeadroomWriter, frames: usize) {
     let mut covered = 0;
@@ -167,12 +178,21 @@ fn the_peak_falls_back_once_the_spike_has_left_the_window() {
 }
 
 #[test]
-fn a_spike_survives_a_reader_looking_a_frame_later() {
+fn a_spike_survives_a_reader_a_whole_frame_late() {
     let (mut writer, reader) = headroom_meter(SAMPLE_RATE);
-    let a_frame = (SAMPLE_RATE / 30) as usize;
 
     writer.measured(PERIOD, BLOCK);
-    quiet_blocks(&mut writer, a_frame);
+    quiet_blocks(&mut writer, a_frame());
+
+    assert_eq!(reader.read().peak, 1.0);
+}
+
+#[test]
+fn a_spike_survives_the_window_it_landed_in_closing() {
+    let (mut writer, reader) = headroom_meter(SAMPLE_RATE);
+
+    writer.measured(PERIOD, BLOCK);
+    quiet_blocks(&mut writer, a_frame() * 2);
 
     assert_eq!(reader.read().peak, 1.0);
 }

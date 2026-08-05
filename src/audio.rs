@@ -194,7 +194,9 @@ pub trait DuplexStream {
     /// How much of its deadline the callback used, over the recent window.
     ///
     /// A stream with a callback in each direction reports the tighter of the
-    /// two, since either one missing its deadline is the stream missing it.
+    /// two, since either one missing its deadline is the stream missing it. The
+    /// window advances with the blocks that arrive rather than with the clock,
+    /// so a stopped stream keeps reporting the window it stopped in.
     fn headroom(&self) -> Headroom;
 
     /// Start calling back.
