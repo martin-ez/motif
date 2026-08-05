@@ -1,12 +1,14 @@
 //! The [`AudioBackend`] implementation backed by real devices.
 
+use std::time::Instant;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, FaultReader, LevelReader,
-    Levels, StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, fault_channel,
-    level_meter, passthrough, xrun_counter,
+    AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, FaultReader, Headroom,
+    HeadroomReader, LevelReader, Levels, StreamConfig, StreamRequest, StreamState, XrunReader,
+    Xruns, fault_channel, headroom_meter, level_meter, passthrough, xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -197,6 +199,8 @@ impl AudioBackend for CpalBackend {
         );
         let (mut level_writer, levels) = level_meter();
         let (mut overruns, mut underruns, xruns) = xrun_counter();
+        let (mut capture_headroom, capture_load) = headroom_meter(request.sample_rate);
+        let (mut render_headroom, render_load) = headroom_meter(request.sample_rate);
         let (reporter, faults) = fault_channel();
         let input_faults = reporter.clone();
         let output_faults = reporter;
@@ -206,10 +210,12 @@ impl AudioBackend for CpalBackend {
                 input_config,
                 SampleFormat::F32,
                 move |data: &Data, _: &_| {
+                    let started = Instant::now();
                     if let Some(samples) = data.as_slice::<f32>() {
                         level_writer.publish(samples);
                         let offered = samples.len() / input_channels as usize;
                         overruns.captured(passthrough_input.capture(samples), offered);
+                        capture_headroom.measured(started.elapsed(), offered);
                     }
                 },
                 move |failed| input_faults.report(classify(&failed)),
@@ -222,9 +228,11 @@ impl AudioBackend for CpalBackend {
                 output_config,
                 SampleFormat::F32,
                 move |data: &mut Data, _: &_| {
+                    let started = Instant::now();
                     if let Some(samples) = data.as_slice_mut::<f32>() {
                         let wanted = samples.len() / output_channels as usize;
                         underruns.supplied(passthrough_output.render(samples), wanted);
+                        render_headroom.measured(started.elapsed(), wanted);
                     }
                 },
                 move |failed| output_faults.report(classify(&failed)),
@@ -251,6 +259,8 @@ impl AudioBackend for CpalBackend {
             output: output_stream,
             levels,
             xruns,
+            capture_load,
+            render_load,
             faults,
         })
     }
@@ -264,6 +274,8 @@ pub struct CpalStream {
     output: cpal::Stream,
     levels: LevelReader,
     xruns: XrunReader,
+    capture_load: HeadroomReader,
+    render_load: HeadroomReader,
     faults: FaultReader,
 }
 
@@ -295,6 +307,14 @@ impl DuplexStream for CpalStream {
     /// here — the callback is simply not called.
     fn xruns(&self) -> Xruns {
         self.xruns.read()
+    }
+
+    /// Timed around everything each callback does with the block it was handed,
+    /// which is the work the deadline is against. The wait before the callback
+    /// was entered is the host's and is not measured here — a late callback that
+    /// then finished quickly reads as headroom, and shows up as an xrun instead.
+    fn headroom(&self) -> Headroom {
+        self.capture_load.read().worse_of(self.render_load.read())
     }
 
     /// Whichever of the two streams noticed first. The input and the output are

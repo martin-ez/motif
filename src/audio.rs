@@ -16,12 +16,16 @@
 //! [`fault_channel`] carries the news that the device did. That one outlives
 //! the stream it came from, so [`DeviceLink`] holds the pieces needed to open
 //! another and is what the rest of the application talks to.
+//!
+//! [`headroom_meter`] carries how close the boundary came to failing, which is
+//! the reading that is still useful once a count has stopped rising.
 
 use std::fmt;
 
 mod command;
 mod cpal_backend;
 mod fault;
+mod headroom;
 mod level;
 mod link;
 mod passthrough;
@@ -31,6 +35,7 @@ mod xrun;
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use fault::{FaultReader, FaultReporter, fault_channel};
+pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use link::{AudioState, DeviceLink};
 pub use passthrough::{PassthroughInput, PassthroughOutput, passthrough};
@@ -195,6 +200,14 @@ pub trait DuplexStream {
     /// and starting one does not reset them.
     fn xruns(&self) -> Xruns;
 
+    /// How much of its deadline the callback used, over the recent window.
+    ///
+    /// A stream with a callback in each direction reports the tighter of the
+    /// two, since either one missing its deadline is the stream missing it. The
+    /// window advances with the blocks that arrive rather than with the clock,
+    /// so a stopped stream keeps reporting the window it stopped in.
+    fn headroom(&self) -> Headroom;
+
     /// Why the device failed, or `None` while it has not.
     ///
     /// This is the fault a callback reported, latched and read here rather than
@@ -346,6 +359,12 @@ impl DuplexStream for NullStream {
     /// [`Xruns::NONE`].
     fn xruns(&self) -> Xruns {
         Xruns::NONE
+    }
+
+    /// A stream that moves no samples does no work, so this is always
+    /// [`Headroom::IDLE`].
+    fn headroom(&self) -> Headroom {
+        Headroom::IDLE
     }
 
     /// Nothing, until [`fail`](Self::fail) says otherwise: a device that does

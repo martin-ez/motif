@@ -96,7 +96,8 @@ impl<B: AudioBackend> DeviceLink<B> {
     /// The stream currently serving the link, or `None` where none is open.
     ///
     /// This is the route to what a stream knows and the link does not: the
-    /// configuration the device granted, the levels, the dropout counts.
+    /// configuration the device granted, the levels, the dropout counts, the
+    /// callback's headroom.
     pub fn stream(&self) -> Option<&B::Stream> {
         self.stream.as_ref()
     }

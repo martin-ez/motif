@@ -20,6 +20,8 @@ exclude_re = [
   # A tag above bit 32 and a payload below never share a bit, so `|` and `^`
   # pack the same word.
   'replace \| with \^ in Command::to_bits',
+  # The last block's load above bit 32 and the recent peak below.
+  'replace \| with \^ in Headroom::packed',
   # Peak above bit 32 and RMS below: disjoint halves again.
   'replace \| with \^ in Levels::packed',
   # Playhead above bit 32 and recorded length below.
