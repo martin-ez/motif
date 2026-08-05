@@ -176,33 +176,18 @@ impl<K: Clock> EventLoop<K> {
         &self.clock
     }
 
-    /// Run `app` until it asks to stop, taking controls from `controls` and
-    /// drawing to `screen`.
+    /// Run `app` until it asks to stop, drawing to `screen` and reading `controls`.
     ///
-    /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws once,
-    /// draws the application's [`Legend`] over the bottom of that, renders, and
-    /// then waits out the rest of its budget. An event arriving mid-frame is
-    /// handled by the next one: the frame boundary is what makes a draw see one
-    /// state rather than a state that changed underneath it.
+    /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws, overlays
+    /// the application's [`Legend`], renders, and waits out its budget. The
+    /// legend is drawn here as the only place holding both halves of it.
     ///
-    /// The legend is drawn here because this is the only place holding both
-    /// halves of it: the application knows what its controls mean and the panel
-    /// knows what to call them, and neither can be shown the other without one
-    /// of them learning something it must not know.
-    ///
-    /// An exit from [`App::control`] ends the run without drawing, because the
-    /// application has just said there is nothing further to show. An exit from
-    /// [`App::draw`] renders that frame first — it is the one the application
-    /// wants left on the screen — and neither waits out a budget nobody is
-    /// going to use. A last frame that ran over is still reported as an
-    /// overrun: it is the run's timing that the report describes, not the
-    /// waiting the loop did about it.
+    /// An exit from [`App::control`] ends the run undrawn; one from [`App::draw`]
+    /// renders that frame first. Neither waits out its budget.
     ///
     /// # Errors
     ///
-    /// Returns the [`RenderError`] the screen gave, having stopped: a screen
-    /// that cannot be written to will not improve by being written to sixty
-    /// times a second, and the caller is the one that can tell the player.
+    /// Returns the [`RenderError`] the screen gave, having stopped.
     pub fn run(
         &mut self,
         app: &mut impl App,
