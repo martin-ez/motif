@@ -579,15 +579,30 @@ fn a_loop_shorter_than_the_block_is_heard_as_often_as_it_fits() {
 }
 
 #[test]
-fn playing_from_past_the_end_of_the_loop_wraps_into_it() {
+fn playing_from_past_the_end_of_the_loop_starts_at_its_beginning() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75]);
     let mut block = [0.0; 2];
 
     let playhead = buffer.play_into(&mut block, 7);
 
-    assert_eq!(block, [0.5, 0.75]);
-    assert_eq!(playhead, 0);
+    assert_eq!(block, [0.25, 0.5]);
+    assert_eq!(playhead, 2);
+}
+
+#[test]
+fn a_playhead_kept_across_a_shorter_take_does_not_leave_it_out_of_phase() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 0.125, 0.375]);
+    let mut block = [0.0; 3];
+    let kept = buffer.play_into(&mut block, 0);
+
+    buffer.clear();
+    buffer.record(&[0.25, 0.5]);
+    let mut played = [0.0; 2];
+    buffer.play_into(&mut played, kept);
+
+    assert_eq!(played, [0.25, 0.5]);
 }
 
 #[test]
@@ -645,12 +660,16 @@ fn a_loop_that_is_not_a_multiple_of_the_block_repeats_without_drift() {
 }
 
 #[test]
-fn playing_does_not_allocate() {
+fn playing_a_stack_of_layers_across_the_wrap_does_not_allocate() {
     let profile = DeviceProfile::TARGET.audio;
     let mut buffer = LoopBuffer::for_profile(profile);
     let block = vec![0.5; profile.block_size as usize];
     let mut played = vec![0.0; profile.block_size as usize];
     buffer.record(&block[..block.len() - 1]);
+    for _ in 1..LoopBuffer::LAYERS {
+        buffer.overdub();
+        buffer.record(&block);
+    }
 
     let before = allocations();
     let mut playhead = 0;
