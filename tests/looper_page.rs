@@ -175,6 +175,12 @@ fn screen_of(page: &mut LooperPage) -> String {
     drawn(page).join("\n")
 }
 
+fn row_holding(rows: &[String], text: &str) -> usize {
+    rows.iter()
+        .position(|row| row.contains(text))
+        .unwrap_or_else(|| panic!("the page draws no row holding {text:?}"))
+}
+
 /// The glyphs the loop's shape is drawn from, densest last.
 const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
@@ -493,12 +499,10 @@ fn a_stack_with_no_room_left_shows_every_layer_taken() {
 }
 
 #[test]
-fn the_stack_is_drawn_beside_the_gain_rather_than_over_it() {
-    let mut page = page_stacked(3);
-    let screen = screen_of(&mut page);
+fn the_stack_is_drawn_on_the_row_under_the_gain() {
+    let rows = drawn(&mut page_stacked(3));
 
-    assert!(screen.contains("IN"), "the stack landed on the gain row");
-    assert!(screen.contains("LAYERS"));
+    assert_eq!(row_holding(&rows, "LAYERS"), row_holding(&rows, "dB") + 1);
 }
 
 #[test]
