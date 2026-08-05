@@ -4,8 +4,10 @@
 //! A wrong annotation is a silent source of wrong accuracy numbers, so the
 //! format is line-oriented text meant to be read and corrected in a pull
 //! request rather than taken on trust. [`Score`] is what turns an accuracy
-//! claim into a number a reviewer can check.
+//! claim into a number a reviewer can check, and [`harness`] is what runs one
+//! over the whole set.
 
+pub mod harness;
 pub mod synth;
 
 use std::fmt;
