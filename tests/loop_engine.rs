@@ -1,14 +1,14 @@
 //! The owner of the loop, and what it makes of a block.
 //!
-//! The engine is the one thing holding the buffer, the transport, the commands
-//! and the playhead together, so the facts worth stating are what a block comes
-//! out carrying: the input it was handed, the loop mixed over that input, and
+//! The engine is the one thing holding the buffer, the transport and the
+//! playhead together, so the facts worth stating are what a block comes out
+//! carrying: the input it was handed, the loop mixed over that input, and
 //! silence where the player asked for it.
 //!
-//! A player reaches it only through the command queue, so every test drives it
-//! the way the application thread does, and reads the playhead back the way the
-//! screen does. No device is opened anywhere here — an engine that needed one
-//! could not be exercised where there is no hardware.
+//! A player reaches it only through the queue in front of it, so every test
+//! drives it the way the application thread does, and reads the playhead back
+//! the way the screen does. No device is opened anywhere here — an engine that
+//! needed one could not be exercised where there is no hardware.
 //!
 //! It runs in the callback, so the allocations are counted too.
 
@@ -16,7 +16,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use motif::audio::{AudioPath, Command, CommandSender, command_channel};
+use motif::audio::{AudioPath, Command, CommandSender, Commanded, command_channel};
 use motif::device::AudioProfile;
 use motif::looper::{LoopBuffer, LoopEngine, PositionReader, Transport, position_meter};
 
@@ -73,12 +73,12 @@ fn eight_frame_profile() -> AudioProfile {
 
 /// An engine over an eight-frame loop, with the two ends a player reaches it
 /// through.
-fn engine() -> (LoopEngine, CommandSender, PositionReader) {
+fn engine() -> (Commanded<LoopEngine>, CommandSender, PositionReader) {
     let (sender, receiver) = command_channel(8);
     let (writer, reader) = position_meter();
 
     (
-        LoopEngine::new(eight_frame_profile(), receiver, writer),
+        Commanded::new(receiver, LoopEngine::new(eight_frame_profile(), writer)),
         sender,
         reader,
     )
@@ -92,7 +92,7 @@ fn press(sender: &mut CommandSender, command: Command) {
 /// Render one block of `captured` and return what the engine played.
 ///
 /// The block arrives silent, which is what a stream promises a path.
-fn played(engine: &mut LoopEngine, captured: &[f32]) -> Vec<f32> {
+fn played(engine: &mut Commanded<LoopEngine>, captured: &[f32]) -> Vec<f32> {
     let mut playing = vec![0.0; captured.len()];
     engine.render(captured, &mut playing);
 
@@ -100,7 +100,7 @@ fn played(engine: &mut LoopEngine, captured: &[f32]) -> Vec<f32> {
 }
 
 /// Render one block of silence `frames` long and return what the engine played.
-fn heard(engine: &mut LoopEngine, frames: usize) -> Vec<f32> {
+fn heard(engine: &mut Commanded<LoopEngine>, frames: usize) -> Vec<f32> {
     played(engine, &vec![0.0; frames])
 }
 
@@ -116,7 +116,6 @@ fn the_allocation_counter_counts_an_allocation() {
 #[test]
 #[should_panic(expected = "block")]
 fn a_profile_with_no_block_is_refused_at_setup() {
-    let (_sender, commands) = command_channel(1);
     let (writer, _position) = position_meter();
 
     LoopEngine::new(
@@ -124,9 +123,20 @@ fn a_profile_with_no_block_is_refused_at_setup() {
             block_size: 0,
             ..eight_frame_profile()
         },
-        commands,
         writer,
     );
+}
+
+#[test]
+fn an_engine_answers_every_command_there_is() {
+    let (writer, _position) = position_meter();
+    let mut engine = LoopEngine::new(eight_frame_profile(), writer);
+
+    assert!(engine.apply(Command::SetTransport(Transport::Recording)));
+    assert!(engine.apply(Command::SetGain(0.5)));
+    assert!(engine.apply(Command::SetMuted(true)));
+    assert!(engine.apply(Command::Undo));
+    assert!(engine.apply(Command::Clear));
 }
 
 #[test]

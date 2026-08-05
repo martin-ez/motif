@@ -1,14 +1,18 @@
 //! The path that plays the input at a level the player controls.
 //!
 //! Driven the way the callback drives it: commands are queued from this thread,
-//! and the path picks them up when it renders a block. Nothing here opens a
-//! device — what a path does with a block is answerable without one.
+//! and the queue in front of the path deals them when it renders a block.
+//! Nothing here opens a device — what a path does with a block is answerable
+//! without one.
 //!
 //! Levels are read off a block of ones, where the played samples are the gain
 //! itself, and a block long enough to outlast the ramp is what a settled level
 //! is read from.
 
-use motif::audio::{AudioPath, Command, CommandSender, Gain, InputMonitor, StreamConfig};
+use motif::audio::{
+    AudioPath, Command, CommandSender, Commanded, Gain, InputMonitor, StreamConfig,
+};
+use motif::looper::Transport;
 
 const SAMPLE_RATE: u32 = 48_000;
 const RAMP_FRAMES: usize = SAMPLE_RATE as usize * Gain::RAMP / 1_000;
@@ -25,15 +29,15 @@ fn config() -> StreamConfig {
     }
 }
 
-fn monitoring() -> (CommandSender, InputMonitor) {
+fn monitoring() -> (CommandSender, Commanded<InputMonitor>) {
     let (sender, receiver) = motif::audio::command_channel(16);
-    let mut path = InputMonitor::new(receiver);
+    let mut path = Commanded::new(receiver, InputMonitor::new());
     path.prepare(config());
 
     (sender, path)
 }
 
-fn played(path: &mut InputMonitor, frames: usize) -> Vec<f32> {
+fn played(path: &mut Commanded<InputMonitor>, frames: usize) -> Vec<f32> {
     let captured = vec![1.0; frames];
     let mut playing = vec![0.0; frames];
     path.render(&captured, &mut playing);
@@ -41,7 +45,7 @@ fn played(path: &mut InputMonitor, frames: usize) -> Vec<f32> {
     playing
 }
 
-fn settled(path: &mut InputMonitor) -> f32 {
+fn settled(path: &mut Commanded<InputMonitor>) -> f32 {
     let block = played(path, SETTLED);
 
     block[block.len() - 1]
@@ -146,10 +150,21 @@ fn every_command_waiting_is_taken_before_the_block_is_played() {
 }
 
 #[test]
+fn a_monitor_answers_what_moves_the_level_and_nothing_else() {
+    let mut path = InputMonitor::new();
+
+    assert!(path.apply(Command::SetGain(HALF)));
+    assert!(path.apply(Command::SetMuted(true)));
+    assert!(!path.apply(Command::Undo));
+    assert!(!path.apply(Command::Clear));
+    assert!(!path.apply(Command::SetTransport(Transport::Recording)));
+}
+
+#[test]
 fn the_ramp_is_in_the_frames_the_device_granted() {
     let (sender, receiver) = motif::audio::command_channel(16);
     let mut sender = sender;
-    let mut path = InputMonitor::new(receiver);
+    let mut path = Commanded::new(receiver, InputMonitor::new());
     path.prepare(StreamConfig {
         sample_rate: SAMPLE_RATE * 2,
         ..config()

@@ -16,9 +16,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use motif::audio::{
-    AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
-    DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend, Passthrough,
-    StreamConfig, StreamRequest, StreamState, Xruns,
+    AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, Command,
+    DeviceError, DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend,
+    Passthrough, StreamConfig, StreamRequest, StreamState, Xruns,
 };
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
@@ -164,6 +164,10 @@ impl AudioPath for Heard {
     }
 
     fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
+
+    fn apply(&mut self, _command: Command) -> bool {
+        false
+    }
 }
 
 /// What a stream was asked to do, readable after the stream is gone.

@@ -1,17 +1,18 @@
 //! The owner of the loop, on the thread that moves it along.
 //!
-//! [`LoopEngine`] holds the buffer, the transport, the commands and the
-//! playhead together: a block of input goes in, a block of output comes out,
-//! and what the player asked for in between arrived over the command queue. It
-//! belongs on the playback side, downstream of the ring the capture callback
-//! writes into, which gives the buffer one owner on one thread and keeps the
-//! playhead on the thread that moves it.
+//! [`LoopEngine`] holds the buffer, the transport and the playhead together: a
+//! block of input goes in, a block of output comes out, and what the player
+//! asked for in between arrived as commands a
+//! [`Commanded`](crate::audio::Commanded) dealt it. It belongs on the playback
+//! side, downstream of the ring the capture callback writes into, which gives
+//! the buffer one owner on one thread and keeps the playhead on the thread that
+//! moves it.
 //!
 //! Invariant 2 shapes the block: the loop and the scratch the input is gained
 //! into are both allocated in setup, and a block is a fixed number of passes
 //! over buffers that are already there.
 
-use crate::audio::{AudioPath, Command, CommandReceiver, StreamConfig};
+use crate::audio::{AudioPath, Command, StreamConfig};
 use crate::device::AudioProfile;
 
 use super::{LoopBuffer, LoopPosition, PositionWriter, Transport};
@@ -30,13 +31,14 @@ const UNITY_GAIN: f32 = 1.0;
 /// playhead, and one the stack has no room for takes nothing.
 ///
 /// ```
-/// use motif::audio::{AudioPath, Command, SendError, command_channel};
+/// use motif::audio::{AudioPath, Command, Commanded, SendError, command_channel};
 /// use motif::device::DeviceProfile;
 /// use motif::looper::{LoopEngine, Transport, position_meter};
 ///
 /// let (mut player, commands) = command_channel(4);
 /// let (writer, position) = position_meter();
-/// let mut engine = LoopEngine::new(DeviceProfile::TARGET.audio, commands, writer);
+/// let engine = LoopEngine::new(DeviceProfile::TARGET.audio, writer);
+/// let mut engine = Commanded::new(commands, engine);
 ///
 /// player.send(Command::SetTransport(Transport::Recording))?;
 /// engine.render(&[0.25, 0.5], &mut [0.0; 2]);
@@ -51,7 +53,6 @@ const UNITY_GAIN: f32 = 1.0;
 /// ```
 pub struct LoopEngine {
     buffer: LoopBuffer,
-    commands: CommandReceiver,
     position: PositionWriter,
     gained: Box<[f32]>,
     transport: Transport,
@@ -63,7 +64,7 @@ pub struct LoopEngine {
 
 impl LoopEngine {
     /// An engine over the longest loop `profile` allows, idle and unmuted at
-    /// unity gain, ordered by `commands` and publishing to `position`.
+    /// unity gain, publishing to `position`.
     ///
     /// Its buffers are allocated here and never again, so this belongs in
     /// setup, before the stream starts.
@@ -73,13 +74,12 @@ impl LoopEngine {
     /// Panics on a profile with no loop to record or no block to record it in,
     /// either being a mistake in setup rather than a condition worth reporting
     /// from the real-time thread.
-    pub fn new(profile: AudioProfile, commands: CommandReceiver, position: PositionWriter) -> Self {
+    pub fn new(profile: AudioProfile, position: PositionWriter) -> Self {
         let block = profile.block_size as usize;
         assert!(block > 0, "an engine renders nothing block by block");
 
         Self {
             buffer: LoopBuffer::for_profile(profile),
-            commands,
             position,
             gained: vec![0.0; block].into_boxed_slice(),
             transport: Transport::default(),
@@ -87,32 +87,6 @@ impl LoopEngine {
             layer_open: true,
             gain: UNITY_GAIN,
             muted: false,
-        }
-    }
-
-    fn apply_arrivals(&mut self) {
-        for _ in 0..self.commands.pending() {
-            if let Some(command) = self.commands.recv() {
-                self.apply(command);
-            }
-        }
-    }
-
-    fn apply(&mut self, command: Command) {
-        match command {
-            Command::SetTransport(transport) => self.move_to(transport),
-            Command::SetMuted(muted) => self.muted = muted,
-            Command::SetGain(gain) => self.gain = gain,
-            Command::Undo => {
-                if self.buffer.undo() {
-                    self.layer_open = false;
-                }
-            }
-            Command::Clear => {
-                self.buffer.clear();
-                self.layer_open = true;
-                self.playhead = 0;
-            }
         }
     }
 
@@ -172,14 +146,12 @@ impl AudioPath for LoopEngine {
     /// the engine was built with, and a longer block is worked in chunks.
     fn prepare(&mut self, _config: StreamConfig) {}
 
-    /// Applies what the player asked for, plays the loop under their input, and
-    /// publishes the playhead the block ended on.
+    /// Plays the loop under the player's input, and publishes the playhead the
+    /// block ended on.
     ///
     /// Two lengths become the shorter of them, and a block longer than the
     /// scratch is worked in chunks: neither is a panic on the audio thread.
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
-        self.apply_arrivals();
-
         let frames = captured.len().min(playing.len());
         let chunk = self.gained.len();
         let chunks = captured[..frames]
@@ -190,5 +162,29 @@ impl AudioPath for LoopEngine {
         }
 
         self.publish();
+    }
+
+    /// Answers every command there is: the loop is what the transport, undo and
+    /// clear are for, and the input reaches the loop through the gain and the
+    /// mute, so a composition offering it a command first leaves nothing for
+    /// anything behind it.
+    fn apply(&mut self, command: Command) -> bool {
+        match command {
+            Command::SetTransport(transport) => self.move_to(transport),
+            Command::SetMuted(muted) => self.muted = muted,
+            Command::SetGain(gain) => self.gain = gain,
+            Command::Undo => {
+                if self.buffer.undo() {
+                    self.layer_open = false;
+                }
+            }
+            Command::Clear => {
+                self.buffer.clear();
+                self.layer_open = true;
+                self.playhead = 0;
+            }
+        }
+
+        true
     }
 }
