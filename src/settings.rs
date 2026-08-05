@@ -18,7 +18,7 @@ use crate::audio::{
 };
 use crate::closed_set::closed_set;
 use crate::device::{Button, Encoder};
-use crate::ui::{Cell, ControlEvent, Frame, Legend, Page, Turn};
+use crate::ui::{Cell, ControlEvent, Legend, Page, Region, Turn};
 
 closed_set! {
     /// One thing about the audio path a player chooses.
@@ -389,17 +389,17 @@ where
             .answering(Encoder::Main)
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, mut region: Region<'_>) {
         for (row, setting) in AudioSetting::ALL.into_iter().enumerate() {
             if row == self.row {
-                frame.set(MARKER_COLUMN, row, Cell::new(MARKER));
+                region.set(MARKER_COLUMN, row, Cell::new(MARKER));
             }
-            frame.write(LABEL_COLUMN, row, label(setting));
-            frame.write(VALUE_COLUMN, row, &self.value(setting));
+            region.write(LABEL_COLUMN, row, label(setting));
+            region.write(VALUE_COLUMN, row, &self.value(setting));
         }
 
         if let Some(error) = self.refused {
-            frame.write(LABEL_COLUMN, REFUSED_ROW, &format!("{REFUSED}{error}"));
+            region.write(LABEL_COLUMN, REFUSED_ROW, &format!("{REFUSED}{error}"));
         }
     }
 }
