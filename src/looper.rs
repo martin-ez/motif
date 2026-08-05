@@ -1,7 +1,7 @@
 //! What the player is doing with the loop, and where the loop is kept.
 //!
-//! [`Transport`] is the state a player drives with record, play and stop;
-//! [`LoopBuffer`] holds the samples those states govern.
+//! [`Transport`] is the state a player drives, [`LoopBuffer`] holds the samples
+//! it governs, and [`LoopEngine`] owns the two of them on the audio thread.
 //!
 //! [`LoopBuffer`] is sized from the device profile and allocated before the
 //! stream starts, so the longest loop is a constraint the machine states rather
@@ -16,10 +16,12 @@
 
 use crate::device::AudioProfile;
 
+mod engine;
 mod page;
 mod position;
 mod transport;
 
+pub use engine::LoopEngine;
 pub use page::LooperPage;
 pub use position::{LoopPosition, PositionReader, PositionWriter, position_meter};
 pub use transport::Transport;
