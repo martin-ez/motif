@@ -214,9 +214,10 @@ fn face(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, h
 ///
 /// A page answers a handful of controls and ignores the rest, and until it says
 /// which, the only way to find out is to press one and watch. Declaring it is
-/// what the screen is drawn from, so a control a page does not answer is drawn
-/// light rather than left out — the panel then reads the same everywhere, and a
-/// key that does nothing here is a fact on the screen rather than a silence.
+/// what the [`picture`](Self::picture) is drawn from, so a control a page does
+/// not answer is drawn light rather than left out — the panel then reads the
+/// same everywhere, and a key that does nothing here is a fact the player can
+/// see rather than a silence.
 ///
 /// ```
 /// use motif::device::{Button, Encoder};

@@ -20,7 +20,7 @@
 //! The panel is twelve buttons and one encoder: four to navigate, four scenes,
 //! three for the transport, shift, and the encoder beside them. That shape was
 //! settled the way the screen was, by drawing it — a
-//! [`Legend`](crate::ui::Legend) lays the panel out on screen, and a control
+//! [`Legend`](crate::ui::Legend) makes a picture of the panel, and a control
 //! with nowhere to sit in that picture is a control the panel does not have.
 //!
 //! Everything is available in a constant expression, so buffers can be sized by
