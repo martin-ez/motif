@@ -310,15 +310,24 @@ pub struct WaveformReader {
 }
 
 impl WaveformReader {
+    /// How many times a read is taken again before it gives up.
+    ///
+    /// A publish is a fixed number of stores, so a reader that has looked this
+    /// often and found a publish in progress every time is not losing a race:
+    /// it is watching a thread that stopped inside one.
+    pub const READS_BEFORE_GIVING_UP: usize = 16;
+
     /// The most recently published summary, or [`LoopWaveform::EMPTY`] where
     /// none has been published yet.
     ///
     /// Reading takes nothing, so a screen running faster than the callback
     /// repeats a summary rather than finding nothing there. A read caught
-    /// against a publish is taken again, which puts the waiting on the thread
-    /// that draws and never on the one that may not wait.
+    /// against a publish is taken again, up to
+    /// [`READS_BEFORE_GIVING_UP`](Self::READS_BEFORE_GIVING_UP) times; one that
+    /// never gets a clean look answers the empty summary rather than spinning,
+    /// because the thread it is on has a frame to fill.
     pub fn read(&self) -> LoopWaveform {
-        loop {
+        for _ in 0..Self::READS_BEFORE_GIVING_UP {
             let before = self.published.sequence.load(Ordering::Acquire);
             if !before.is_multiple_of(2) {
                 continue;
@@ -339,5 +348,7 @@ impl WaveformReader {
                 return waveform;
             }
         }
+
+        LoopWaveform::EMPTY
     }
 }

@@ -189,9 +189,11 @@ fn a_summary_read_against_a_publish_is_never_halves_of_two() {
 
     while !published.load(Ordering::Acquire) {
         let read = reader.read();
-        let first = read.buckets()[0];
+        let Some(first) = read.buckets().first() else {
+            continue;
+        };
         assert!(
-            read.buckets().iter().all(|bucket| *bucket == first),
+            read.buckets().iter().all(|bucket| bucket == first),
             "a summary arrived as halves of two loops"
         );
     }
@@ -241,6 +243,13 @@ fn a_region_wider_than_the_buckets_interpolates() {
 #[test]
 fn interpolation_carries_the_trough_as_well_as_the_peak() {
     assert_eq!(summarising(&[-1.0, 0.0]).drawn(3, 1), ["▄▂ "]);
+}
+
+/// Interpolating down from a loud bucket rather than up from a silent one,
+/// where the bucket the column starts at is the one carrying the signal.
+#[test]
+fn interpolation_falls_towards_a_quieter_bucket() {
+    assert_eq!(summarising(&[1.0, 0.0]).drawn(3, 1), ["▄▂ "]);
 }
 
 /// Three buckets over five columns, so a column lands between the second and
