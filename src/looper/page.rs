@@ -17,7 +17,8 @@
 use crate::audio::{Command, CommandSender, Commanded, SampleClockReader, command_channel};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
 use crate::looper::{
-    LoopEngine, PositionReader, Transport, WaveformReader, position_meter, waveform_meter,
+    LoopBuffer, LoopEngine, PositionReader, Transport, WaveformReader, position_meter,
+    waveform_meter,
 };
 use crate::seq::{BeatGrid, TapTempo};
 use crate::ui::{ControlEvent, Legend, Page, Region, Turn};
@@ -31,6 +32,7 @@ const BAR_ROW: usize = 3;
 const WAVEFORM_ROW: usize = 4;
 const WAVEFORM_ROWS: usize = 4;
 const GAIN_ROW: usize = WAVEFORM_ROW + WAVEFORM_ROWS;
+const STACK_ROW: usize = GAIN_ROW + 1;
 const MUTE_COLUMN: usize = 12;
 const ARMED: &str = "ARMED";
 const MUTED: &str = "MUTE";
@@ -364,5 +366,11 @@ impl Page for LooperPage {
         if self.muted {
             region.write(MUTE_COLUMN, GAIN_ROW, MUTED);
         }
+
+        region.write(
+            0,
+            STACK_ROW,
+            &format!("LAYERS {}/{}", position.depth(), LoopBuffer::LAYERS),
+        );
     }
 }

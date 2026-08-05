@@ -420,6 +420,81 @@ fn a_take_publishes_the_end_of_what_it_has_recorded() {
 }
 
 #[test]
+fn an_engine_with_nothing_recorded_publishes_no_layers() {
+    let (mut engine, _sender, position) = engine();
+
+    heard(&mut engine, 2);
+
+    assert_eq!(position.read().depth(), 0);
+}
+
+#[test]
+fn a_take_publishes_the_one_layer_it_is() {
+    let (mut engine, mut sender, position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+
+    assert_eq!(position.read().depth(), 1);
+}
+
+#[test]
+fn an_overdub_publishes_the_layer_it_put_over_the_take() {
+    let (mut engine, mut sender, position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.125]);
+
+    assert_eq!(position.read().depth(), 2);
+}
+
+#[test]
+fn a_full_stack_publishes_every_layer_it_holds() {
+    let (mut engine, mut sender, position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    for _ in 1..LoopBuffer::LAYERS {
+        press(&mut sender, Command::SetTransport(Transport::Playing));
+        heard(&mut engine, 1);
+        press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+        heard(&mut engine, 1);
+    }
+
+    assert_eq!(position.read().depth(), LoopBuffer::LAYERS);
+}
+
+#[test]
+fn undo_publishes_the_stack_the_layer_left_behind() {
+    let (mut engine, mut sender, position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.125]);
+    press(&mut sender, Command::Undo);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 2);
+
+    assert_eq!(position.read().depth(), 1);
+}
+
+#[test]
+fn clear_publishes_a_loop_with_no_layers_left() {
+    let (mut engine, mut sender, position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::Clear);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 2);
+
+    assert_eq!(position.read().depth(), 0);
+}
+
+#[test]
 fn playing_after_a_stop_restarts_the_loop() {
     let (mut engine, mut sender, _position) = engine();
 
