@@ -198,16 +198,13 @@ impl LoopBuffer {
     /// Play the loop into the whole of `block`, from frame `from`, and report
     /// the frame it left the playhead on.
     ///
-    /// A boundary falling inside `block` is crossed there, so a loop whose
-    /// length is not a multiple of the block size repeats without drift or a
-    /// seam, and one shorter than `block` is heard as often as it fits.
+    /// A boundary inside `block` is crossed there, so a loop whose length is not
+    /// a multiple of the block size repeats without drift or a seam, and one
+    /// shorter than `block` is heard as often as it fits.
     ///
-    /// Layers are summed into what `block` already holds, as
-    /// [`mix_into`](Self::mix_into) does. An empty loop is left alone.
-    ///
-    /// A `from` at or past the end starts at the beginning of the loop: a
-    /// playhead kept across a change of length would otherwise hold a phase of
-    /// its own for the life of the new one.
+    /// Layers are summed into what `block` already holds; an empty loop is left
+    /// alone. A `from` at or past the end restarts the loop, so a playhead kept
+    /// across a change of length cannot hold a phase of its own.
     ///
     /// ```
     /// use motif::device::DeviceProfile;

@@ -2,20 +2,17 @@
 //!
 //! Its capacity comes from the device profile and is decided before the stream
 //! starts, so the facts worth stating are that the buffer is exactly as long as
-//! the profile says, that frames come back as they went in, that a recording
-//! longer than the buffer is reported short rather than growing the buffer or
-//! panicking, and that recording allocates nothing.
+//! the profile says, that frames come back as they went in, and that a recording
+//! longer than the buffer is reported short rather than growing it.
 //!
 //! Layers are the other half, and a loop is heard as their sum, so the tests
 //! state what is heard: an overdub lies over the take without lengthening it,
 //! undo leaves the rest playing, the stack stops at a stated depth, and clear
-//! empties the loop. All of it runs on the thread that may not allocate, so the
-//! allocations are counted as well.
+//! empties the loop.
 //!
-//! Playing is where the boundary matters: a loop whose length is not a multiple
-//! of the block size crosses its own end part-way through a block. The tests
-//! state where the playhead lands, and that many blocks of it still tile the
-//! loop exactly — no drift, and no gap at the seam.
+//! Playing is where the boundary matters: the tests state where the playhead
+//! lands, and that blocks of it tile the loop exactly. All of it runs on the
+//! thread that may not allocate, so the allocations are counted too.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
