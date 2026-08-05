@@ -68,6 +68,23 @@ fn tapped_steadily() -> LooperPage {
     tapped(&[HALF_SECOND; TapTempo::TAPS_TO_A_TEMPO - 1])
 }
 
+fn turned(turn: Turn) -> ControlEvent {
+    ControlEvent::Turned {
+        encoder: Encoder::Main,
+        turn,
+        shifted: false,
+    }
+}
+
+fn turned_repeatedly(times: usize, turn: Turn) -> LooperPage {
+    let mut page = page();
+    for _ in 0..times {
+        page.control(turned(turn));
+    }
+
+    page
+}
+
 fn driven_by(buttons: impl IntoIterator<Item = Button>) -> LooperPage {
     let mut page = page();
     for button in buttons {
@@ -346,5 +363,139 @@ fn the_page_declares_nothing_for_a_control_it_leaves_alone() {
 
     assert!(!legend.answers(Button::Up));
     assert!(!legend.answers(Button::FirstScene));
-    assert!(!legend.answers(Encoder::Main));
+}
+
+#[test]
+fn the_page_declares_the_encoder_the_gain_moves_by() {
+    assert!(page().legend().answers(Encoder::Main));
+}
+
+#[test]
+fn a_new_page_is_at_unity_and_unmuted() {
+    let page = page();
+
+    assert_eq!(page.gain(), 1.0);
+    assert_eq!(page.decibels(), 0.0);
+    assert!(!page.muted());
+}
+
+#[test]
+fn turning_the_encoder_clockwise_raises_the_gain() {
+    let page = turned_repeatedly(3, Turn::Clockwise);
+
+    assert_eq!(page.decibels(), 3.0);
+    assert!(page.gain() > 1.0);
+}
+
+#[test]
+fn turning_the_encoder_anticlockwise_lowers_the_gain() {
+    let page = turned_repeatedly(6, Turn::Anticlockwise);
+
+    assert_eq!(page.decibels(), -6.0);
+    assert!(page.gain() < 1.0);
+}
+
+#[test]
+fn six_decibels_down_is_about_half_the_level() {
+    let page = turned_repeatedly(6, Turn::Anticlockwise);
+
+    assert!((page.gain() - 0.5).abs() < 0.01);
+}
+
+#[test]
+fn the_gain_stops_at_the_top_of_its_range() {
+    let mut page = turned_repeatedly(200, Turn::Clockwise);
+    let ceiling = page.decibels();
+
+    page.control(turned(Turn::Clockwise));
+
+    assert_eq!(page.decibels(), ceiling);
+    assert!(ceiling > 0.0);
+}
+
+#[test]
+fn the_gain_stops_at_the_bottom_of_its_range() {
+    let mut page = turned_repeatedly(200, Turn::Anticlockwise);
+    let floor = page.decibels();
+
+    page.control(turned(Turn::Anticlockwise));
+
+    assert_eq!(page.decibels(), floor);
+    assert!(page.gain() < 0.01);
+}
+
+#[test]
+fn shift_and_record_mutes_the_input() {
+    let mut page = page();
+
+    page.control(shifted(Button::Record));
+
+    assert!(page.muted());
+}
+
+#[test]
+fn shift_and_record_again_unmutes_it() {
+    let mut page = page();
+
+    page.control(shifted(Button::Record));
+    page.control(shifted(Button::Record));
+
+    assert!(!page.muted());
+}
+
+#[test]
+fn muting_leaves_the_transport_where_it_was() {
+    let mut page = page();
+
+    page.control(shifted(Button::Record));
+
+    assert_eq!(page.transport(), Transport::Idle);
+}
+
+#[test]
+fn record_on_its_own_still_drives_the_transport() {
+    let mut page = page();
+
+    page.control(pressed(Button::Record));
+
+    assert_eq!(page.transport(), Transport::Recording);
+    assert!(!page.muted());
+}
+
+#[test]
+fn muting_keeps_the_gain_the_player_set() {
+    let mut page = turned_repeatedly(3, Turn::Anticlockwise);
+
+    page.control(shifted(Button::Record));
+
+    assert_eq!(page.decibels(), -3.0);
+}
+
+#[test]
+fn the_gain_is_drawn_where_the_player_can_see_it() {
+    let mut page = turned_repeatedly(3, Turn::Anticlockwise);
+
+    assert!(screen_of(&mut page).contains("-3.0 dB"));
+}
+
+#[test]
+fn a_muted_input_says_so_on_screen() {
+    let mut page = page();
+    page.control(shifted(Button::Record));
+
+    assert!(screen_of(&mut page).contains("MUTE"));
+}
+
+#[test]
+fn an_unmuted_input_says_nothing_about_muting() {
+    assert!(!screen_of(&mut page()).contains("MUTE"));
+}
+
+#[test]
+fn turning_the_encoder_leaves_the_transport_alone() {
+    let mut page = driven_by([Button::Record]);
+
+    page.control(turned(Turn::Clockwise));
+
+    assert_eq!(page.transport(), Transport::Recording);
 }

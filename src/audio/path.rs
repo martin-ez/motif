@@ -7,9 +7,11 @@
 //! metronome click, a monitored input — reaches the audio callback at all.
 //!
 //! [`Passthrough`] is what every stream once did and now merely may: play the
-//! frames it captured.
+//! frames it captured. [`InputMonitor`] is the same thing with a level on it,
+//! and the first path that takes anything from the player — which it does over
+//! a command queue, that being the only way onto the audio thread.
 
-use super::StreamConfig;
+use super::{Command, CommandReceiver, Gain, StreamConfig};
 
 /// What a stream plays, block by block.
 ///
@@ -70,5 +72,63 @@ impl AudioPath for Passthrough {
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
         let frames = playing.len().min(captured.len());
         playing[..frames].copy_from_slice(&captured[..frames]);
+    }
+}
+
+/// The path that plays the input at a level the player controls.
+///
+/// [`Passthrough`] with a hand on it: the same frames, scaled by a [`Gain`] the
+/// player moves and mutes from the panel. It takes those changes off a command
+/// queue, which is how anything reaches the audio thread.
+///
+/// It drains the queue it is given, so a composition hands it the receiving end
+/// of a queue it is the only reader of. Commands it does not answer are taken
+/// and discarded, not left for someone else.
+pub struct InputMonitor {
+    commands: CommandReceiver,
+    gain: Gain,
+}
+
+impl InputMonitor {
+    /// A monitor at unity, taking its changes from `commands`.
+    pub const fn new(commands: CommandReceiver) -> Self {
+        Self {
+            commands,
+            gain: Gain::unity(),
+        }
+    }
+
+    /// The gain the input is being played at.
+    pub const fn gain(&self) -> &Gain {
+        &self.gain
+    }
+
+    fn take_the_commands_that_arrived(&mut self) {
+        for command in self.commands.drain() {
+            match command {
+                Command::SetGain(gain) => self.gain.set_target(gain),
+                Command::SetMuted(muted) => self.gain.set_muted(muted),
+                Command::SetTransport(_) | Command::Undo | Command::Clear => {}
+            }
+        }
+    }
+}
+
+impl AudioPath for InputMonitor {
+    /// Puts the ramp in the frames the device granted, so a change takes the
+    /// same time whatever rate it was opened at.
+    fn prepare(&mut self, config: StreamConfig) {
+        self.gain.prepare(config.sample_rate);
+    }
+
+    /// Takes every command that was waiting, then plays the captured frames at
+    /// the gain they left behind. Bounded by the shorter of the two slices, as
+    /// [`Passthrough`] is, and allocating nothing.
+    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
+        self.take_the_commands_that_arrived();
+
+        let frames = playing.len().min(captured.len());
+        playing[..frames].copy_from_slice(&captured[..frames]);
+        self.gain.apply(&mut playing[..frames]);
     }
 }

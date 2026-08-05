@@ -6,22 +6,33 @@
 //! would drift from the thread actually moving it, and a callback that kept its
 //! own transport would drift from the buttons.
 //!
+//! The input gain and its mute are held here for the first of those reasons.
+//! The page is where they are moved, and a composition forwards them to the
+//! engine as commands; nothing is sent from here.
+//!
 //! Nothing here names a key, a terminal or an escape sequence. The page is
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
 //! hardware panel once there is one.
 
 use crate::audio::SampleClockReader;
-use crate::device::{Button, DeviceProfile};
+use crate::device::{Button, DeviceProfile, Encoder};
 use crate::looper::{PositionReader, Transport};
 use crate::seq::{BeatGrid, TapTempo};
-use crate::ui::{ControlEvent, Legend, Page, Region};
+use crate::ui::{ControlEvent, Legend, Page, Region, Turn};
 
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
 const TEMPO_ROW: usize = 1;
 const READOUT_ROW: usize = 2;
 const BAR_ROW: usize = 3;
+const GAIN_ROW: usize = 4;
+const MUTE_COLUMN: usize = 12;
 const ARMED: &str = "ARMED";
+const MUTED: &str = "MUTE";
+const DECIBELS_PER_DETENT: f32 = 1.0;
+const DECIBELS_PER_DECADE: f32 = 20.0;
+const FLOOR_DECIBELS: f32 = -60.0;
+const CEILING_DECIBELS: f32 = 12.0;
 const FILLED: char = '#';
 const UNFILLED: char = '-';
 const TENTHS_PER_SECOND: u64 = 10;
@@ -50,6 +61,10 @@ fn clock(frames: u32) -> String {
     )
 }
 
+fn amplitude(decibels: f32) -> f32 {
+    10.0_f32.powf(decibels / DECIBELS_PER_DECADE)
+}
+
 fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
     let width = columns.saturating_sub(2);
     let filled = match recorded {
@@ -71,8 +86,9 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 /// Record opens the first take, records again to layer onto it, and drops back
 /// out of the layer; play closes whatever is open and runs the loop; stop halts
 /// it keeping what was recorded. Held with shift, play taps a pulse instead of
-/// starting one. Every other control is left alone, so the page can sit under a
-/// shell that uses them for something else.
+/// starting one and record mutes the input instead of arming it. The encoder
+/// moves the input gain a decibel a detent. Every other control is left alone,
+/// so the page can sit under a shell that uses them for something else.
 ///
 /// ```
 /// use motif::audio::sample_clock;
@@ -92,6 +108,8 @@ pub struct LooperPage {
     position: PositionReader,
     elapsed: SampleClockReader,
     taps: TapTempo,
+    decibels: f32,
+    muted: bool,
 }
 
 impl LooperPage {
@@ -106,6 +124,8 @@ impl LooperPage {
             taps: TapTempo::new(elapsed.sample_rate()),
             position,
             elapsed,
+            decibels: 0.0,
+            muted: false,
         }
     }
 
@@ -127,6 +147,39 @@ impl LooperPage {
     pub const fn grid(&self) -> &BeatGrid {
         self.taps.grid()
     }
+
+    /// Where the input gain sits, in decibels, with zero at unity.
+    ///
+    /// Decibels because that is the scale the control moves in and the screen
+    /// shows: a detent of the encoder is a decibel wherever the gain already
+    /// is, where a linear step would be a leap at the bottom of the range and
+    /// imperceptible at the top.
+    pub const fn decibels(&self) -> f32 {
+        self.decibels
+    }
+
+    /// The input gain as a linear multiplier, with `1.0` at unity.
+    ///
+    /// Public for the reason [`transport`](Self::transport) is: a composition
+    /// holding this page and a command queue forwards it as
+    /// [`Command::SetGain`](crate::audio::Command::SetGain), which carries a
+    /// multiplier rather than a scale reading.
+    pub fn gain(&self) -> f32 {
+        amplitude(self.decibels)
+    }
+
+    /// Whether the player has muted the input.
+    ///
+    /// Forwarded as [`Command::SetMuted`](crate::audio::Command::SetMuted), and
+    /// kept apart from the gain so that unmuting returns to the level that was
+    /// set rather than to unity.
+    pub const fn muted(&self) -> bool {
+        self.muted
+    }
+
+    fn nudge_the_gain(&mut self, decibels: f32) {
+        self.decibels = (self.decibels + decibels).clamp(FLOOR_DECIBELS, CEILING_DECIBELS);
+    }
 }
 
 impl Page for LooperPage {
@@ -137,6 +190,28 @@ impl Page for LooperPage {
         } = event
         {
             let _joined = self.taps.tap(self.elapsed.read());
+            return;
+        }
+
+        if let ControlEvent::Pressed {
+            button: Button::Record,
+            shifted: true,
+        } = event
+        {
+            self.muted = !self.muted;
+            return;
+        }
+
+        if let ControlEvent::Turned {
+            encoder: Encoder::Main,
+            turn,
+            ..
+        } = event
+        {
+            self.nudge_the_gain(match turn {
+                Turn::Clockwise => DECIBELS_PER_DETENT,
+                Turn::Anticlockwise => -DECIBELS_PER_DETENT,
+            });
             return;
         }
 
@@ -163,6 +238,7 @@ impl Page for LooperPage {
             .answering(Button::Play)
             .answering(Button::Stop)
             .answering(Button::Record)
+            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, mut region: Region<'_>) {
@@ -187,5 +263,10 @@ impl Page for LooperPage {
             BAR_ROW,
             &bar(position.playhead(), position.recorded(), region.columns()),
         );
+
+        region.write(0, GAIN_ROW, &format!("IN {:>5.1} dB", self.decibels));
+        if self.muted {
+            region.write(MUTE_COLUMN, GAIN_ROW, MUTED);
+        }
     }
 }
