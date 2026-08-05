@@ -194,6 +194,54 @@ fn a_stand_in_callback_hands_the_path_a_frame_for_a_frame() {
 }
 
 #[test]
+fn a_path_that_is_there_plays_what_it_would_have_played() {
+    let mut path = Some(Tone(0.5));
+    let mut played = [0.0; 3];
+
+    path.render(&[1.0; 3], &mut played);
+
+    assert_eq!(played, [0.5; 3]);
+}
+
+#[test]
+fn a_path_that_was_taken_plays_nothing() {
+    let mut taken: Option<Tone> = None;
+    let mut played = [0.0; 3];
+
+    taken.render(&[1.0; 3], &mut played);
+
+    assert_eq!(played, [0.0; 3]);
+}
+
+#[test]
+fn a_path_that_is_there_is_prepared_with_the_configuration() {
+    let heard = Heard::default();
+    let mut path = Some(heard.clone());
+
+    path.prepare(granted());
+
+    assert_eq!(heard.config(), Some(granted()));
+}
+
+#[test]
+fn a_path_that_was_taken_prepares_nothing() {
+    let mut taken: Option<Heard> = None;
+
+    taken.prepare(granted());
+
+    assert!(taken.is_none());
+}
+
+#[test]
+fn a_path_handed_over_once_is_gone_the_second_time() {
+    let mut engine = Some(Tone(0.5));
+    let mut build = move || engine.take();
+
+    assert!(build().is_some());
+    assert!(build().is_none());
+}
+
+#[test]
 fn a_stand_in_callback_silences_what_the_path_was_not_given() {
     let mut stream = NullBackend::rounding(granted())
         .open(&selection(), request(), FrameForFrame)

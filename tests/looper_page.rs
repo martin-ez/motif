@@ -5,7 +5,9 @@
 //! controls and read back off the frame it drew, which is the whole of what an
 //! application is allowed to know about either end.
 
-use motif::audio::{SampleClockWriter, sample_clock};
+use motif::audio::{
+    Command, CommandReceiver, CommandSender, SampleClockWriter, command_channel, sample_clock,
+};
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{LoopPosition, LooperPage, Transport, position_meter};
 use motif::seq::TapTempo;
@@ -16,6 +18,18 @@ const SECOND: u32 = DeviceProfile::TARGET.audio.sample_rate;
 
 /// Half a second of frames, which is 120 BPM.
 const HALF_SECOND: usize = SECOND as usize / 2;
+
+/// Room for more commands than any test sends, so a refused send is a fact
+/// about the page rather than about the queue.
+const ROOM: usize = 8;
+
+fn sending() -> CommandSender {
+    command_channel(ROOM).0
+}
+
+fn ordered(orders: &mut CommandReceiver) -> Vec<Command> {
+    orders.drain().collect()
+}
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -32,20 +46,32 @@ fn shifted(button: Button) -> ControlEvent {
 }
 
 fn page() -> LooperPage {
-    LooperPage::new(position_meter().1, sample_clock(SECOND).1)
+    LooperPage::new(position_meter().1, sample_clock(SECOND).1, sending())
+}
+
+fn page_ordering() -> (LooperPage, CommandReceiver) {
+    let (commands, orders) = command_channel(ROOM);
+
+    (
+        LooperPage::new(position_meter().1, sample_clock(SECOND).1, commands),
+        orders,
+    )
 }
 
 fn page_showing(position: LoopPosition) -> LooperPage {
     let (mut writer, reader) = position_meter();
     writer.publish(position);
 
-    LooperPage::new(reader, sample_clock(SECOND).1)
+    LooperPage::new(reader, sample_clock(SECOND).1, sending())
 }
 
 fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
     let (frames, elapsed) = sample_clock(sample_rate);
 
-    (LooperPage::new(position_meter().1, elapsed), frames)
+    (
+        LooperPage::new(position_meter().1, elapsed, sending()),
+        frames,
+    )
 }
 
 fn page_on_a_clock() -> (LooperPage, SampleClockWriter) {
@@ -192,6 +218,95 @@ fn an_encoder_leaves_the_transport_alone() {
     });
 
     assert_eq!(page.transport(), Transport::Recording);
+}
+
+#[test]
+fn a_press_reaches_the_engine_as_the_transport_it_asked_for() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(pressed(Button::Record));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+}
+
+#[test]
+fn every_press_that_moves_the_transport_is_ordered() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(pressed(Button::Record));
+    page.control(pressed(Button::Play));
+    page.control(pressed(Button::Stop));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [
+            Command::SetTransport(Transport::Recording),
+            Command::SetTransport(Transport::Playing),
+            Command::SetTransport(Transport::Stopped),
+        ]
+    );
+}
+
+#[test]
+fn a_page_nobody_has_pressed_orders_nothing() {
+    let (mut page, mut orders) = page_ordering();
+
+    drawn(&mut page);
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_transport_the_engine_already_has_is_not_ordered_again() {
+    let (mut page, mut orders) = page_ordering();
+    page.control(pressed(Button::Record));
+    ordered(&mut orders);
+
+    drawn(&mut page);
+    drawn(&mut page);
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_press_the_queue_had_no_room_for_is_ordered_on_the_next_frame() {
+    let (commands, mut orders) = command_channel(1);
+    let mut page = LooperPage::new(position_meter().1, sample_clock(SECOND).1, commands);
+
+    page.control(pressed(Button::Record));
+    page.control(pressed(Button::Play));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+    drawn(&mut page);
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Playing)]
+    );
+}
+
+#[test]
+fn a_button_the_transport_ignores_orders_nothing() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(pressed(Button::Up));
+    page.control(pressed(Button::FirstScene));
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_tap_orders_nothing() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(shifted(Button::Play));
+
+    assert_eq!(ordered(&mut orders), []);
 }
 
 #[test]

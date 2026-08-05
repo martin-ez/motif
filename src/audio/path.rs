@@ -42,6 +42,27 @@ pub trait AudioPath: Send + 'static {
     fn render(&mut self, captured: &[f32], playing: &mut [f32]);
 }
 
+/// A path a caller has one of, and silence once it has been handed over.
+///
+/// A [`DeviceLink`](super::DeviceLink) builds a path per stream it opens, which
+/// a path holding one end of something cannot answer twice: a loop engine holds
+/// the receiving end of the command queue and the publishing end of the
+/// playhead, and there is one of each. `move || path.take()` is how such a path
+/// reaches the first stream, and `None` is what a stream opened after it plays.
+impl<P: AudioPath> AudioPath for Option<P> {
+    fn prepare(&mut self, config: StreamConfig) {
+        if let Some(path) = self {
+            path.prepare(config);
+        }
+    }
+
+    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
+        if let Some(path) = self {
+            path.render(captured, playing);
+        }
+    }
+}
+
 /// The path that plays the frames it captured.
 ///
 /// What a stream did before anything could say otherwise, and what a caller
