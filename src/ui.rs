@@ -37,6 +37,8 @@ mod input;
 mod legend;
 mod list;
 mod mode;
+#[cfg(feature = "frame-pace")]
+mod pace;
 mod page;
 mod shell;
 mod terminal;
@@ -47,6 +49,8 @@ pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
 pub use legend::Legend;
 pub use list::ListPage;
 pub use mode::Mode;
+#[cfg(feature = "frame-pace")]
+pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
 pub use page::Page;
 pub use shell::Shell;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
