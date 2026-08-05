@@ -123,23 +123,16 @@ impl AudioBackend for CpalBackend {
             .collect()
     }
 
-    /// The two callbacks are joined by a [`passthrough`] path, so audio at the
-    /// input is audible at the output. Its slack is one block, which is the
-    /// least give that keeps a playback callback from reading a ring the
-    /// capture callback has not reached yet — the two are separate streams, and
-    /// nothing orders one against the other.
+    /// The two callbacks are joined by a [`passthrough`] path with one block of
+    /// slack, the least that keeps playback from outrunning capture.
     ///
-    /// The path has to be sized before either stream exists, because a stream
-    /// wants its callback at the moment it is built and only reports the block
-    /// size it was granted afterwards. It is sized from the request, so a
-    /// device that grants a larger block than it was asked for is refused here
-    /// rather than run against a path too small to feed it — which would be
-    /// audible on every callback for the life of the stream.
+    /// The path is sized from the request, not from what was granted: a stream
+    /// wants its callback as it is built and reports its block size only
+    /// afterwards, so a device granting a larger block is refused rather than
+    /// run against a path too small to feed it.
     ///
-    /// The capture callback also meters what the device handed it, before the
-    /// passthrough path folds the channels together. A meter is there to catch
-    /// clipping, and a channel at full scale disappears into the mean of a
-    /// frame it shares with a quiet one.
+    /// Metering happens before the path folds the channels together, so a
+    /// channel at full scale cannot hide in the mean of its frame.
     fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
         if request.block_size == 0 {
             return Err(DeviceError::UnsupportedConfig);

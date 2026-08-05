@@ -4,20 +4,15 @@
 //! [`LoopBuffer`] holds the samples those states govern.
 //!
 //! [`LoopBuffer`] is sized from the device profile and allocated before the
-//! stream starts, so the longest loop a player can capture is a constraint the
-//! machine states rather than an accident of how much memory happens to be
-//! free. On hardware it is the former either way, and a buffer that grew to
-//! meet a long take would have to allocate on the thread that may not. Layers
-//! are a fixed stack of [`LoopBuffer::LAYERS`] for the same reason.
-//!
-//! Layers are summed as the loop is read, not as it is recorded. A running mix
-//! would leave [`LoopBuffer::undo`] either subtracting a layer back out, which a
-//! float sum does not restore exactly, or re-summing the whole loop inside one
-//! block.
+//! stream starts, so the longest loop is a constraint the machine states rather
+//! than an accident of free memory — a buffer that grew to meet a long take
+//! would have to allocate on the thread that may not. Layers are a fixed stack
+//! of [`LoopBuffer::LAYERS`] for the same reason, and are summed as the loop is
+//! read rather than as it is recorded: a running mix would leave
+//! [`LoopBuffer::undo`] subtracting a layer a float sum cannot restore exactly.
 //!
 //! One sample per frame, as the ring across the audio boundary carries them: a
-//! channel layout belongs to a device, and nothing this side of the callback
-//! should have to know one.
+//! channel layout belongs to a device, not to this side of the callback.
 
 use crate::device::AudioProfile;
 
@@ -92,13 +87,10 @@ impl LoopBuffer {
     ///
     /// Frames land in the open layer and nowhere else: an empty buffer has the
     /// take open, [`overdub`](Self::overdub) opens each later layer, and
-    /// [`undo`](Self::undo) leaves none open, so an undone layer cannot be
-    /// appended to the take.
+    /// [`undo`](Self::undo) leaves none open.
     ///
     /// A result below the length of `captured` means the layer is full and the
-    /// rest were dropped — the take has reached the length the profile allows,
-    /// or an overdub the end of the loop it lies over. It never grows to fit
-    /// the rest, and never panics for being asked.
+    /// rest were dropped. It never grows to fit them, and never panics.
     pub fn record(&mut self, captured: &[f32]) -> usize {
         let Some(open) = self.open else {
             return 0;
@@ -151,14 +143,12 @@ impl LoopBuffer {
     /// one to take.
     ///
     /// The take is not undone: it is the loop rather than a layer over it, so
-    /// emptying a loop is [`clear`](Self::clear)'s alone.
+    /// emptying a loop is [`clear`](Self::clear)'s alone. No layer is left open
+    /// afterwards, so blocks still arriving from a player who has not let go of
+    /// the button are taken nowhere.
     ///
-    /// No layer is left open afterwards, so blocks still arriving from a player
-    /// who has not let go of the button are taken nowhere.
-    ///
-    /// An undone layer keeps its samples and loses its length. Nothing reads
-    /// past a layer's length, so undo is a couple of stores wherever it is
-    /// called from.
+    /// An undone layer keeps its samples and loses its length, so undo is a
+    /// couple of stores wherever it is called from.
     pub fn undo(&mut self) -> bool {
         if self.depth < 2 {
             return false;
@@ -208,16 +198,13 @@ impl LoopBuffer {
     /// Play the loop into the whole of `block`, from frame `from`, and report
     /// the frame it left the playhead on.
     ///
-    /// A boundary falling inside `block` is crossed there, so a loop whose
-    /// length is not a multiple of the block size repeats without drift or a
-    /// seam, and one shorter than `block` is heard as often as it fits.
+    /// A boundary inside `block` is crossed there, so a loop whose length is not
+    /// a multiple of the block size repeats without drift or a seam, and one
+    /// shorter than `block` is heard as often as it fits.
     ///
-    /// Layers are summed into what `block` already holds, as
-    /// [`mix_into`](Self::mix_into) does. An empty loop is left alone.
-    ///
-    /// A `from` at or past the end starts at the beginning of the loop: a
-    /// playhead kept across a change of length would otherwise hold a phase of
-    /// its own for the life of the new one.
+    /// Layers are summed into what `block` already holds; an empty loop is left
+    /// alone. A `from` at or past the end restarts the loop, so a playhead kept
+    /// across a change of length cannot hold a phase of its own.
     ///
     /// ```
     /// use motif::device::DeviceProfile;

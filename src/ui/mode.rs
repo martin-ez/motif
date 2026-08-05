@@ -5,15 +5,12 @@ use crate::closed_set::closed_set;
 closed_set! {
     /// A screen the instrument can be showing.
     ///
-    /// A closed set rather than a count, for the reason the panel's controls
-    /// are one: a mode the application does not have cannot be named, and a
-    /// `match` over the set stops compiling when a screen is added. A shell
-    /// showing one of several pages is checked by the compiler rather than by
-    /// whoever keeps an index in step with an array.
+    /// A closed set rather than a count, for the reason the panel's controls are
+    /// one: a mode the application does not have cannot be named, and a `match`
+    /// over the set stops compiling when a screen is added.
     ///
     /// Only screens that exist are here. A variant named for a page nobody has
-    /// built draws nothing, and the first thing done with it is put a row on a
-    /// menu that leads nowhere.
+    /// built draws nothing, and leads to a menu row that goes nowhere.
     enum Mode;
     /// Every mode, in the order the instrument holds them.
     ///

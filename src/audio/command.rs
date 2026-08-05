@@ -1,33 +1,17 @@
 //! Changing what the audio callback does, from the application thread.
 //!
-//! The receiving end of this queue lives on the real-time thread, which may not
-//! allocate, lock or wait, so a command crosses as a value written into a slot
-//! that is already there. A command is data rather than a closure deliberately:
-//! a closure that captures anything is an allocation on one thread and a vtable
-//! dispatch on the other, and the thread it dispatches on is the one that
-//! cannot afford either.
+//! The receiving end lives on the real-time thread, which may not allocate,
+//! lock or wait, so a command crosses as a value written into a slot that is
+//! already there — data rather than a closure, since a closure that captures is
+//! an allocation on one thread and a vtable dispatch on the other.
 //!
-//! Commands set a level rather than toggle one — [`Command::SetMuted`] carries
-//! the state to be in, not a request to flip. A toggle means something
-//! different depending on how many of its predecessors arrived, so a single
-//! refused send would leave the two ends disagreeing for good; a level says the
-//! same thing however many times it is applied and whatever was lost before it.
+//! Commands set a level rather than toggle one: [`Command::SetMuted`] carries
+//! the state to be in. A toggle means something different depending on how many
+//! of its predecessors arrived, so one refused send would leave the two ends
+//! disagreeing for good.
 //!
-//! Each command is held as an [`AtomicU64`] bit pattern rather than as an enum
-//! behind a cell, which is what keeps the queue in safe code: the two ends
-//! genuinely do touch the same slot without synchronising on it, and only an
-//! atomic makes that defined. The slot is read and written relaxed; the index
-//! publication either side of it is what orders the data. A tag naming no
-//! command is discarded rather than guessed at: the encoding is written in one
-//! place and read in another, so a command added to one and forgotten in the
-//! other is the mistake to design for, and a command applied as the wrong one
-//! is a worse outcome than a command not applied.
-//!
-//! Each end counts the commands it has moved since the queue was built, and the
-//! difference between the two counts is what the queue is holding — the same
-//! arrangement [`sample_ring`](super::sample_ring) uses, and for the same
-//! reason: the counts tell a full queue from an empty one where the slot
-//! indices alone cannot.
+//! Each slot is an [`AtomicU64`] bit pattern, which is what keeps the queue in
+//! safe code; a tag naming no command is discarded rather than guessed at.
 
 use std::fmt;
 use std::sync::Arc;

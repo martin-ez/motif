@@ -1,24 +1,17 @@
 //! Opening a duplex audio stream, and the boundary between its callback and
 //! the rest of the system.
 //!
-//! Devices are reached through [`AudioBackend`] rather than directly, so that
-//! the rest of the crate compiles against the abstraction and a backend with no
-//! hardware behind it can stand in where no audio device exists. [`sample_ring`]
-//! carries samples between two threads without locking or allocating, which is
-//! what a real-time callback needs of anything it touches; [`passthrough`] is
-//! what a duplex stream's two callbacks do with one, [`command_channel`] carries
-//! changes the other way, and [`level_meter`] sends back the other thing that
-//! crosses the boundary: not the audio itself but how loud it was.
+//! Devices are reached through [`AudioBackend`] rather than directly, so the
+//! rest of the crate compiles against the abstraction and a backend with no
+//! hardware behind it can stand in where no audio device exists.
 //!
-//! [`xrun_counter`] carries the news that the boundary failed, which none of
-//! the others can report: the samples a dropout costs are gone.
-//!
-//! [`fault_channel`] carries the news that the device did. That one outlives
-//! the stream it came from, so [`DeviceLink`] holds the pieces needed to open
+//! Everything crossing the callback boundary does so over a lock-free channel
+//! built here: [`sample_ring`] for the audio, [`command_channel`] for changes
+//! going the other way, [`level_meter`] and [`headroom_meter`] for how loud it
+//! was and how close the callback came to missing its deadline, [`xrun_counter`]
+//! and [`fault_channel`] for the two ways the boundary fails. A fault outlives
+//! the stream it came from, so [`DeviceLink`] holds what it takes to open
 //! another and is what the rest of the application talks to.
-//!
-//! [`headroom_meter`] carries how close the boundary came to failing, which is
-//! the reading that is still useful once a count has stopped rising.
 
 use std::fmt;
 
@@ -151,22 +144,14 @@ pub trait AudioBackend {
     /// The hosts and devices there are to open at `sample_rate`.
     ///
     /// Listed means openable: a device that comes back offers `f32` at
-    /// `sample_rate` on every channel count it lists, and one that cannot meet
-    /// that is absent rather than listed and unopenable. A host left with no
-    /// devices is absent too, being a row with nothing behind it. Channel
-    /// counts ascend without repeats.
+    /// `sample_rate` on every channel count it lists, ascending and without
+    /// repeats. One that cannot is absent rather than listed and unopenable, as
+    /// is a host left with nothing behind it, or one that will not answer.
     ///
-    /// Only that direction is promised. A backend may still open something it
-    /// did not list — [`NullBackend::rounding`] grants its own configuration
-    /// whatever it is asked for — so this is a menu to choose from rather than
-    /// a ruling on what would work.
+    /// Only that direction is promised — a backend may open something it did not
+    /// list, as [`NullBackend::rounding`] does — so this is a menu, not a ruling.
     ///
-    /// A host that will not open, or a device that will not answer, drops out
-    /// of the list rather than failing the call. There is nothing a caller can
-    /// do with that distinction it cannot do with a shorter list.
-    ///
-    /// This talks to the host, so it blocks and allocates, and must never be
-    /// reached from the audio callback.
+    /// Blocks and allocates; never reach it from the audio callback.
     fn hosts(&self, sample_rate: u32) -> Vec<AudioHost>;
 
     /// Open an input and an output stream at `request`.

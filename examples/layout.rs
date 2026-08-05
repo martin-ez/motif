@@ -6,34 +6,18 @@
 //! cargo run --example layout | cat  # the same grid as plain text
 //! ```
 //!
-//! In a terminal it runs through the same stack the binary does — the terminal
-//! backend, the event loop, and the viewport that centres the panel in the
-//! window — so what is on screen is the page as the application would show it.
-//! Any control leaves.
+//! This is a ruler, not a screen the application has: whether the profile's
+//! screen has room for a transport, a meter and a position readout at once
+//! cannot be checked in isolation, only laid out and looked at. Everything drawn
+//! comes from a type that already exists, and the bottom [`Legend::ROWS`] rows
+//! are the panel's.
 //!
-//! This is a ruler, not a screen the application has. Whether the profile's
-//! screen has room for a transport, a meter and a position readout at once is
-//! the one number in [`DeviceProfile`] that cannot be checked in isolation, and
-//! the only way to answer it is to lay the three out and look. The real widgets
-//! are built elsewhere; what is measured here is the space they have to fit in.
+//! In a terminal it runs through the same stack the binary does, and any control
+//! leaves. Piped, it writes the grid as plain text between the same box-drawing
+//! edges, which is what makes a layout readable in a diff.
 //!
-//! The bottom [`Legend::ROWS`] rows are the panel's, so what is measured above
-//! them is the room a page actually has.
-//!
-//! Everything drawn comes from a type that already exists — [`Transport`] for
-//! the indicators, [`Levels`] for the meter, [`LoopBuffer`] for the position —
-//! so the page shows the shape of what the crate can already say, and invents
-//! no behaviour to fill the frame.
-//!
-//! Piped, it writes the grid as plain text between the same box-drawing edges
-//! the terminal would show, which is what makes the layout readable in a diff
-//! or a pull request.
-//!
-//! The meter's bar runs down to -48 dB. That is a floor rather than a
-//! measurement: low enough that a quiet take still moves the bar, high enough
-//! that what a converter idles at does not. The bar is drawn from the RMS and
-//! the peak is marked on it, so the bar and the number beside it are reading
-//! the same block rather than disagreeing silently.
+//! The meter's bar runs down to -48 dB: low enough that a quiet take still moves
+//! it, high enough that what a converter idles at does not.
 
 use std::io::{self, IsTerminal, Write};
 
