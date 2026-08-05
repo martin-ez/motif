@@ -2,15 +2,17 @@
 //!
 //! Its capacity comes from the device profile and is decided before the stream
 //! starts, so the facts worth stating are that the buffer is exactly as long as
-//! the profile says, that frames come back as they went in, that a recording
-//! longer than the buffer is reported short rather than growing the buffer or
-//! panicking, and that recording allocates nothing.
+//! the profile says, that frames come back as they went in, and that a recording
+//! longer than the buffer is reported short rather than growing it.
 //!
 //! Layers are the other half, and a loop is heard as their sum, so the tests
 //! state what is heard: an overdub lies over the take without lengthening it,
 //! undo leaves the rest playing, the stack stops at a stated depth, and clear
-//! empties the loop. All of it runs on the thread that may not allocate, so the
-//! allocations are counted as well.
+//! empties the loop.
+//!
+//! Playing is where the boundary matters: the tests state where the playhead
+//! lands, and that blocks of it tile the loop exactly. All of it runs on the
+//! thread that may not allocate, so the allocations are counted too.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -23,19 +25,16 @@ thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
-/// An allocator that forwards to the system allocator and counts the calls
-/// made by the thread that makes them.
+/// An allocator that forwards to the system allocator and counts the calls made
+/// by the thread that makes them.
 ///
-/// SAFETY: every method hands its arguments to [`System`] unchanged and
-/// returns what it returns, so the contract it upholds is the one `System`
-/// already upholds. Counting touches only a thread-local `Cell<usize>`, which
-/// is const-initialised and has no destructor, so it never allocates and never
-/// re-enters the allocator.
+/// SAFETY: every method hands its arguments to [`System`] unchanged and returns
+/// what it returns, so the contract it upholds is `System`'s. Counting touches
+/// only a const-initialised thread-local `Cell<usize>` with no destructor, so it
+/// never allocates and never re-enters the allocator.
 ///
-/// Zeroed allocation is counted alongside plain allocation, because a loop
-/// buffer is a block of silence and `Vec` asks for that one pre-zeroed — a
-/// count that watched only [`GlobalAlloc::alloc`] would miss the regression
-/// this is here to catch.
+/// Zeroed allocation is counted alongside plain allocation: a loop buffer is a
+/// block of silence, which [`GlobalAlloc::alloc`] alone would miss.
 struct CountingAllocator;
 
 #[expect(
@@ -530,6 +529,149 @@ fn mixing_an_empty_loop_writes_nothing() {
 
     assert_eq!(mixed, 0);
     assert_eq!(block, [9.0, 9.0]);
+}
+
+#[test]
+fn playing_wraps_at_the_loop_boundary_inside_a_block() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75]);
+    let mut block = [0.0; 5];
+
+    buffer.play_into(&mut block, 0);
+
+    assert_eq!(block, [0.25, 0.5, 0.75, 0.25, 0.5]);
+}
+
+#[test]
+fn playing_reports_the_playhead_the_block_ended_on() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75]);
+    let mut block = [0.0; 5];
+
+    assert_eq!(buffer.play_into(&mut block, 0), 2);
+}
+
+#[test]
+fn a_block_ending_on_the_loop_boundary_reports_the_start_of_the_loop() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75]);
+    let mut block = [0.0; 3];
+
+    assert_eq!(buffer.play_into(&mut block, 0), 0);
+}
+
+#[test]
+fn a_loop_shorter_than_the_block_is_heard_as_often_as_it_fits() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    let mut block = [0.0; 5];
+
+    buffer.play_into(&mut block, 0);
+
+    assert_eq!(block, [0.25, 0.5, 0.25, 0.5, 0.25]);
+}
+
+#[test]
+fn playing_from_past_the_end_of_the_loop_starts_at_its_beginning() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75]);
+    let mut block = [0.0; 2];
+
+    let playhead = buffer.play_into(&mut block, 7);
+
+    assert_eq!(block, [0.25, 0.5]);
+    assert_eq!(playhead, 2);
+}
+
+#[test]
+fn a_playhead_kept_across_a_shorter_take_does_not_leave_it_out_of_phase() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 0.125, 0.375]);
+    let mut block = [0.0; 3];
+    let kept = buffer.play_into(&mut block, 0);
+
+    buffer.clear();
+    buffer.record(&[0.25, 0.5]);
+    let mut played = [0.0; 2];
+    buffer.play_into(&mut played, kept);
+
+    assert_eq!(played, [0.25, 0.5]);
+}
+
+#[test]
+fn playing_an_empty_loop_leaves_the_block_as_it_was() {
+    let buffer = LoopBuffer::for_profile(eight_frame_profile());
+    let mut block = [9.0; 2];
+
+    let playhead = buffer.play_into(&mut block, 0);
+
+    assert_eq!(block, [9.0, 9.0]);
+    assert_eq!(playhead, 0);
+}
+
+#[test]
+fn playing_adds_to_what_the_block_already_holds() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    let mut block = [1.0; 3];
+
+    buffer.play_into(&mut block, 0);
+
+    assert_eq!(block, [1.25, 1.5, 1.25]);
+}
+
+#[test]
+fn a_layer_shorter_than_the_loop_keeps_its_place_across_the_wrap() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75]);
+    buffer.overdub();
+    buffer.record(&[0.125]);
+    let mut block = [0.0; 5];
+
+    buffer.play_into(&mut block, 0);
+
+    assert_eq!(block, [0.375, 0.5, 0.75, 0.375, 0.5]);
+}
+
+#[test]
+fn a_loop_that_is_not_a_multiple_of_the_block_repeats_without_drift() {
+    let recorded = [0.25, 0.5, 0.75, 0.125, 0.375];
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&recorded);
+    let blocks = 10;
+    let mut played = Vec::new();
+    let mut playhead = 0;
+
+    for _ in 0..blocks {
+        let mut block = [0.0; 4];
+        playhead = buffer.play_into(&mut block, playhead);
+        played.extend_from_slice(&block);
+    }
+
+    let tiled: Vec<f32> = recorded.iter().copied().cycle().take(blocks * 4).collect();
+    assert_eq!(played, tiled);
+}
+
+#[test]
+fn playing_a_stack_of_layers_across_the_wrap_does_not_allocate() {
+    let profile = DeviceProfile::TARGET.audio;
+    let mut buffer = LoopBuffer::for_profile(profile);
+    let block = vec![0.5; profile.block_size as usize];
+    let mut played = vec![0.0; profile.block_size as usize];
+    buffer.record(&block[..block.len() - 1]);
+    for _ in 1..LoopBuffer::LAYERS {
+        buffer.overdub();
+        buffer.record(&block);
+    }
+
+    let before = allocations();
+    let mut playhead = 0;
+    for _ in 0..LoopBuffer::LAYERS {
+        playhead = buffer.play_into(&mut played, playhead);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before);
 }
 
 #[test]

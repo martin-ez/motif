@@ -15,17 +15,16 @@ thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
-/// An allocator that forwards to the system allocator and counts the calls
-/// made by the thread that makes them.
+/// An allocator that forwards to the system allocator and counts the calls made
+/// by the thread that makes them.
 ///
-/// SAFETY: every method hands its arguments to [`System`] unchanged and
-/// returns what it returns, so the contract it upholds is the one `System`
-/// already upholds. Counting touches only a thread-local `Cell<usize>`, which
-/// is const-initialised and has no destructor, so it never allocates and never
-/// re-enters the allocator.
+/// SAFETY: every method hands its arguments to [`System`] unchanged and returns
+/// what it returns, so the contract it upholds is `System`'s. Counting touches
+/// only a const-initialised thread-local `Cell<usize>` with no destructor, so it
+/// never allocates and never re-enters the allocator.
 ///
-/// Zeroed allocation is counted alongside plain allocation, so that a growth
-/// asking for pre-zeroed storage is seen as the allocation it is.
+/// Zeroed allocation is counted alongside plain allocation, so a growth asking
+/// for pre-zeroed storage is seen as the allocation it is.
 struct CountingAllocator;
 
 #[expect(

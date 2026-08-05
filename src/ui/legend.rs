@@ -1,20 +1,16 @@
 //! The panel as the screen draws it: which controls do something here.
 //!
 //! Two halves meet here and neither knows the other. A page declares which
-//! controls it answers; a backend says what to call the way each one is
-//! reached, in glyphs that belong to the panel. The legend puts the two
-//! together, which is what keeps a key out of every page and a page out of
-//! every backend.
+//! controls it answers; a backend says what to call the way each one is reached,
+//! in glyphs that belong to the panel. The legend puts the two together, which
+//! is what keeps a key out of every page and a page out of every backend.
 //!
-//! What it draws is a picture of the panel — the navigation cross the player's
-//! thumb sits in, the scene buttons with the transport under them, the encoder
-//! beside — and no words at all. Every key wears the glyph that reaches it and
-//! nothing else, so the picture is a map of the panel wherever the player is;
-//! the keys the page answers are drawn with a heavy edge and the rest with a
-//! light one. That is deliberately all it says: a screen that explains its
-//! controls in prose can go on being unreadable, where one that says only
-//! *which* controls are live has to make the rest obvious where the player is
-//! already looking.
+//! What it draws is a picture of the panel — the navigation cross, the scene
+//! buttons with the transport under them, the encoder beside — and no words at
+//! all. Every key wears the glyph that reaches it, drawn with a heavy edge where
+//! the page answers it and a light one where it does not. That is deliberately
+//! all it says: a screen that has to explain its controls in prose can go on
+//! being unreadable.
 
 use crate::device::{Button, Control, DeviceProfile, Encoder};
 use crate::ui::{Cell, Controls, Frame, Hint};
@@ -159,19 +155,13 @@ pub struct Legend {
 impl Legend {
     /// How many rows a legend takes, along the bottom of the frame.
     ///
-    /// It is permanent rather than an overlay a player summons: a legend that
-    /// has to be asked for is one more thing to know about before it can help,
-    /// and the pages this is drawn for are read while both hands are busy.
-    ///
-    /// Six rows is what the panel picture costs. A key is an edge with a glyph
+    /// Six rows is what the panel picture costs: a key is an edge with a glyph
     /// inside it, which is three rows, and the panel is two rows of keys deep
-    /// wherever one looks at it: the navigation cross, and the scene buttons
-    /// with the transport under them. No key shares an edge with the key beside
-    /// it, because a shared edge is one cell and the two keys it belongs to may
-    /// not be drawn the same weight.
+    /// wherever one looks at it. No key shares an edge with its neighbour, since
+    /// a shared edge is one cell and the two may not be drawn the same weight.
     ///
-    /// A page draws into the whole frame and the legend is drawn over these
-    /// rows afterwards, so what a page puts here does not survive the frame.
+    /// A page draws into the whole frame and the legend goes over these rows
+    /// afterwards, so what a page puts here does not survive the frame.
     pub const ROWS: usize = KEY_ROWS * 2;
 
     /// A legend for a page that answers nothing yet.
@@ -195,16 +185,13 @@ impl Legend {
     /// Draw the panel along the bottom [`ROWS`](Self::ROWS) rows of `frame`,
     /// each key wearing the glyph `panel` reaches it by and nothing else.
     ///
-    /// A key the page answers is drawn with a heavy edge and one it ignores
-    /// with a light one, so both are on the screen and the picture is a map of
-    /// the panel wherever the player is. Every key keeps a place of its own, so
-    /// nothing moves from page to page and only the weight changes. The encoder
-    /// is rounded, never square, so that it does not read as a button — and it
-    /// lights by doubling its edge rather than thickening it, there being no
-    /// heavy rounded corner to draw.
+    /// A key the page answers is drawn with a heavy edge and one it ignores with
+    /// a light one, so both are on the screen. Every key keeps a place of its
+    /// own, so nothing moves from page to page and only the weight changes.
     ///
-    /// The rows are cleared first, so nothing drawn underneath shows through
-    /// the gaps between keys.
+    /// The encoder is rounded, never square, so it does not read as a button,
+    /// and lights by doubling its edge — there is no heavy rounded corner. The
+    /// rows are cleared first, so nothing underneath shows through the gaps.
     pub fn draw(&self, frame: &mut Frame, panel: &impl Controls) {
         let screen = DeviceProfile::TARGET.screen;
         let top = screen.rows.saturating_sub(Self::ROWS);

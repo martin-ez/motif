@@ -91,16 +91,15 @@ pub fn checked_in() -> PathBuf {
 
 /// Score `candidate` against every fixture in `directory`.
 ///
-/// A fixture is a `.beats` file; anything else in the directory is left alone.
-/// `candidate` is asked once per fixture and answers with the positions it
-/// found, so the harness never learns what produced them and can be exercised
-/// with sequences written by hand.
+/// A fixture is a `.beats` file; anything else is left alone. `candidate` is
+/// asked once per fixture and answers with the positions it found, so the
+/// harness never learns what produced them.
 ///
 /// # Errors
 ///
 /// Returns [`RunError`] naming what was at fault, and scores nothing. A fixture
-/// that cannot be read is not skipped: dropping one from the run raises the
-/// aggregate over those that remain, which reads as an improvement.
+/// that cannot be read is not skipped: dropping one raises the aggregate over
+/// those that remain, which reads as an improvement.
 ///
 /// ```
 /// use motif::fixtures::harness::{self, Target};

@@ -134,14 +134,12 @@ pub trait Controls {
     /// drawing.
     ///
     /// A terminal answers with the key, because nothing in front of the player
-    /// is labelled with it and a legend that named the meaning alone would
-    /// leave them guessing. A panel whose controls are labelled where the
+    /// is labelled with it. A panel whose controls are labelled where the
     /// player's hands already are has nothing to add, which is what the default
-    /// answers — the meanings are then drawn on their own.
+    /// answers.
     ///
-    /// This is the one thing a backend tells the screen about itself, and it
-    /// travels as glyphs rather than as a key: a hint is drawn, never matched
-    /// on, so nothing above the backend learns what reached it.
+    /// A hint travels as glyphs and is drawn, never matched on, so nothing above
+    /// the backend learns what reached it.
     fn hint(&self, _control: Control) -> Option<Hint> {
         None
     }

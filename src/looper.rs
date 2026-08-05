@@ -4,20 +4,15 @@
 //! [`LoopBuffer`] holds the samples those states govern.
 //!
 //! [`LoopBuffer`] is sized from the device profile and allocated before the
-//! stream starts, so the longest loop a player can capture is a constraint the
-//! machine states rather than an accident of how much memory happens to be
-//! free. On hardware it is the former either way, and a buffer that grew to
-//! meet a long take would have to allocate on the thread that may not. Layers
-//! are a fixed stack of [`LoopBuffer::LAYERS`] for the same reason.
-//!
-//! Layers are summed as the loop is read, not as it is recorded. A running mix
-//! would leave [`LoopBuffer::undo`] either subtracting a layer back out, which a
-//! float sum does not restore exactly, or re-summing the whole loop inside one
-//! block.
+//! stream starts, so the longest loop is a constraint the machine states rather
+//! than an accident of free memory — a buffer that grew to meet a long take
+//! would have to allocate on the thread that may not. Layers are a fixed stack
+//! of [`LoopBuffer::LAYERS`] for the same reason, and are summed as the loop is
+//! read rather than as it is recorded: a running mix would leave
+//! [`LoopBuffer::undo`] subtracting a layer a float sum cannot restore exactly.
 //!
 //! One sample per frame, as the ring across the audio boundary carries them: a
-//! channel layout belongs to a device, and nothing this side of the callback
-//! should have to know one.
+//! channel layout belongs to a device, not to this side of the callback.
 
 use crate::device::AudioProfile;
 
@@ -92,13 +87,10 @@ impl LoopBuffer {
     ///
     /// Frames land in the open layer and nowhere else: an empty buffer has the
     /// take open, [`overdub`](Self::overdub) opens each later layer, and
-    /// [`undo`](Self::undo) leaves none open, so an undone layer cannot be
-    /// appended to the take.
+    /// [`undo`](Self::undo) leaves none open.
     ///
     /// A result below the length of `captured` means the layer is full and the
-    /// rest were dropped — the take has reached the length the profile allows,
-    /// or an overdub the end of the loop it lies over. It never grows to fit
-    /// the rest, and never panics for being asked.
+    /// rest were dropped. It never grows to fit them, and never panics.
     pub fn record(&mut self, captured: &[f32]) -> usize {
         let Some(open) = self.open else {
             return 0;
@@ -151,14 +143,12 @@ impl LoopBuffer {
     /// one to take.
     ///
     /// The take is not undone: it is the loop rather than a layer over it, so
-    /// emptying a loop is [`clear`](Self::clear)'s alone.
+    /// emptying a loop is [`clear`](Self::clear)'s alone. No layer is left open
+    /// afterwards, so blocks still arriving from a player who has not let go of
+    /// the button are taken nowhere.
     ///
-    /// No layer is left open afterwards, so blocks still arriving from a player
-    /// who has not let go of the button are taken nowhere.
-    ///
-    /// An undone layer keeps its samples and loses its length. Nothing reads
-    /// past a layer's length, so undo is a couple of stores wherever it is
-    /// called from.
+    /// An undone layer keeps its samples and loses its length, so undo is a
+    /// couple of stores wherever it is called from.
     pub fn undo(&mut self) -> bool {
         if self.depth < 2 {
             return false;
@@ -189,7 +179,8 @@ impl LoopBuffer {
     /// loop alone passes silence.
     ///
     /// A result below the length of `block` means the loop ended inside it,
-    /// leaving the rest as it was. The loop does not repeat here.
+    /// leaving the rest as it was. The loop does not repeat here; that is
+    /// [`play_into`](Self::play_into).
     pub fn mix_into(&self, block: &mut [f32], from: usize) -> usize {
         let wanted = block.len().min(self.len().saturating_sub(from));
         if wanted == 0 {
@@ -197,20 +188,62 @@ impl LoopBuffer {
         }
 
         let block = &mut block[..wanted];
-
-        for (layer, recorded) in self
-            .layers
-            .chunks_exact(self.capacity())
-            .zip(self.written)
-            .take(self.depth)
-        {
-            let heard = recorded.saturating_sub(from).min(wanted);
-            for (mixed, sample) in block.iter_mut().zip(&layer[from..from + heard]) {
-                *mixed += sample;
-            }
+        for layer in self.recorded_layers() {
+            mix(block, layer, from);
         }
 
         wanted
+    }
+
+    /// Play the loop into the whole of `block`, from frame `from`, and report
+    /// the frame it left the playhead on.
+    ///
+    /// A boundary inside `block` is crossed there, so a loop whose length is not
+    /// a multiple of the block size repeats without drift or a seam, and one
+    /// shorter than `block` is heard as often as it fits.
+    ///
+    /// Layers are summed into what `block` already holds; an empty loop is left
+    /// alone. A `from` at or past the end restarts the loop, so a playhead kept
+    /// across a change of length cannot hold a phase of its own.
+    ///
+    /// ```
+    /// use motif::device::DeviceProfile;
+    /// use motif::looper::LoopBuffer;
+    ///
+    /// let mut captured = LoopBuffer::for_profile(DeviceProfile::TARGET.audio);
+    /// captured.record(&[0.25, 0.5, 0.75]);
+    ///
+    /// let mut heard = [0.0; 5];
+    /// let playhead = captured.play_into(&mut heard, 0);
+    ///
+    /// assert_eq!(heard, [0.25, 0.5, 0.75, 0.25, 0.5]);
+    /// assert_eq!(playhead, 2);
+    /// ```
+    pub fn play_into(&self, block: &mut [f32], from: usize) -> usize {
+        if self.is_empty() {
+            return 0;
+        }
+
+        let playhead = if from < self.len() { from } else { 0 };
+        let to_the_boundary = (self.len() - playhead).min(block.len());
+        let (before, after) = block.split_at_mut(to_the_boundary);
+
+        for layer in self.recorded_layers() {
+            mix(before, layer, playhead);
+            for repeat in after.chunks_mut(self.len()) {
+                mix(repeat, layer, 0);
+            }
+        }
+
+        (playhead + block.len()) % self.len()
+    }
+
+    fn recorded_layers(&self) -> impl Iterator<Item = &[f32]> {
+        self.layers
+            .chunks_exact(self.capacity())
+            .zip(self.written)
+            .take(self.depth)
+            .map(|(layer, recorded)| &layer[..recorded])
     }
 
     /// How many frames long the loop is.
@@ -249,5 +282,11 @@ impl LoopBuffer {
     /// The most frames a layer can ever hold.
     pub fn capacity(&self) -> usize {
         self.layers.len() / Self::LAYERS
+    }
+}
+
+fn mix(block: &mut [f32], layer: &[f32], from: usize) {
+    for (mixed, sample) in block.iter_mut().zip(layer.get(from..).unwrap_or_default()) {
+        *mixed += sample;
     }
 }

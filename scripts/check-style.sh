@@ -11,6 +11,11 @@ cd "$(dirname "$0")/.."
 
 status=0
 
+# AGENTS.md 1.1, in the units the rule is written in. Changing a number here
+# changes the rule, so change the rule too.
+ITEM_DOC_BUDGET=8
+MODULE_DOC_BUDGET=12
+
 report() {
 	printf '\n\033[31mFAIL\033[0m  %s\n' "$1"
 	printf '%s\n' "$2" | sed 's/^/      /'
@@ -42,6 +47,52 @@ else
 fi
 
 if [ ${#roots[@]} -gt 0 ]; then
+	# --- AGENTS.md 1.1 — a doc comment has a budget ----------------------
+	#
+	# The budget is in prose lines, because that is what a reader pays: the
+	# blank separators and the fenced examples are not what makes a doc
+	# comment unreadable, and an example is a test (1.5), so charging for it
+	# would price the wrong thing.
+	#
+	# Two budgets rather than one. An item doc answers what a signature does
+	# and what it promises; a module doc is the only place this project puts
+	# the shape of a folder, since 1.6 leaves it nowhere else to go.
+	found=$(git ls-files '*.rs' | tr '\n' '\0' | xargs -0 awk '
+		function report() {
+			if (kind != "" && count > budget)
+				printf "%s:%d: %d prose lines in a %s comment, budget %d\n",
+					file, start, count, kind, budget
+			kind = ""
+		}
+		FILENAME != seen { report(); seen = FILENAME }
+		{
+			if ($0 !~ /^[ \t]*\/\/[\/!]/) { report(); next }
+			k = ($0 ~ /^[ \t]*\/\/!/) ? "//!" : "///"
+			if (k != kind) {
+				report()
+				kind = k; file = FILENAME; start = FNR
+				count = 0; fenced = 0
+				budget = (k == "//!") ? '"$MODULE_DOC_BUDGET"' : '"$ITEM_DOC_BUDGET"'
+			}
+			text = $0
+			sub(/^[ \t]*\/\/[\/!]/, "", text)
+			gsub(/^[ \t]+|[ \t]+$/, "", text)
+			if (text ~ /^```/) { fenced = !fenced; next }
+			if (fenced || text == "") next
+			count++
+		}
+		END { report() }
+	' || true)
+	if [ -n "$found" ]; then
+		report "doc comment over budget (AGENTS.md 1.1)" "$found
+A doc comment says what the item does and what it promises, then stops. Past
+that budget it is describing the implementation, and the implementation is
+already there to read. Cut it to the contract, or make the code carry what the
+prose was carrying — a name, or a function whose signature says it instead."
+	else
+		pass "no doc comment over budget (1.1)"
+	fi
+
 	# --- AGENTS.md 1.4 — no inline comments ------------------------------
 	#
 	# /// and //! are documentation and are allowed. // is not.

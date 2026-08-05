@@ -19,27 +19,12 @@ const WIPE_SCREEN: &str = "\u{1b}[2J";
 /// screen.
 ///
 /// A terminal is nearly always larger than the panel, so a frame drawn straight
-/// into it has no edges: 40 columns of content in an 80-column window looks like
-/// a layout with room to spare, and on the panel it is the whole screen. The
-/// border is where the screen actually ends, which is what makes a layout
-/// judgeable before there is hardware to judge it on.
+/// into it has no edges and a layout is judged against the wrong screen.
 ///
-/// The box is sized from [`DeviceProfile::TARGET`]. Where it sits is the
-/// caller's to say, through [`at`](Self::at) and [`place`](Self::place), and
-/// only where — a frame is the size of the panel wherever it is drawn, so no
-/// dimension here ever comes from the terminal. That split is what lets a
-/// backend centre the box in the window it has without the screen the
-/// application draws into changing size underneath it.
-///
-/// The border is drawn once, before the first frame, and again after a failed
-/// write or a move, on the same reasoning the frame itself is redrawn in full:
-/// a screen that rejected part of a write, or that the box has moved across, is
-/// no longer known to show anything in particular. Every frame after that
-/// writes only the cells that changed.
-///
-/// The border never passes through a [`Frame`]. The panel has no border, so
-/// drawing one into the cells the application owns would put a decoration of
-/// this backend's into every other backend's output.
+/// The box is sized from [`DeviceProfile::TARGET`]; only where it sits is the
+/// caller's, through [`at`](Self::at) and [`place`](Self::place). It is drawn
+/// before the first frame and again after a failed write or a move, and never
+/// through a [`Frame`] — the panel has no border.
 pub struct Viewport<W: Write> {
     writer: FrameWriter<W>,
     bordered: bool,
