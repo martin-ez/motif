@@ -1,0 +1,77 @@
+name: auto-update
+
+# A branch that is behind main cannot merge, and the merge queue that would
+# build it against main instead is unavailable on a user-owned repository.
+# Enabling auto-merge is what puts a pull request in line; this brings the front
+# of that line up to date and leaves the merging to auto-merge.
+on:
+  push:
+    branches: [main]
+  # Joining the line should not mean waiting for the next merge to notice.
+  pull_request:
+    types: [auto_merge_enabled]
+  workflow_dispatch:
+
+# Never cancelled: an interrupted update leaves a branch behind, having already
+# spent the CI run that would have told anyone so.
+concurrency:
+  group: auto-update
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  advance:
+    name: advance the oldest waiting branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: advance
+        env:
+          # Not GITHUB_TOKEN: events it triggers do not start workflow runs, so
+          # the branch would move and the required checks it moved away from
+          # would never run again — auto-merge would then wait on a result that
+          # can no longer arrive.
+          GH_TOKEN: ${{ secrets.AUTOUPDATE_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::AUTOUPDATE_TOKEN is unset, so no branch can be advanced."
+            exit 1
+          fi
+
+          waiting() {
+            jq "[.[] | select(.isDraft == false and .autoMergeRequest != null)] | $1"
+          }
+
+          # One at a time, oldest first. Advancing every behind branch would run
+          # CI for all of them, and again for the rest as soon as the first one
+          # merged and left them behind once more. Merging is what schedules the
+          # next, through the push to main this same workflow answers.
+          oldest_behind() {
+            waiting 'map(select(.mergeable == "MERGEABLE" and .mergeStateStatus == "BEHIND"))
+              | sort_by(.number) | .[0].number // empty' | tr -d '"'
+          }
+
+          # Mergeability is computed asynchronously and reads UNKNOWN until it
+          # settles. Selecting through that would pass over a branch that is in
+          # fact behind, and leave it there until something else pushed to main.
+          for _ in $(seq 1 12); do
+            prs="$(gh pr list --state open --limit 100 \
+              --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest)"
+            unsettled="$(printf '%s' "$prs" |
+              waiting 'map(select(.mergeStateStatus == "UNKNOWN")) | length')"
+            [ "$unsettled" -eq 0 ] && break
+            sleep 5
+          done
+
+          next="$(printf '%s' "$prs" | oldest_behind)"
+
+          if [ -z "$next" ]; then
+            echo "No branch with auto-merge is waiting behind main."
+            exit 0
+          fi
+
+          echo "Advancing #$next onto main."
+          gh pr update-branch "$next"
