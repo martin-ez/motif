@@ -8,50 +8,73 @@
 //!
 //! What it draws is a picture of the panel — the navigation cross the player's
 //! thumb sits in, the scene buttons with the transport under them, the encoder
-//! beside — and no words at all. Every key wears the glyph that reaches it, so
-//! the picture is a map of the panel wherever the player is; the keys the page
-//! answers are lit, and the rest sit dark. That is deliberately all it says: a
-//! screen that explains its controls in prose can go on being unreadable, where
-//! one that says only *which* controls are live has to make the rest obvious
-//! where the player is already looking.
+//! beside — and no words at all. Every key wears the glyph that reaches it and
+//! nothing else, so the picture is a map of the panel wherever the player is;
+//! the keys the page answers are drawn with a heavy edge and the rest with a
+//! light one. That is deliberately all it says: a screen that explains its
+//! controls in prose can go on being unreadable, where one that says only
+//! *which* controls are live has to make the rest obvious where the player is
+//! already looking.
 
 use crate::device::{Button, Control, DeviceProfile, Encoder};
 use crate::ui::{Cell, Controls, Frame, Hint};
 
-const LIT: char = '▒';
+/// The four corners and two sides a key is drawn with.
+struct Edges {
+    top_left: char,
+    top_right: char,
+    bottom_left: char,
+    bottom_right: char,
+    horizontal: char,
+    vertical: char,
+}
 
-const TOP_LEFT: char = '┌';
-const TOP_RIGHT: char = '┐';
-const BOTTOM_LEFT: char = '└';
-const BOTTOM_RIGHT: char = '┘';
-const JOIN_LEFT: char = '├';
-const JOIN_RIGHT: char = '┤';
-const JOIN_DOWN: char = '┬';
-const JOIN_UP: char = '┴';
-const CROSSING: char = '┼';
-const HORIZONTAL: char = '─';
-const VERTICAL: char = '│';
-const ROUND_TOP_LEFT: char = '╭';
-const ROUND_TOP_RIGHT: char = '╮';
-const ROUND_BOTTOM_LEFT: char = '╰';
-const ROUND_BOTTOM_RIGHT: char = '╯';
+const LIGHT: Edges = Edges {
+    top_left: '┌',
+    top_right: '┐',
+    bottom_left: '└',
+    bottom_right: '┘',
+    horizontal: '─',
+    vertical: '│',
+};
+
+const HEAVY: Edges = Edges {
+    top_left: '┏',
+    top_right: '┓',
+    bottom_left: '┗',
+    bottom_right: '┛',
+    horizontal: '━',
+    vertical: '┃',
+};
+
+const ROUND: Edges = Edges {
+    top_left: '╭',
+    top_right: '╮',
+    bottom_left: '╰',
+    bottom_right: '╯',
+    horizontal: '─',
+    vertical: '│',
+};
+
+const DOUBLED: Edges = Edges {
+    top_left: '╔',
+    top_right: '╗',
+    bottom_left: '╚',
+    bottom_right: '╝',
+    horizontal: '═',
+    vertical: '║',
+};
 
 const KEY_WIDTH: usize = 5;
 const ENCODER_WIDTH: usize = 7;
+const KEY_ROWS: usize = 3;
 
 const CROSS_LEFT_AT: usize = 9;
 const CROSS_MIDDLE_AT: usize = CROSS_LEFT_AT + KEY_WIDTH + 1;
 const CROSS_RIGHT_AT: usize = CROSS_MIDDLE_AT + KEY_WIDTH + 1;
-const GRID_AT: usize = CROSS_RIGHT_AT + KEY_WIDTH + 4;
-const GRID_STEP: usize = KEY_WIDTH - 1;
-const ENCODER_AT: usize = GRID_AT + GRID_WIDE * GRID_STEP + 5;
+const GRID_AT: usize = CROSS_RIGHT_AT + KEY_WIDTH + 3;
 const GRID_WIDE: usize = 4;
-
-const TOP_OF_UP: usize = 0;
-const UP: usize = 1;
-const MIDDLE: usize = 2;
-const BOTTOM: usize = 3;
-const UNDER: usize = 4;
+const ENCODER_AT: usize = GRID_AT + GRID_WIDE * KEY_WIDTH + 3;
 
 const SCENES: [Control; GRID_WIDE] = [
     Control::Button(Button::FirstScene),
@@ -66,13 +89,6 @@ const ACTIONS: [Control; GRID_WIDE] = [
     Control::Button(Button::Record),
     Control::Button(Button::Shift),
 ];
-
-/// A key as it is drawn: what the panel calls it, and whether it does anything
-/// on this page.
-struct Look {
-    hint: Option<Hint>,
-    lit: bool,
-}
 
 fn centred(
     frame: &mut Frame,
@@ -89,37 +105,29 @@ fn centred(
     }
 }
 
-fn span(frame: &mut Frame, row: usize, at: usize, width: usize, left: char, right: char) {
+fn span(frame: &mut Frame, row: usize, at: usize, width: usize, edges: &Edges, closing: bool) {
+    let (left, right) = match closing {
+        false => (edges.top_left, edges.top_right),
+        true => (edges.bottom_left, edges.bottom_right),
+    };
+
     frame.set(at, row, Cell::new(left));
     for column in 1..width.saturating_sub(1) {
-        frame.set(at + column, row, Cell::new(HORIZONTAL));
+        frame.set(at + column, row, Cell::new(edges.horizontal));
     }
     frame.set(at + width.saturating_sub(1), row, Cell::new(right));
 }
 
-fn face(frame: &mut Frame, row: usize, at: usize, width: usize, look: Look) {
-    let inside = width.saturating_sub(2);
+fn face(frame: &mut Frame, row: usize, at: usize, width: usize, edges: &Edges, hint: Option<Hint>) {
+    frame.set(at, row, Cell::new(edges.vertical));
+    frame.set(at + width.saturating_sub(1), row, Cell::new(edges.vertical));
 
-    frame.set(at, row, Cell::new(VERTICAL));
-    frame.set(at + width.saturating_sub(1), row, Cell::new(VERTICAL));
-
-    if look.lit {
+    if let Some(hint) = hint {
         centred(
             frame,
             row,
             at + 1,
-            inside,
-            inside,
-            std::iter::repeat_n(LIT, inside),
-        );
-    }
-
-    if let Some(hint) = look.hint {
-        centred(
-            frame,
-            row,
-            at + 1,
-            inside,
+            width.saturating_sub(2),
             hint.glyphs().count(),
             hint.glyphs(),
         );
@@ -131,7 +139,7 @@ fn face(frame: &mut Frame, row: usize, at: usize, width: usize, look: Look) {
 /// A page answers a handful of controls and ignores the rest, and until it says
 /// which, the only way to find out is to press one and watch. Declaring it is
 /// what the screen is drawn from, so a control a page does not answer is drawn
-/// dark rather than left out — the panel then reads the same everywhere, and a
+/// light rather than left out — the panel then reads the same everywhere, and a
 /// key that does nothing here is a fact on the screen rather than a silence.
 ///
 /// ```
@@ -155,15 +163,16 @@ impl Legend {
     /// has to be asked for is one more thing to know about before it can help,
     /// and the pages this is drawn for are read while both hands are busy.
     ///
-    /// Five rows is what the panel picture costs. A key is an edge with a glyph
-    /// inside it, and the navigation cross is two of those stacked with a shared
-    /// edge, which is five rows however tightly it is drawn. Everything else —
-    /// the scene buttons with the transport under them, the encoder — sits
-    /// beside the cross rather than below it, so it costs no rows of its own.
+    /// Six rows is what the panel picture costs. A key is an edge with a glyph
+    /// inside it, which is three rows, and the panel is two rows of keys deep
+    /// wherever one looks at it: the navigation cross, and the scene buttons
+    /// with the transport under them. No key shares an edge with the key beside
+    /// it, because a shared edge is one cell and the two keys it belongs to may
+    /// not be drawn the same weight.
     ///
     /// A page draws into the whole frame and the legend is drawn over these
     /// rows afterwards, so what a page puts here does not survive the frame.
-    pub const ROWS: usize = 5;
+    pub const ROWS: usize = KEY_ROWS * 2;
 
     /// A legend for a page that answers nothing yet.
     pub const fn blank() -> Self {
@@ -184,14 +193,15 @@ impl Legend {
     }
 
     /// Draw the panel along the bottom [`ROWS`](Self::ROWS) rows of `frame`,
-    /// each key wearing the glyph `panel` reaches it by.
+    /// each key wearing the glyph `panel` reaches it by and nothing else.
     ///
-    /// A key the page answers is lit — filled behind its glyph, which is as
-    /// close to a backlit button as a screen of characters gets — and the rest
-    /// sit dark. Both are drawn, so the picture is a map of the panel wherever
-    /// the player is, and every key keeps a place of its own so that nothing
-    /// moves from page to page. A panel that offers no glyph, its keys being
-    /// labelled under the player's hands, lights the key alone.
+    /// A key the page answers is drawn with a heavy edge and one it ignores
+    /// with a light one, so both are on the screen and the picture is a map of
+    /// the panel wherever the player is. Every key keeps a place of its own, so
+    /// nothing moves from page to page and only the weight changes. The encoder
+    /// is rounded, never square, so that it does not read as a button — and it
+    /// lights by doubling its edge rather than thickening it, there being no
+    /// heavy rounded corner to draw.
     ///
     /// The rows are cleared first, so nothing drawn underneath shows through
     /// the gaps between keys.
@@ -207,113 +217,63 @@ impl Legend {
 
         self.draw_cross(frame, top, panel);
         self.draw_grid(frame, top, panel);
-        self.draw_encoder(frame, top, panel);
+        self.draw_key(
+            frame,
+            top,
+            ENCODER_AT,
+            ENCODER_WIDTH,
+            Control::Encoder(Encoder::Main),
+            panel,
+        );
     }
 
     fn draw_cross(&self, frame: &mut Frame, top: usize, panel: &impl Controls) {
-        span(
-            frame,
-            top + TOP_OF_UP,
-            CROSS_MIDDLE_AT,
-            KEY_WIDTH,
-            TOP_LEFT,
-            TOP_RIGHT,
-        );
-        face(
-            frame,
-            top + UP,
-            CROSS_MIDDLE_AT,
-            KEY_WIDTH,
-            self.look_of(Button::Up, panel),
-        );
-        span(
-            frame,
-            top + MIDDLE,
-            CROSS_MIDDLE_AT,
-            KEY_WIDTH,
-            JOIN_LEFT,
-            JOIN_RIGHT,
-        );
+        self.draw_key(frame, top, CROSS_MIDDLE_AT, KEY_WIDTH, Button::Up, panel);
 
         for (at, button) in [
             (CROSS_LEFT_AT, Button::Left),
             (CROSS_MIDDLE_AT, Button::Down),
             (CROSS_RIGHT_AT, Button::Right),
         ] {
-            if at != CROSS_MIDDLE_AT {
-                span(frame, top + MIDDLE, at, KEY_WIDTH, TOP_LEFT, TOP_RIGHT);
-            }
-            face(
-                frame,
-                top + BOTTOM,
-                at,
-                KEY_WIDTH,
-                self.look_of(button, panel),
-            );
-            span(frame, top + UNDER, at, KEY_WIDTH, BOTTOM_LEFT, BOTTOM_RIGHT);
+            self.draw_key(frame, top + KEY_ROWS, at, KEY_WIDTH, button, panel);
         }
     }
 
     fn draw_grid(&self, frame: &mut Frame, top: usize, panel: &impl Controls) {
-        grid_edge(frame, top + TOP_OF_UP, TOP_LEFT, JOIN_DOWN, TOP_RIGHT);
-        grid_edge(frame, top + MIDDLE, JOIN_LEFT, CROSSING, JOIN_RIGHT);
-        grid_edge(frame, top + UNDER, BOTTOM_LEFT, JOIN_UP, BOTTOM_RIGHT);
-
         for (place, control) in SCENES.into_iter().enumerate() {
-            let at = GRID_AT + place * GRID_STEP;
-            face(frame, top + UP, at, KEY_WIDTH, self.look_of(control, panel));
+            let at = GRID_AT + place * KEY_WIDTH;
+            self.draw_key(frame, top, at, KEY_WIDTH, control, panel);
         }
         for (place, control) in ACTIONS.into_iter().enumerate() {
-            let at = GRID_AT + place * GRID_STEP;
-            face(
-                frame,
-                top + BOTTOM,
-                at,
-                KEY_WIDTH,
-                self.look_of(control, panel),
-            );
+            let at = GRID_AT + place * KEY_WIDTH;
+            self.draw_key(frame, top + KEY_ROWS, at, KEY_WIDTH, control, panel);
         }
     }
 
-    fn draw_encoder(&self, frame: &mut Frame, top: usize, panel: &impl Controls) {
-        span(
-            frame,
-            top + TOP_OF_UP,
-            ENCODER_AT,
-            ENCODER_WIDTH,
-            ROUND_TOP_LEFT,
-            ROUND_TOP_RIGHT,
-        );
-        face(
-            frame,
-            top + UP,
-            ENCODER_AT,
-            ENCODER_WIDTH,
-            self.look_of(Encoder::Main, panel),
-        );
-        span(
-            frame,
-            top + MIDDLE,
-            ENCODER_AT,
-            ENCODER_WIDTH,
-            ROUND_BOTTOM_LEFT,
-            ROUND_BOTTOM_RIGHT,
-        );
-    }
+    fn draw_key(
+        &self,
+        frame: &mut Frame,
+        top: usize,
+        at: usize,
+        width: usize,
+        control: impl Into<Control> + Copy,
+        panel: &impl Controls,
+    ) {
+        let control = control.into();
+        let edges = edges_of(control, self.answers(control));
 
-    fn look_of(&self, control: impl Into<Control> + Copy, panel: &impl Controls) -> Look {
-        Look {
-            hint: panel.hint(control.into()),
-            lit: self.answers(control),
-        }
+        span(frame, top, at, width, edges, false);
+        face(frame, top + 1, at, width, edges, panel.hint(control));
+        span(frame, top + 2, at, width, edges, true);
     }
 }
 
-fn grid_edge(frame: &mut Frame, row: usize, left: char, join: char, right: char) {
-    for place in 0..GRID_WIDE {
-        let at = GRID_AT + place * GRID_STEP;
-        let opens = if place == 0 { left } else { join };
-        span(frame, row, at, KEY_WIDTH, opens, right);
+fn edges_of(control: Control, lit: bool) -> &'static Edges {
+    match (control, lit) {
+        (Control::Encoder(_), false) => &ROUND,
+        (Control::Encoder(_), true) => &DOUBLED,
+        (Control::Button(_), false) => &LIGHT,
+        (Control::Button(_), true) => &HEAVY,
     }
 }
 

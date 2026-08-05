@@ -13,7 +13,10 @@ use motif::device::{Button, Control, DeviceProfile, Encoder, ScreenProfile};
 use motif::ui::{ControlEvent, Controls, Frame, Hint, Legend};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
-const LIT: char = '▒';
+const LIGHT: char = '─';
+const LIGHT_WALL: char = '│';
+const HEAVY: char = '━';
+const HEAVY_WALL: char = '┃';
 
 /// The glyph the panels below reach `control` by.
 fn glyph_of(control: impl Into<Control>) -> char {
@@ -140,32 +143,36 @@ fn every_key_wears_the_glyph_that_reaches_it_answered_or_not() {
 }
 
 #[test]
-fn a_control_the_page_answers_is_lit() {
+fn nothing_but_the_glyph_is_written_on_a_key() {
     let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
     let key = key_of(&frame, Button::Play);
-
-    assert_eq!(glyph_at(&frame, key.column - 1, key.row), LIT);
-    assert_eq!(glyph_at(&frame, key.column + 1, key.row), LIT);
-}
-
-#[test]
-fn a_control_is_drawn_as_a_key_with_an_edge_around_it() {
-    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
-    let key = key_of(&frame, Button::Play);
-
-    assert_eq!(glyph_at(&frame, key.column, key.row - 1), '─');
-    assert_eq!(glyph_at(&frame, key.column, key.row + 1), '─');
-    assert_eq!(glyph_at(&frame, key.column - 2, key.row), '│');
-    assert_eq!(glyph_at(&frame, key.column + 2, key.row), '│');
-}
-
-#[test]
-fn a_control_the_page_does_not_answer_is_drawn_dark_rather_than_dropped() {
-    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
-    let key = key_of(&frame, Button::Stop);
 
     assert_eq!(glyph_at(&frame, key.column - 1, key.row), ' ');
     assert_eq!(glyph_at(&frame, key.column + 1, key.row), ' ');
+}
+
+#[test]
+fn a_control_the_page_answers_is_drawn_with_a_heavy_edge() {
+    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let key = key_of(&frame, Button::Play);
+
+    assert_eq!(glyph_at(&frame, key.column, key.row - 1), HEAVY);
+    assert_eq!(glyph_at(&frame, key.column, key.row + 1), HEAVY);
+    assert_eq!(glyph_at(&frame, key.column - 2, key.row), HEAVY_WALL);
+    assert_eq!(glyph_at(&frame, key.column + 2, key.row), HEAVY_WALL);
+}
+
+#[test]
+fn a_control_the_page_does_not_answer_is_drawn_light_rather_than_dropped() {
+    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let key = key_of(&frame, Button::Stop);
+
+    assert_eq!(
+        glyph_at(&frame, key.column, key.row),
+        glyph_of(Button::Stop)
+    );
+    assert_eq!(glyph_at(&frame, key.column, key.row - 1), LIGHT);
+    assert_eq!(glyph_at(&frame, key.column - 2, key.row), LIGHT_WALL);
 }
 
 #[test]
@@ -184,7 +191,7 @@ fn a_panel_that_labels_its_own_keys_still_says_which_are_live() {
     let frame = drawn(&Legend::blank().answering(Button::Play), &Unlabelled);
     let text = text_of(&frame);
 
-    assert!(text.contains(LIT));
+    assert!(text.contains(HEAVY));
     for control in Control::ALL {
         assert!(
             !text.contains(glyph_of(control)),
@@ -232,7 +239,7 @@ fn the_action_keys_are_drawn_under_the_scene_buttons() {
 
     assert_eq!(actions[0].column, scene.column);
     for action in &actions {
-        assert_eq!(action.row, scene.row + 2);
+        assert_eq!(action.row, scene.row + 3);
     }
 }
 
@@ -256,6 +263,15 @@ fn the_encoder_is_drawn_as_a_knob_rather_than_a_key() {
     assert!(opens.column < knob.column);
     assert_eq!(closes.row, knob.row + 1);
     assert!(closes.column > knob.column);
+}
+
+#[test]
+fn a_knob_the_page_answers_is_drawn_doubled_rather_than_heavy() {
+    let frame = drawn(&Legend::blank().answering(Encoder::Main), &Lettered);
+    let knob = key_of(&frame, Encoder::Main);
+
+    assert_eq!(glyph_at(&frame, knob.column, knob.row - 1), '═');
+    assert_eq!(glyph_at(&frame, knob.column, knob.row + 1), '═');
 }
 
 #[test]
