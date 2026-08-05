@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{AudioPath, StreamConfig};
+use super::{AudioPath, Command, StreamConfig};
 
 /// Build a sample clock counting at `sample_rate`, and split it into the end
 /// that counts and the end that reads.
@@ -125,6 +125,12 @@ impl<P: AudioPath> AudioPath for Counting<P> {
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
         self.path.render(captured, playing);
         self.elapsed.advance(captured.len().min(playing.len()));
+    }
+
+    /// Answers whatever the path it wraps answers: a clock counts frames
+    /// whatever the player asked for, and has no command of its own to take.
+    fn apply(&mut self, command: Command) -> bool {
+        self.path.apply(command)
     }
 }
 

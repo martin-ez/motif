@@ -14,8 +14,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use motif::audio::{
-    AudioBackend, AudioPath, Counting, DeviceSelection, NullBackend, Passthrough, StreamConfig,
-    StreamRequest, sample_clock,
+    AudioBackend, AudioPath, Command, Counting, DeviceSelection, NullBackend, Passthrough,
+    StreamConfig, StreamRequest, sample_clock,
 };
 use motif::device::{AudioProfile, Button, DeviceProfile};
 use motif::looper::LooperPage;
@@ -118,6 +118,32 @@ impl AudioPath for Prepared {
     }
 
     fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
+
+    fn apply(&mut self, _command: Command) -> bool {
+        false
+    }
+}
+
+/// A path that takes whatever command it is offered, so that a test can read
+/// back what reached it through the path wrapped around it.
+#[derive(Clone, Default)]
+struct Answering(Arc<Mutex<Option<Command>>>);
+
+impl Answering {
+    fn taken(&self) -> Option<Command> {
+        *self.0.lock().expect("no test holds this across a panic")
+    }
+}
+
+impl AudioPath for Answering {
+    fn prepare(&mut self, _config: StreamConfig) {}
+
+    fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
+
+    fn apply(&mut self, command: Command) -> bool {
+        *self.0.lock().expect("no test holds this across a panic") = Some(command);
+        true
+    }
 }
 
 #[test]
@@ -160,6 +186,30 @@ fn a_counting_path_prepares_the_path_it_wraps() {
     path.prepare(granted());
 
     assert_eq!(wrapped.config(), Some(granted()));
+}
+
+#[test]
+fn a_counting_path_offers_a_command_to_the_path_it_wraps() {
+    let wrapped = Answering::default();
+    let mut path = Counting::new(sample_clock(SAMPLE_RATE).0, wrapped.clone());
+
+    path.apply(Command::Clear);
+
+    assert_eq!(wrapped.taken(), Some(Command::Clear));
+}
+
+#[test]
+fn a_counting_path_answers_a_command_the_path_it_wraps_took() {
+    let mut path = Counting::new(sample_clock(SAMPLE_RATE).0, Answering::default());
+
+    assert!(path.apply(Command::Clear));
+}
+
+#[test]
+fn a_counting_path_answers_nothing_the_path_it_wraps_refused() {
+    let mut path = Counting::new(sample_clock(SAMPLE_RATE).0, Prepared::default());
+
+    assert!(!path.apply(Command::Clear));
 }
 
 #[test]
