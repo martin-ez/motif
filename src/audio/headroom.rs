@@ -2,24 +2,17 @@
 //! reading it elsewhere.
 //!
 //! Headroom rather than duration, because a duration says nothing on its own: a
-//! callback taking 2 ms is comfortable at 256 frames and hopeless at 64, and the
-//! same DSP has a different deadline again on the target board.
+//! callback taking 2 ms is comfortable at 256 frames and hopeless at 64.
 //!
-//! What crosses the boundary is the last block's fraction and the largest over a
-//! recent window, packed into one word for the reason
-//! [`level_meter`](super::level_meter) packs its pair: read as two atomics they
-//! can straddle two blocks and come back as a pair no block ever had. The
-//! running maximum is kept in the measuring end's own state rather than in the
-//! shared word, so the word has one writer and a plain store — never a
-//! compare-and-swap, whose retry loop the callback has no bound on.
+//! What crosses is the last block's fraction and the largest over a recent
+//! window, packed into one word so a reader cannot catch half of each. The
+//! running maximum is kept by the writer, so the shared word takes a plain
+//! store rather than a compare-and-swap the callback cannot bound.
 //!
-//! The elapsed time arrives from the caller rather than being read here, so that
-//! a test can state a block that took half its period instead of spending one.
-//! The callback reads it with [`Instant::now`](std::time::Instant::now), which
-//! allocates on no platform and, on the clocksource a host usually selects,
-//! reaches the clock without trapping into the kernel: through the vDSO on Linux
-//! and the commpage on macOS. Where a host exports neither, the reading costs
-//! the callback a syscall per block.
+//! Elapsed time arrives from the caller, so a test can state a block that took
+//! half its period instead of spending one. The callback reads the clock with
+//! [`Instant::now`](std::time::Instant::now), which reaches it without a syscall
+//! through the Linux vDSO and the macOS commpage.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -102,17 +95,12 @@ impl Headroom {
 /// measuring end and the reading end.
 ///
 /// Allocates here and never again, so this belongs in setup, before the stream
-/// starts. A stream has one per callback rather than one in total: two threads
-/// sharing a meter would need the retry loop keeping them apart out of the
-/// callback, and reading the pair back with [`Headroom::worse_of`] costs
-/// nothing.
+/// starts. A stream has one per callback rather than one in total, and the pair
+/// reads back with [`Headroom::worse_of`].
 ///
-/// The recent window spans two of [`DeviceProfile::TARGET`]'s screen frames, and
-/// a maximum survives the window after the one it landed in as well as its own.
-/// A maximum has to outlast the gap between two readings or a spike falls
-/// between them unseen, and the reader is a screen refreshing at that rate: a
-/// window of one frame would leave a reader that drew a moment late reading past
-/// its own spike.
+/// The recent window spans two of [`DeviceProfile::TARGET`]'s screen frames: a
+/// maximum has to outlast the gap between two readings or a spike falls between
+/// them unseen, and the reader is a screen refreshing at that rate.
 ///
 /// ```
 /// use std::time::Duration;
@@ -147,15 +135,12 @@ impl HeadroomWriter {
     /// Publish a block that spent `elapsed` covering `frames` frames, and report
     /// what was published.
     ///
-    /// The period is taken from the frames the callback was actually handed
-    /// rather than from the block size the device was asked for, because a host
-    /// is free to hand over a short block and a fraction measured against the
-    /// wrong period is worse than none.
+    /// The period comes from the frames the callback was handed rather than the
+    /// block size the device was asked for: a host may hand over a short block,
+    /// and a fraction measured against the wrong period is worse than none.
     ///
-    /// A block of no frames, and a meter for a stream with no sample rate, have
-    /// no period to be a fraction of. Neither is measured, and the previous
-    /// reading stands rather than being replaced by a zero that would say the
-    /// callback had been idle.
+    /// A block of no frames, or a stream with no sample rate, has no period to
+    /// be a fraction of. Neither is measured, and the previous reading stands.
     pub fn measured(&mut self, elapsed: Duration, frames: usize) -> Headroom {
         if frames == 0 || self.sample_rate == 0 {
             return Headroom::unpacked(self.published.load(Ordering::Relaxed));

@@ -54,9 +54,16 @@ dependency.
 
 Documentation is a first-class citizen here, not a step at the end.
 
-**1.1 Clear and concise.** Say the thing and stop. Prose that restates a
-signature in English is worse than nothing: it has to be maintained, and it will
-go stale.
+**1.1 A doc comment has a budget: eight lines of prose on an item, twelve on a
+module.** Say the thing and stop. Prose that restates a signature in English is
+worse than nothing: it has to be maintained, and it will go stale.
+
+Blank lines and fenced examples are free — an example is a test (1.5). What is
+left is what a reader pays to reach the signature they came for, and eight lines
+buys what the item does and what it promises. Wanting more is the signal that
+the prose is carrying something the code should: a name, a type, a function
+whose signature says it instead. A module doc gets more because 1.6 leaves the
+shape of a folder nowhere else to live. `scripts/check-style.sh` counts it.
 
 **1.2 Prefer in-code documentation over documents.** A doc comment is reviewed in
 the same diff as the code it describes and cannot drift unnoticed; a standalone
