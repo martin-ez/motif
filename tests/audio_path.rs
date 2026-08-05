@@ -135,6 +135,15 @@ fn passthrough_plays_the_frames_it_was_handed() {
 }
 
 #[test]
+fn passthrough_answers_no_command_at_all() {
+    let mut path = Passthrough::new();
+
+    assert!(!path.apply(Command::SetGain(0.5)));
+    assert!(!path.apply(Command::SetMuted(true)));
+    assert!(!path.apply(Command::Clear));
+}
+
+#[test]
 fn a_path_decides_what_a_stream_plays() {
     let mut stream = NullBackend::rounding(granted())
         .open(&selection(), request(), Tone(0.5))
