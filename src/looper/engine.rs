@@ -25,9 +25,9 @@ const UNITY_GAIN: f32 = 1.0;
 /// queue. Gain scales the input ahead of all of it, and mute silences the
 /// output alone — a muted take is still recorded.
 ///
-/// A layer is recorded after the loop is played, so the input is heard once and
-/// the layer from the next pass on. It appends from the start of the layer, so
-/// one opened mid-loop lands at the top of the loop.
+/// A layer is recorded after the loop is played, so the input is heard once
+/// rather than twice. It appends from the layer's start rather than from the
+/// playhead, and one the stack has no room for takes nothing.
 ///
 /// ```
 /// use motif::audio::{AudioPath, Command, SendError, command_channel};
@@ -56,6 +56,7 @@ pub struct LoopEngine {
     gained: Box<[f32]>,
     transport: Transport,
     playhead: usize,
+    layer_open: bool,
     gain: f32,
     muted: bool,
 }
@@ -83,6 +84,7 @@ impl LoopEngine {
             gained: vec![0.0; block].into_boxed_slice(),
             transport: Transport::default(),
             playhead: 0,
+            layer_open: true,
             gain: UNITY_GAIN,
             muted: false,
         }
@@ -102,10 +104,13 @@ impl LoopEngine {
             Command::SetMuted(muted) => self.muted = muted,
             Command::SetGain(gain) => self.gain = gain,
             Command::Undo => {
-                self.buffer.undo();
+                if self.buffer.undo() {
+                    self.layer_open = false;
+                }
             }
             Command::Clear => {
                 self.buffer.clear();
+                self.layer_open = true;
                 self.playhead = 0;
             }
         }
@@ -113,7 +118,10 @@ impl LoopEngine {
 
     fn move_to(&mut self, transport: Transport) {
         if transport == Transport::Overdubbing && self.transport != Transport::Overdubbing {
-            self.buffer.overdub();
+            self.layer_open = self.buffer.depth() < LoopBuffer::LAYERS;
+            if self.layer_open {
+                self.buffer.overdub();
+            }
         }
         if transport.plays_loop() && !self.transport.plays_loop() {
             self.playhead = 0;
@@ -132,7 +140,7 @@ impl LoopEngine {
         if self.transport.plays_loop() {
             self.playhead = self.buffer.play_into(playing, self.playhead);
         }
-        if self.transport.captures_input() {
+        if self.transport.captures_input() && self.layer_open {
             self.buffer.record(gained);
             if !self.transport.plays_loop() {
                 self.playhead = self.buffer.len();

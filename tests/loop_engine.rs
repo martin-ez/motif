@@ -227,6 +227,87 @@ fn a_take_takes_an_overdub_for_every_layer_over_it() {
 }
 
 #[test]
+fn an_overdub_opened_mid_loop_lands_at_the_top_of_the_loop() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5, 0.75, 1.0]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 2);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 4), [0.375, 0.5, 0.75, 1.0]);
+}
+
+#[test]
+fn an_overdub_past_the_layer_stack_leaves_the_loop_alone() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    for _ in 1..LoopBuffer::LAYERS {
+        press(&mut sender, Command::SetTransport(Transport::Playing));
+        heard(&mut engine, 1);
+        press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+        heard(&mut engine, 1);
+    }
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 1);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[1.0]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 2), [0.25, 0.5]);
+}
+
+#[test]
+fn undo_takes_nothing_further_into_the_loop_until_the_transport_changes() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.125]);
+    press(&mut sender, Command::Undo);
+    played(&mut engine, &[1.0, 1.0]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 2), [0.25, 0.5]);
+}
+
+#[test]
+fn undo_with_no_overdub_to_take_off_leaves_the_take_open() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25]);
+    press(&mut sender, Command::Undo);
+    played(&mut engine, &[0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 2), [0.25, 0.5]);
+}
+
+#[test]
+fn clearing_a_loop_leaves_the_take_open_for_the_next_one() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::Clear);
+    played(&mut engine, &[0.75]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 1), [0.75]);
+}
+
+#[test]
 fn stopping_a_stopped_loop_keeps_its_playhead() {
     let (mut engine, mut sender, position) = engine();
 
@@ -365,13 +446,15 @@ fn a_pair_of_commands_both_land_on_the_next_block() {
 }
 
 #[test]
-fn a_block_shorter_than_the_input_plays_what_it_has_room_for() {
-    let (mut engine, _sender, _position) = engine();
+fn a_block_shorter_than_the_input_records_only_what_it_played() {
+    let (mut engine, mut sender, position) = engine();
     let mut playing = [0.0; 2];
+    press(&mut sender, Command::SetTransport(Transport::Recording));
 
     engine.render(&[0.25, 0.5, 0.75], &mut playing);
 
     assert_eq!(playing, [0.25, 0.5]);
+    assert_eq!(position.read().recorded(), 2);
 }
 
 #[test]
