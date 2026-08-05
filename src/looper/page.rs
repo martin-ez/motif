@@ -6,11 +6,9 @@
 //! would drift from the thread actually moving it, and a callback that kept its
 //! own transport would drift from the buttons.
 //!
-//! The input gain and its mute are held here for the first of those reasons.
-//! The page is where they are moved, and a composition forwards them to the
-//! engine as commands. The transport is the one thing sent from here, because
-//! it is the one the playhead comes back from: a page that ordered nothing
-//! would read a loop nobody was moving.
+//! The input gain and its mute are held here for the first of those reasons,
+//! and forwarded as commands by whatever composes the page. The transport is
+//! sent from here instead, being the one the playhead comes back from.
 //!
 //! Nothing here names a key, a terminal or an escape sequence. The page is
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
