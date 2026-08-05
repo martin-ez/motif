@@ -63,7 +63,7 @@ const ACTIONS: [Control; GRID_WIDE] = [
     Control::Button(Button::Play),
     Control::Button(Button::Stop),
     Control::Button(Button::Record),
-    Control::Shift,
+    Control::Button(Button::Shift),
 ];
 
 /// How a key is drawn: named by the panel, live but unnamed, or dead.

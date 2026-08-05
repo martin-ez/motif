@@ -120,7 +120,7 @@ fn a_control_a_page_leaves_alone_is_not_answered() {
 
     assert!(!legend.answers(Button::Up));
     assert!(!legend.answers(Encoder::Main));
-    assert!(!legend.answers(Control::Shift));
+    assert!(!legend.answers(Button::Shift));
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn the_action_keys_are_drawn_under_the_scene_buttons() {
 #[test]
 fn shift_is_a_key_on_the_panel_like_any_other() {
     let frame = drawn(&every_control(), &Lettered);
-    let shift = key_of(&frame, Control::Shift);
+    let shift = key_of(&frame, Button::Shift);
     let record = key_of(&frame, Button::Record);
 
     assert_eq!(shift.row, record.row);

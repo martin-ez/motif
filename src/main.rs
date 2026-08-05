@@ -13,7 +13,7 @@
 
 use std::process::ExitCode;
 
-use motif::device::{Button, Control, DeviceProfile};
+use motif::device::{Button, DeviceProfile};
 use motif::looper::{LooperPage, PositionReader, position_meter};
 use motif::ui::{
     App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, RenderError, TerminalScreen,
@@ -62,7 +62,7 @@ impl App for Shell {
     }
 
     fn legend(&self) -> Legend {
-        self.looper.legend().answering(Control::Shift)
+        self.looper.legend().answering(Button::Shift)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {

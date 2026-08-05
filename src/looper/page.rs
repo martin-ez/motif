@@ -131,7 +131,8 @@ impl App for LooperPage {
                 | Button::FirstScene
                 | Button::SecondScene
                 | Button::ThirdScene
-                | Button::FourthScene => self.transport,
+                | Button::FourthScene
+                | Button::Shift => self.transport,
             };
         }
 

@@ -22,6 +22,7 @@ enum Key {
     Down,
     Left,
     Right,
+    Shift,
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +49,7 @@ fn key_of(button: Button) -> Key {
         Button::Play => Key::Glyph('z'),
         Button::Stop => Key::Glyph('x'),
         Button::Record => Key::Glyph('c'),
+        Button::Shift => Key::Shift,
     }
 }
 
@@ -98,6 +100,7 @@ fn glyph_of(key: Key) -> char {
         Key::Down => 'v',
         Key::Left => '<',
         Key::Right => '>',
+        Key::Shift => SHIFT,
     }
 }
 
@@ -108,7 +111,6 @@ fn hint_of(control: Control) -> Hint {
             let [anticlockwise, clockwise] = keys_of(encoder);
             Hint::new([glyph_of(anticlockwise), TURN, glyph_of(clockwise)])
         }
-        Control::Shift => Hint::new([SHIFT]),
     }
 }
 
@@ -203,6 +205,11 @@ fn next_press(bytes: &[u8]) -> Step {
 /// sequence carries modifier 2, and it is resolved here rather than reported as
 /// a control of its own. A shifted digit is whatever glyph the player's layout
 /// puts there, so it reaches nothing.
+///
+/// Shift is the one button on the panel that never leaves here as a press. A
+/// terminal does not report the key at all — it reports what was typed while it
+/// was held — so there is nothing to send until the control it modifies
+/// arrives, and then it is that control's event carrying it.
 ///
 /// The same mapping is what the reader hands the screen to name a control by,
 /// so the legend a player reads cannot disagree with the keys that work. A key

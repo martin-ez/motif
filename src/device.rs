@@ -17,6 +17,12 @@
 //! when the panel gains a control, and a control the panel lacks cannot be
 //! named at all.
 //!
+//! The panel is twelve buttons and one encoder: four to navigate, four scenes,
+//! three for the transport, shift, and the encoder beside them. That shape was
+//! settled the way the screen was, by drawing it — a
+//! [`Legend`](crate::ui::Legend) lays the panel out on screen, and a control
+//! with nowhere to sit in that picture is a control the panel does not have.
+//!
 //! Everything is available in a constant expression, so buffers can be sized by
 //! the compiler:
 //!
@@ -131,12 +137,13 @@ panel_control! {
     /// the panel, so the fourth button is the fourth button whatever is loaded
     /// under it.
     ///
-    /// Shift is not a button. It is a modifier — it changes what another
-    /// control means rather than meaning anything alone — so a backend resolves
-    /// it and stamps it onto the event. A `Shift` variant here would put the
-    /// held state back into every consumer, which is key handling with a new
-    /// name. It is still a key under the player's hand, so it is drawable as
-    /// [`Control::Shift`].
+    /// Shift is here because the panel has a button there, under the player's
+    /// thumb, and a set that leaves it out cannot describe the hardware. It is
+    /// still resolved as a modifier rather than reported: it changes what
+    /// another control means rather than meaning anything alone, so a backend
+    /// folds it into [`ControlEvent::is_shifted`](crate::ui::ControlEvent) and
+    /// never sends it as a press of its own. It is a button one can point at
+    /// and not a state every consumer has to track.
     enum Button;
     /// Every button, in panel order.
     ///
@@ -165,6 +172,8 @@ panel_control! {
     Stop,
     /// Arm capture.
     Record,
+    /// Change what the next control does.
+    Shift,
 }
 
 /// A control on the panel, of whichever kind.
@@ -182,41 +191,33 @@ pub enum Control {
     Button(Button),
     /// An encoder, which is turned.
     Encoder(Encoder),
-    /// The shift key, which is held.
-    ///
-    /// It is here and not in [`Button`] because it never arrives as an event:
-    /// it changes what another control means, and a backend resolves it onto
-    /// that control's event. It is still a key on the panel that a player has
-    /// to find, so anything drawing the panel has to be able to name it.
-    Shift,
 }
 
 impl Control {
     /// Every control on the panel: the buttons in panel order, then the
-    /// encoders left to right, then shift.
+    /// encoders left to right.
     ///
     /// A control's place here is its [`position`](Self::position), so an array
     /// sized by `ALL.len()` holds one entry per control.
-    pub const ALL: [Self; Button::ALL.len() + Encoder::ALL.len() + 1] = Self::listed();
+    pub const ALL: [Self; Button::ALL.len() + Encoder::ALL.len()] = Self::listed();
 
     /// Where this control sits in [`ALL`](Self::ALL).
     pub const fn position(self) -> usize {
         match self {
             Self::Button(button) => button as usize,
             Self::Encoder(encoder) => Button::ALL.len() + encoder as usize,
-            Self::Shift => Button::ALL.len() + Encoder::ALL.len(),
         }
     }
 
-    const fn listed() -> [Self; Button::ALL.len() + Encoder::ALL.len() + 1] {
-        let mut listed = [Self::Shift; Button::ALL.len() + Encoder::ALL.len() + 1];
+    const fn listed() -> [Self; Button::ALL.len() + Encoder::ALL.len()] {
+        let mut listed = [Self::Button(Button::Up); Button::ALL.len() + Encoder::ALL.len()];
         let mut at = 0;
 
         while at < Button::ALL.len() {
             listed[at] = Self::Button(Button::ALL[at]);
             at += 1;
         }
-        while at < Button::ALL.len() + Encoder::ALL.len() {
+        while at < listed.len() {
             listed[at] = Self::Encoder(Encoder::ALL[at - Button::ALL.len()]);
             at += 1;
         }

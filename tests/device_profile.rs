@@ -157,12 +157,16 @@ fn every_encoder_is_a_control_on_the_panel() {
 }
 
 #[test]
-fn shift_is_a_control_on_the_panel_without_being_a_button() {
-    assert!(Control::ALL.contains(&Control::Shift));
-    assert_eq!(
-        Control::ALL.len(),
-        Button::ALL.len() + Encoder::ALL.len() + 1
-    );
+fn shift_is_a_button_on_the_panel_like_any_other() {
+    assert!(Button::ALL.contains(&Button::Shift));
+    assert!(Control::ALL.contains(&Control::Button(Button::Shift)));
+}
+
+#[test]
+fn the_panel_is_twelve_buttons_and_an_encoder() {
+    assert_eq!(Button::ALL.len(), 12);
+    assert_eq!(Encoder::ALL.len(), 1);
+    assert_eq!(Control::ALL.len(), Button::ALL.len() + Encoder::ALL.len());
 }
 
 #[test]

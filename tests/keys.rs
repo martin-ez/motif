@@ -281,7 +281,26 @@ fn the_encoder_is_named_by_the_pair_of_keys_that_turn_it() {
 
 #[test]
 fn shift_is_named_by_the_key_that_holds_it() {
-    assert_eq!(hint(Control::Shift), "⇧");
+    assert_eq!(hint(Control::Button(Button::Shift)), "⇧");
+}
+
+#[test]
+fn shift_never_arrives_as_a_press_of_its_own() {
+    let held = [&b"Z"[..], b"X", b"C", b"\x1b[1;2A", b"\x1b[1;2D"];
+
+    for typed in held {
+        let shift = events(typed).into_iter().find(|event| {
+            matches!(
+                event,
+                ControlEvent::Pressed {
+                    button: Button::Shift,
+                    ..
+                }
+            )
+        });
+
+        assert_eq!(shift, None, "{typed:?} reported shift as a press");
+    }
 }
 
 #[test]
