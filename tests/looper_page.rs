@@ -10,7 +10,7 @@ use motif::audio::{
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{
-    LoopPosition, LoopWaveform, LooperPage, Transport, position_meter, waveform_meter,
+    LoopBuffer, LoopPosition, LoopWaveform, LooperPage, Transport, position_meter, waveform_meter,
 };
 use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Frame, Page, Turn};
@@ -20,6 +20,10 @@ const SECOND: u32 = DeviceProfile::TARGET.audio.sample_rate;
 
 /// Half a second of frames, which is 120 BPM.
 const HALF_SECOND: usize = SECOND as usize / 2;
+
+/// The stack a loop with something on it is at least as deep as, so a position
+/// drawn for its playhead is not also asserting an empty stack.
+const A_TAKE: usize = 1;
 
 /// Room for more commands than any test sends, so a refused send is a fact
 /// about the page rather than about the queue.
@@ -94,6 +98,10 @@ fn page_showing(position: LoopPosition) -> LooperPage {
     )
 }
 
+fn page_stacked(depth: usize) -> LooperPage {
+    page_showing(LoopPosition::new(SECOND, 8 * SECOND, depth))
+}
+
 fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
     let (frames, elapsed) = sample_clock(sample_rate);
 
@@ -165,6 +173,12 @@ fn drawn(page: &mut LooperPage) -> Vec<String> {
 
 fn screen_of(page: &mut LooperPage) -> String {
     drawn(page).join("\n")
+}
+
+fn row_holding(rows: &[String], text: &str) -> usize {
+    rows.iter()
+        .position(|row| row.contains(text))
+        .unwrap_or_else(|| panic!("the page draws no row holding {text:?}"))
 }
 
 /// The glyphs the loop's shape is drawn from, densest last.
@@ -413,14 +427,14 @@ fn a_transport_that_captures_nothing_is_not_marked_armed() {
 
 #[test]
 fn the_readout_shows_the_published_position() {
-    let mut page = page_showing(LoopPosition::new(3 * SECOND / 2, 8 * SECOND));
+    let mut page = page_showing(LoopPosition::new(3 * SECOND / 2, 8 * SECOND, A_TAKE));
 
     assert!(screen_of(&mut page).contains("0:01.5 / 0:08.0"));
 }
 
 #[test]
 fn a_loop_past_a_minute_reads_in_minutes() {
-    let mut page = page_showing(LoopPosition::new(75 * SECOND, 90 * SECOND));
+    let mut page = page_showing(LoopPosition::new(75 * SECOND, 90 * SECOND, A_TAKE));
 
     assert!(screen_of(&mut page).contains("1:15.0 / 1:30.0"));
 }
@@ -432,14 +446,22 @@ fn an_empty_loop_reads_as_nothing_recorded() {
 
 #[test]
 fn the_bar_fills_with_the_playhead() {
-    let quarter = bar_of(&mut page_showing(LoopPosition::new(2 * SECOND, 8 * SECOND)));
+    let quarter = bar_of(&mut page_showing(LoopPosition::new(
+        2 * SECOND,
+        8 * SECOND,
+        A_TAKE,
+    )));
 
     assert_eq!(quarter.filled * 4, quarter.width);
 }
 
 #[test]
 fn a_finished_loop_fills_the_bar() {
-    let bar = bar_of(&mut page_showing(LoopPosition::new(8 * SECOND, 8 * SECOND)));
+    let bar = bar_of(&mut page_showing(LoopPosition::new(
+        8 * SECOND,
+        8 * SECOND,
+        A_TAKE,
+    )));
 
     assert_eq!(bar.filled, bar.width);
 }
@@ -452,6 +474,35 @@ fn an_empty_loop_draws_an_empty_bar() {
 #[test]
 fn the_bar_spans_the_screen() {
     assert_eq!(bar_of(&mut page()).width, SCREEN.columns - 2);
+}
+
+#[test]
+fn a_loop_with_nothing_recorded_shows_an_empty_stack() {
+    let expected = format!("LAYERS 0/{}", LoopBuffer::LAYERS);
+
+    assert!(screen_of(&mut page()).contains(&expected));
+}
+
+#[test]
+fn the_stack_shows_how_many_layers_are_recorded() {
+    let recorded = 3;
+    let expected = format!("LAYERS {recorded}/{}", LoopBuffer::LAYERS);
+
+    assert!(screen_of(&mut page_stacked(recorded)).contains(&expected));
+}
+
+#[test]
+fn a_stack_with_no_room_left_shows_every_layer_taken() {
+    let expected = format!("LAYERS {0}/{0}", LoopBuffer::LAYERS);
+
+    assert!(screen_of(&mut page_stacked(LoopBuffer::LAYERS)).contains(&expected));
+}
+
+#[test]
+fn the_stack_is_drawn_on_the_row_under_the_gain() {
+    let rows = drawn(&mut page_stacked(3));
+
+    assert_eq!(row_holding(&rows, "LAYERS"), row_holding(&rows, "dB") + 1);
 }
 
 #[test]

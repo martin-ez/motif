@@ -135,6 +135,7 @@ impl LoopEngine {
         self.position.publish(LoopPosition::new(
             frame_count(self.playhead),
             frame_count(self.buffer.len()),
+            self.buffer.depth(),
         ));
         self.waveform.publish(self.buffer.waveform());
     }
