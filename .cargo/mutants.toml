@@ -29,4 +29,8 @@ exclude_re = [
   # `<=` admits only the selection sitting on the offset, where the assignment
   # it admits sets the offset to the value it already holds.
   'replace < with <= in ListPage::keep_the_selection_visible',
+  # The panel has one encoder, whose discriminant is zero, so adding it to the
+  # buttons' length and subtracting it land in the same slot. A second encoder
+  # makes the two differ, and this line should go when one arrives.
+  'replace \+ with - in Control::position',
 ]

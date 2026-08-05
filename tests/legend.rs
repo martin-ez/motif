@@ -42,6 +42,20 @@ impl Controls for Lettered {
     }
 }
 
+/// A panel that names each control with three glyphs, as a terminal names the
+/// encoder by the pair of keys that turn it.
+struct Wordy;
+
+impl Controls for Wordy {
+    fn poll(&mut self) -> Option<ControlEvent> {
+        None
+    }
+
+    fn hint(&self, control: Control) -> Option<Hint> {
+        Some(Hint::new(['(', glyph_of(control), ')']))
+    }
+}
+
 /// A panel whose keys are labelled under the player's hands, so the screen has
 /// nothing to name them with.
 struct Unlabelled;
@@ -272,6 +286,44 @@ fn a_knob_the_page_answers_is_drawn_doubled_rather_than_heavy() {
 
     assert_eq!(glyph_at(&frame, knob.column, knob.row - 1), '═');
     assert_eq!(glyph_at(&frame, knob.column, knob.row + 1), '═');
+}
+
+#[test]
+fn a_hint_of_several_glyphs_is_centred_on_its_key() {
+    let frame = drawn(&Legend::blank(), &Wordy);
+    let opens = found(&frame, "╭");
+    let closes = found(&frame, "╮");
+    let face: String = (opens.column..=closes.column)
+        .map(|column| glyph_at(&frame, column, opens.row + 1))
+        .collect();
+
+    assert_eq!(face, format!("│ ({}) │", glyph_of(Encoder::Main)));
+}
+
+#[test]
+fn the_cross_keys_are_evenly_spaced() {
+    let frame = drawn(&Legend::blank(), &Lettered);
+    let (left, down) = (key_of(&frame, Button::Left), key_of(&frame, Button::Down));
+    let right = key_of(&frame, Button::Right);
+
+    assert_eq!(down.column - left.column, right.column - down.column);
+}
+
+#[test]
+fn the_panel_is_centred_on_the_screen() {
+    let frame = drawn(&Legend::blank(), &Lettered);
+    let drawn_columns: Vec<usize> = (0..SCREEN.columns)
+        .filter(|column| {
+            (SCREEN.rows - Legend::ROWS..SCREEN.rows)
+                .any(|row| glyph_at(&frame, *column, row) != ' ')
+        })
+        .collect();
+    let (leftmost, rightmost) = (
+        *drawn_columns.first().expect("the panel is drawn"),
+        *drawn_columns.last().expect("the panel is drawn"),
+    );
+
+    assert_eq!(leftmost, SCREEN.columns - 1 - rightmost);
 }
 
 #[test]

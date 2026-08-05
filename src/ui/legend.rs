@@ -69,7 +69,7 @@ const KEY_WIDTH: usize = 5;
 const ENCODER_WIDTH: usize = 7;
 const KEY_ROWS: usize = 3;
 
-const CROSS_LEFT_AT: usize = 9;
+const CROSS_LEFT_AT: usize = 8;
 const CROSS_MIDDLE_AT: usize = CROSS_LEFT_AT + KEY_WIDTH + 1;
 const CROSS_RIGHT_AT: usize = CROSS_MIDDLE_AT + KEY_WIDTH + 1;
 const GRID_AT: usize = CROSS_RIGHT_AT + KEY_WIDTH + 3;
