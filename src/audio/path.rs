@@ -74,6 +74,13 @@ impl<P: AudioPath> AudioPath for Option<P> {
             path.render(captured, playing);
         }
     }
+
+    fn apply(&mut self, command: Command) -> bool {
+        match self {
+            Some(path) => path.apply(command),
+            None => false,
+        }
+    }
 }
 
 /// The path that plays the frames it captured.

@@ -14,7 +14,7 @@
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
 //! hardware panel once there is one.
 
-use crate::audio::{Command, CommandSender, SampleClockReader, command_channel};
+use crate::audio::{Command, CommandSender, Commanded, SampleClockReader, command_channel};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
 use crate::looper::{LoopEngine, PositionReader, Transport, position_meter};
 use crate::seq::{BeatGrid, TapTempo};
@@ -147,13 +147,16 @@ impl LooperPage {
     /// Both ends are allocated here and never again, so this belongs in setup,
     /// before the stream starts. The engine is what a stream plays, so it goes
     /// to whatever opens one.
-    pub fn driving(profile: AudioProfile, elapsed: SampleClockReader) -> (Self, LoopEngine) {
+    pub fn driving(
+        profile: AudioProfile,
+        elapsed: SampleClockReader,
+    ) -> (Self, Commanded<LoopEngine>) {
         let (commands, orders) = command_channel(QUEUED_COMMANDS);
         let (publishing, playhead) = position_meter();
 
         (
             Self::new(playhead, elapsed, commands),
-            LoopEngine::new(profile, orders, publishing),
+            Commanded::new(orders, LoopEngine::new(profile, publishing)),
         )
     }
 

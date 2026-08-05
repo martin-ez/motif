@@ -10,8 +10,8 @@
 use std::sync::{Arc, Mutex};
 
 use motif::audio::{
-    AudioBackend, AudioPath, Command, DeviceSelection, NullBackend, Passthrough, StreamConfig,
-    StreamRequest,
+    AudioBackend, AudioPath, Command, DeviceSelection, InputMonitor, NullBackend, Passthrough,
+    StreamConfig, StreamRequest,
 };
 
 fn granted() -> StreamConfig {
@@ -247,6 +247,21 @@ fn a_path_that_was_taken_prepares_nothing() {
     taken.prepare(granted());
 
     assert!(taken.is_none());
+}
+
+#[test]
+fn a_path_that_is_there_answers_what_it_would_have_answered() {
+    let mut path = Some(InputMonitor::new());
+
+    assert!(path.apply(Command::SetGain(0.5)));
+    assert!(!path.apply(Command::Clear));
+}
+
+#[test]
+fn a_path_that_was_taken_answers_nothing() {
+    let mut taken: Option<InputMonitor> = None;
+
+    assert!(!taken.apply(Command::SetGain(0.5)));
 }
 
 #[test]
