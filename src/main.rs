@@ -1,11 +1,12 @@
 //! Entry point for the `motif` binary.
 //!
-//! Composition only: it builds the pages, hands them to the shell, wraps that
-//! in the monitor holding the audio device open, takes the terminal over, runs
-//! the event loop, and reports why the run ended. The device opens before the
-//! terminal does, so a host enumerating onto stderr does it to an ordinary
-//! screen rather than over the drawn frame. The shell owns the pages and
-//! quitting, and is the only way out of the mode the terminal is left in.
+//! Composition only: it builds the one link to the audio device and the pages,
+//! hands the pages to the shell, wraps that in the monitor that holds the link
+//! open, takes the terminal over, runs the event loop, and reports why the run
+//! ended. The link is built here because a run has one, whatever comes to share
+//! it, and it opens before the terminal does so that a host enumerating onto
+//! stderr does it to an ordinary screen. The shell owns the pages and quitting,
+//! and is the only way out of the mode the terminal is left in.
 //!
 //! What is left here is chrome the shell has no notion of. It takes the top row
 //! and the bottom one off the region it was handed and gives the shell the rest,
@@ -14,7 +15,7 @@
 
 use std::process::ExitCode;
 
-use motif::audio::{Counting, CpalBackend, StreamRequest, sample_clock};
+use motif::audio::{Counting, CpalBackend, SharedLink, StreamRequest, sample_clock};
 use motif::device::DeviceProfile;
 use motif::looper::LooperPage;
 use motif::monitor::Monitor;
@@ -74,9 +75,8 @@ fn play() -> Result<(), RenderError> {
         shell: Shell::new([Box::new(looper)]),
     };
     let mut playing = Some(Counting::new(frames, engine));
-    let mut monitor = Monitor::opened(chrome, CpalBackend::new(), requested(), move || {
-        playing.take()
-    });
+    let link = SharedLink::defaulting(CpalBackend::new(), requested(), move || playing.take());
+    let mut monitor = Monitor::watching(chrome, link);
 
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, Command,
     DeviceError, DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, NullBackend,
-    Passthrough, StreamConfig, StreamRequest, StreamState, Xruns,
+    Passthrough, SharedLink, StreamConfig, StreamRequest, StreamState, Xruns,
 };
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
@@ -349,11 +349,9 @@ impl DuplexStream for LoudStream {
 type Monitoring<A> = Monitor<A, NullBackend, fn() -> Passthrough>;
 
 fn hearing_a(levels: Levels) -> Monitor<Counted, LoudBackend, fn() -> Passthrough> {
-    Monitor::opened(
+    Monitor::watching(
         Counted::default(),
-        LoudBackend(levels),
-        request(),
-        Passthrough::new,
+        SharedLink::defaulting(LoudBackend(levels), request(), Passthrough::new),
     )
 }
 
@@ -364,19 +362,23 @@ fn hearing(
 ) -> Monitor<Counted, NullBackend, impl FnMut() -> Heard> {
     let path = heard.clone();
 
-    Monitor::opened(Counted::default(), backend, request(), move || path.clone())
+    Monitor::watching(
+        Counted::default(),
+        SharedLink::defaulting(backend, request(), move || path.clone()),
+    )
 }
 
 fn monitoring(app: Counted, backend: NullBackend, request: StreamRequest) -> Monitoring<Counted> {
-    Monitor::opened(app, backend, request, Passthrough::new)
+    Monitor::watching(
+        app,
+        SharedLink::defaulting(backend, request, Passthrough::new),
+    )
 }
 
 fn filling() -> Monitoring<Filling> {
-    Monitor::opened(
+    Monitor::watching(
         Filling,
-        NullBackend::rounding(config()),
-        request(),
-        Passthrough::new,
+        SharedLink::defaulting(NullBackend::rounding(config()), request(), Passthrough::new),
     )
 }
 
@@ -392,9 +394,11 @@ fn unplug(monitor: &Monitoring<Counted>) {
     monitor
         .link()
         .expect("a monitor over a device that opened has a link")
-        .stream()
-        .expect("an open link has a stream")
-        .fail(DeviceError::DeviceNotAvailable);
+        .read(|held| {
+            held.stream()
+                .expect("an open link has a stream")
+                .fail(DeviceError::DeviceNotAvailable);
+        });
 }
 
 fn drawn<A: App, B: AudioBackend, F>(monitor: &mut Monitor<A, B, F>) -> Frame {
@@ -654,11 +658,13 @@ fn a_closed_monitor_says_so_on_screen() {
 fn a_monitor_stops_the_stream_when_the_run_ends() {
     let asked = Asked::default();
 
-    drop(Monitor::opened(
+    drop(Monitor::watching(
         Counted::default(),
-        RecordingBackend(asked.clone()),
-        request(),
-        Passthrough::new,
+        SharedLink::defaulting(
+            RecordingBackend(asked.clone()),
+            request(),
+            Passthrough::new as fn() -> Passthrough,
+        ),
     ));
 
     assert_eq!(asked.of(), ["open", "start", "stop"]);

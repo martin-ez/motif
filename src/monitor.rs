@@ -1,12 +1,12 @@
 //! Holding a device open for the length of a run, and showing what it is doing.
 //!
 //! [`Monitor`] is the half of the composition that holds the device and not the
-//! decision: it opens whatever a backend would open if nobody chose, starts it,
-//! keeps it for the run and stops it on the way out, while what its streams play
-//! is the caller's to say. It wraps an [`App`] rather than being one, so the
-//! pages under it neither know nor need to know that a device is open — the
-//! bottom row is taken for the state and the input level before the pages are
-//! handed the rest, and every cell they are given stays theirs.
+//! decision: it starts the link it is lent, keeps it for the run and stops it on
+//! the way out, while what its streams play and what they are opened on are the
+//! caller's to say. It wraps an [`App`] rather than being one, so the pages
+//! under it neither know nor need to know that a device is open — the bottom row
+//! is taken for the state and the input level before the pages are handed the
+//! rest, and every cell they are given stays theirs.
 //!
 //! A device that is not there is drawn, never fatal. An instrument that quit
 //! because an interface was unplugged would be wrong, and one that drew a
@@ -14,8 +14,7 @@
 //! goes on the frame and the run carries on.
 
 use crate::audio::{
-    AudioBackend, AudioPath, AudioState, DeviceError, DeviceLink, DuplexStream, Levels,
-    StreamRequest,
+    AudioBackend, AudioPath, AudioState, DeviceError, DeviceLink, DuplexStream, Levels, SharedLink,
 };
 use crate::ui::{App, ControlEvent, Flow, Legend, LevelMeter, Region};
 
@@ -27,11 +26,13 @@ const METER_COLUMNS: usize = 24;
 ///
 /// Everything it does with the device happens on the application thread, which
 /// is where opening, starting, stopping and dropping a stream belong. What goes
-/// on the callback is whatever the caller's `path` builds, and a monitor is
-/// what keeps that stream alive long enough to hear.
+/// on the callback is whatever the link's path builds, and a monitor is what
+/// keeps that stream alive long enough to hear.
 ///
 /// ```
-/// use motif::audio::{AudioState, NullBackend, Passthrough, StreamConfig, StreamRequest};
+/// use motif::audio::{
+///     AudioState, NullBackend, Passthrough, SharedLink, StreamConfig, StreamRequest,
+/// };
 /// use motif::device::Button;
 /// use motif::monitor::Monitor;
 /// use motif::ui::{App, ControlEvent, Flow, Legend, Region};
@@ -63,18 +64,15 @@ const METER_COLUMNS: usize = 24;
 ///     block_size: 256,
 /// };
 ///
-/// let monitor = Monitor::opened(
-///     Quiet,
-///     NullBackend::rounding(granted),
-///     request,
-///     Passthrough::new,
-/// );
+/// let link = SharedLink::defaulting(NullBackend::rounding(granted), request, Passthrough::new);
+///
+/// let monitor = Monitor::watching(Quiet, link);
 ///
 /// assert_eq!(monitor.state(), AudioState::Playing);
 /// ```
 pub struct Monitor<A: App, B: AudioBackend, F> {
     app: A,
-    link: Option<DeviceLink<B, F>>,
+    link: Option<SharedLink<B, F>>,
     meter: LevelMeter,
 }
 
@@ -83,31 +81,28 @@ where
     F: FnMut() -> P,
     P: AudioPath,
 {
-    /// Open what `backend` would open at `request` if nobody chose, start it
-    /// playing through what `path` builds, and hold it behind `app`.
+    /// Open `link`, start it playing, and hold it for the run behind `app`.
     ///
-    /// This cannot fail. A backend with nothing to offer, one that refuses the
-    /// request and one whose device will not start all leave the monitor in
-    /// [`AudioState::Lost`] carrying why, that being something to draw rather
-    /// than a reason not to run. A backend with nothing to offer never builds a
-    /// path: there is no stream for one to play through.
-    pub fn opened(app: A, backend: B, request: StreamRequest, path: F) -> Self {
-        let Some(selection) = backend.defaults(request.sample_rate) else {
-            return Self {
-                app,
-                link: None,
-                meter: LevelMeter::new(),
-            };
-        };
-
-        let mut link = DeviceLink::new(backend, request, selection, path);
-        if link.open().is_ok() {
-            let _started = link.start();
+    /// The link belongs to the run rather than to the monitor, so whatever else
+    /// configures it holds a handle of its own and a composition with no device
+    /// to open passes `None`. Opening happens here rather than where the link
+    /// was built, so that a page listing what it could be opened on has done so
+    /// before any stream holds the device.
+    ///
+    /// This cannot fail. A device that refuses the request or will not start
+    /// leaves the monitor in [`AudioState::Lost`] carrying why.
+    pub fn watching(app: A, mut link: Option<SharedLink<B, F>>) -> Self {
+        if let Some(link) = link.as_mut() {
+            link.change(|held| {
+                if held.open().is_ok() {
+                    let _started = held.start();
+                }
+            });
         }
 
         Self {
             app,
-            link: Some(link),
+            link,
             meter: LevelMeter::new(),
         }
     }
@@ -121,41 +116,41 @@ impl<A: App, B: AudioBackend, F> Monitor<A, B, F> {
     /// player cannot tell apart from a device that has gone.
     pub fn state(&self) -> AudioState {
         match &self.link {
-            Some(link) => link.state(),
+            Some(link) => link.read(DeviceLink::state),
             None => AudioState::Lost(DeviceError::DeviceNotAvailable),
         }
     }
 
-    /// The link holding the stream, or `None` where there was no device to
-    /// open.
+    /// A handle on the link holding the stream, or `None` where there was no
+    /// device to open.
     ///
     /// This is the route to what the stream knows and the monitor does not: the
     /// configuration the device granted, the levels, the dropout counts, the
     /// callback's headroom.
-    pub fn link(&self) -> Option<&DeviceLink<B, F>> {
+    pub fn link(&self) -> Option<&SharedLink<B, F>> {
         self.link.as_ref()
     }
 
     /// Stop and drop the stream, leaving the application running.
     ///
     /// What dropping the monitor does, so that a run can hand the device back
-    /// before the monitor itself goes.
+    /// before the monitor itself goes. Whatever else holds the link keeps its
+    /// handle, and finds it closed.
     pub fn close(&mut self) {
         if let Some(link) = self.link.as_mut() {
-            link.close();
+            link.change(DeviceLink::close);
         }
     }
 
     fn heard(&self) -> Levels {
-        self.link
-            .as_ref()
-            .and_then(DeviceLink::stream)
-            .map_or(Levels::SILENT, DuplexStream::levels)
+        self.link.as_ref().map_or(Levels::SILENT, |link| {
+            link.read(|held| held.stream().map_or(Levels::SILENT, DuplexStream::levels))
+        })
     }
 
     fn polled(&mut self) -> AudioState {
         if let Some(link) = self.link.as_mut() {
-            link.poll();
+            link.change(DeviceLink::poll);
         }
 
         self.state()
