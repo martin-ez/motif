@@ -17,6 +17,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::device::DeviceProfile;
+use crate::ui::hold::{Window, frames_in};
 
 /// How much of the time a frame was allowed to take the loop used.
 ///
@@ -48,7 +49,7 @@ impl Pace {
     /// A second's worth. The reader is a person looking at a page rather than
     /// another loop, so the window is what a spike has to survive to be seen at
     /// all: a maximum decaying over two frames is gone in 66 ms.
-    pub const RECENT_FRAMES: usize = recent_frames();
+    pub const RECENT_FRAMES: usize = frames_in(RECENT);
 
     /// The fraction of the budget the worst recent frame left unused.
     ///
@@ -92,7 +93,7 @@ pub fn pace_meter() -> (PaceWriter, PaceReader) {
     (
         PaceWriter {
             published: Rc::clone(&published),
-            window: Window::default(),
+            window: Window::spanning(Pace::RECENT_FRAMES),
         },
         PaceReader { published },
     )
@@ -146,32 +147,3 @@ impl PaceReader {
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
 
 const RECENT: Duration = Duration::from_secs(1);
-
-const fn recent_frames() -> usize {
-    if BUDGET.is_zero() {
-        return 0;
-    }
-    (RECENT.as_nanos() / BUDGET.as_nanos()) as usize
-}
-
-#[derive(Default)]
-struct Window {
-    covered: usize,
-    holding: f32,
-    held: f32,
-}
-
-impl Window {
-    fn holding(&mut self, load: f32) -> f32 {
-        self.holding = self.holding.max(load);
-        self.covered += 1;
-
-        let peak = self.holding.max(self.held);
-        if self.covered >= Pace::RECENT_FRAMES {
-            self.held = self.holding;
-            self.holding = 0.0;
-            self.covered = 0;
-        }
-        peak
-    }
-}

@@ -9,7 +9,7 @@
 //! A frame is the size of the device's screen, taken from
 //! [`DeviceProfile::TARGET`]. What draws into it is handed a [`Region`] of it
 //! rather than the whole thing, so chrome and a page cannot claim the same
-//! cell. [`ListPage`] and [`Mode`] are here too, belonging to no one screen.
+//! cell. [`ListPage`], [`LevelMeter`] and [`Mode`] belong to no one screen.
 //!
 //! A [`Page`] is one screen and a [`Shell`] holds one per [`Mode`], forwarding
 //! to whichever is showing, so an `App` is implemented once and not per screen.
@@ -35,9 +35,11 @@ use crate::device::DeviceProfile;
 
 mod clock;
 mod events;
+mod hold;
 mod input;
 mod legend;
 mod list;
+mod meter;
 mod mode;
 #[cfg(feature = "frame-pace")]
 mod pace;
@@ -51,6 +53,7 @@ pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
 pub use legend::{Legend, Panel};
 pub use list::ListPage;
+pub use meter::LevelMeter;
 pub use mode::Mode;
 #[cfg(feature = "frame-pace")]
 pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
