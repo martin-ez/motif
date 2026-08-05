@@ -12,8 +12,8 @@
 //! [`Button::Left`] and [`Button::Right`] are left untouched here so that it
 //! stays open.
 
-use crate::device::{Button, DeviceProfile, Encoder};
-use crate::ui::{Cell, ControlEvent, Frame, Legend, Page, Turn};
+use crate::device::{Button, Encoder};
+use crate::ui::{Cell, ControlEvent, Legend, Page, Region, Turn};
 
 const MARKER: char = '>';
 const MARKER_COLUMN: usize = 0;
@@ -25,8 +25,10 @@ const LABEL_COLUMN: usize = 2;
 /// gives the player no way to feel where it ends, and every row past the last
 /// one costs a turn of the encoder to undo.
 ///
-/// A list longer than the screen scrolls by the least that keeps the selection
+/// A list longer than its region scrolls by the least that keeps the selection
 /// visible, so the rows around it stay where they were and only the edge moves.
+/// How many rows that is depends on what the chrome above the page took, so it
+/// is settled when the page draws and not before.
 ///
 /// ```
 /// use motif::device::Button;
@@ -46,12 +48,6 @@ pub struct ListPage {
 }
 
 impl ListPage {
-    /// How many rows of the list are on screen at once.
-    ///
-    /// The page fills the frame it is handed, so this is the screen's height
-    /// and not a number of its own.
-    pub const VISIBLE_ROWS: usize = DeviceProfile::TARGET.screen.rows;
-
     /// A page listing `rows`, with the first of them selected.
     pub fn new(rows: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
@@ -83,20 +79,18 @@ impl ListPage {
     fn towards_the_end(&mut self) {
         if self.selected + 1 < self.rows.len() {
             self.selected += 1;
-            self.keep_the_selection_visible();
         }
     }
 
     fn towards_the_start(&mut self) {
         self.selected = self.selected.saturating_sub(1);
-        self.keep_the_selection_visible();
     }
 
-    fn keep_the_selection_visible(&mut self) {
+    fn keep_the_selection_visible(&mut self, visible: usize) {
         if self.selected < self.offset {
             self.offset = self.selected;
-        } else if self.selected >= self.offset + Self::VISIBLE_ROWS {
-            self.offset = self.selected + 1 - Self::VISIBLE_ROWS;
+        } else if self.selected >= self.offset + visible {
+            self.offset = self.selected + 1 - visible;
         }
     }
 }
@@ -132,14 +126,15 @@ impl Page for ListPage {
             .answering(Encoder::Main)
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, mut region: Region<'_>) {
+        self.keep_the_selection_visible(region.rows());
         let visible = self.rows.iter().enumerate().skip(self.offset);
 
-        for (row, (index, label)) in visible.take(Self::VISIBLE_ROWS).enumerate() {
+        for (row, (index, label)) in visible.take(region.rows()).enumerate() {
             if Some(index) == self.selected() {
-                frame.set(MARKER_COLUMN, row, Cell::new(MARKER));
+                region.set(MARKER_COLUMN, row, Cell::new(MARKER));
             }
-            frame.write(LABEL_COLUMN, row, label);
+            region.write(LABEL_COLUMN, row, label);
         }
     }
 }

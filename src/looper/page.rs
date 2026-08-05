@@ -7,14 +7,14 @@
 //! own transport would drift from the buttons.
 //!
 //! Nothing here names a key, a terminal or an escape sequence. The page is
-//! handed [`ControlEvent`]s and fills a [`Frame`], so the same page draws on a
+//! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
 //! hardware panel once there is one.
 
 use crate::audio::SampleClockReader;
 use crate::device::{Button, DeviceProfile};
 use crate::looper::{PositionReader, Transport};
 use crate::seq::{BeatGrid, TapTempo};
-use crate::ui::{ControlEvent, Frame, Legend, Page};
+use crate::ui::{ControlEvent, Legend, Page, Region};
 
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
@@ -50,8 +50,8 @@ fn clock(frames: u32) -> String {
     )
 }
 
-fn bar(playhead: u32, recorded: u32) -> String {
-    let width = DeviceProfile::TARGET.screen.columns.saturating_sub(2);
+fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
+    let width = columns.saturating_sub(2);
     let filled = match recorded {
         0 => 0,
         recorded => width * playhead as usize / recorded as usize,
@@ -165,15 +165,15 @@ impl Page for LooperPage {
             .answering(Button::Record)
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn draw(&mut self, mut region: Region<'_>) {
         let position = self.position.read();
 
-        frame.write(0, STATE_ROW, named(self.transport));
+        region.write(0, STATE_ROW, named(self.transport));
         if self.transport.captures_input() {
-            frame.write(ARMED_COLUMN, STATE_ROW, ARMED);
+            region.write(ARMED_COLUMN, STATE_ROW, ARMED);
         }
         if let Some(tempo) = self.taps.tempo() {
-            frame.write(0, TEMPO_ROW, &format!("{tempo:.1} BPM"));
+            region.write(0, TEMPO_ROW, &format!("{tempo:.1} BPM"));
         }
 
         let readout = format!(
@@ -181,7 +181,11 @@ impl Page for LooperPage {
             clock(position.playhead()),
             clock(position.recorded())
         );
-        frame.write(0, READOUT_ROW, &readout);
-        frame.write(0, BAR_ROW, &bar(position.playhead(), position.recorded()));
+        region.write(0, READOUT_ROW, &readout);
+        region.write(
+            0,
+            BAR_ROW,
+            &bar(position.playhead(), position.recorded(), region.columns()),
+        );
     }
 }

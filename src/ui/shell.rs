@@ -2,7 +2,7 @@
 //! reaches it.
 
 use crate::device::Button;
-use crate::ui::{App, ControlEvent, Flow, Frame, Legend, Mode, Page};
+use crate::ui::{App, ControlEvent, Flow, Legend, Mode, Page, Region};
 
 /// The pages the instrument has, and the one it is showing.
 ///
@@ -18,7 +18,7 @@ use crate::ui::{App, ControlEvent, Flow, Frame, Legend, Mode, Page};
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{App, Cell, ControlEvent, Frame, Legend, Mode, Page, Shell};
+/// use motif::ui::{App, Cell, ControlEvent, Frame, Legend, Mode, Page, Region, Shell};
 ///
 /// struct Blank;
 ///
@@ -29,8 +29,8 @@ use crate::ui::{App, ControlEvent, Flow, Frame, Legend, Mode, Page};
 ///         Legend::blank().answering(Button::Play)
 ///     }
 ///
-///     fn draw(&mut self, frame: &mut Frame) {
-///         frame.set(0, 0, Cell::new('m'));
+///     fn draw(&mut self, mut region: Region<'_>) {
+///         region.set(0, 0, Cell::new('m'));
 ///     }
 /// }
 ///
@@ -38,7 +38,7 @@ use crate::ui::{App, ControlEvent, Flow, Frame, Legend, Mode, Page};
 /// shell.show(Mode::Looper);
 ///
 /// let mut frame = Frame::blank();
-/// shell.draw(&mut frame);
+/// shell.draw(frame.region());
 ///
 /// assert_eq!(shell.showing(), Mode::Looper);
 /// assert_eq!(frame.get(0, 0), Some(Cell::new('m')));
@@ -107,8 +107,8 @@ impl App for Shell {
             .answering(Button::Stop)
     }
 
-    fn draw(&mut self, frame: &mut Frame) -> Flow {
-        self.page_mut().draw(frame);
+    fn draw(&mut self, region: Region<'_>) -> Flow {
+        self.page_mut().draw(region);
 
         Flow::Continue
     }
