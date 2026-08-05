@@ -339,6 +339,48 @@ fn a_device_offering_nothing_that_wide_is_opened_across_the_selection_alone() {
     assert_eq!(opened, Ok(1));
 }
 
+fn played_across(
+    natural: u16,
+    offers: Vec<u16>,
+    output_channels: ChannelSelection,
+) -> Result<u16, DeviceError> {
+    let backend = NullBackend::offering(
+        StreamConfig {
+            output_channels: natural,
+            ..config()
+        },
+        offers,
+    );
+    let chosen = backend
+        .defaults(48_000)
+        .expect("the null backend has a device in each direction");
+
+    backend
+        .open(
+            &DeviceSelection {
+                output_channels,
+                ..chosen
+            },
+            request(),
+            Passthrough::new(),
+        )
+        .map(|stream| stream.config().output_channels)
+}
+
+#[test]
+fn the_output_device_is_opened_at_the_narrowest_width_that_reaches_the_selection() {
+    let played = played_across(1, vec![1, 2, 4, 8], ChannelSelection { first: 2, count: 1 });
+
+    assert_eq!(played, Ok(4));
+}
+
+#[test]
+fn the_output_device_is_opened_no_narrower_than_the_width_it_runs_at() {
+    let played = played_across(2, vec![1, 2, 4], ChannelSelection { first: 0, count: 1 });
+
+    assert_eq!(played, Ok(2));
+}
+
 #[test]
 fn a_stream_whose_device_is_present_reports_no_fault() {
     let backend = NullBackend::rounding(config());
