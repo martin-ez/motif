@@ -13,7 +13,8 @@
 //! allocation that grows with whatever the host reports.
 //!
 //! [`ListPage`] is here too, being the one screen that belongs to no feature:
-//! anything with rows to move a selection through embeds it.
+//! anything with rows to move a selection through embeds it. So is [`Mode`],
+//! which names the screens the application has and so belongs to no one of them.
 //!
 //! ```
 //! use motif::ui::{Cell, Frame, NullRenderer, RenderError, Renderer};
@@ -37,6 +38,7 @@ mod events;
 mod input;
 mod legend;
 mod list;
+mod mode;
 mod terminal;
 
 pub use clock::{Clock, ScriptedClock, SystemClock};
@@ -44,6 +46,7 @@ pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
 pub use legend::Legend;
 pub use list::ListPage;
+pub use mode::Mode;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 
 /// One character cell of the screen.

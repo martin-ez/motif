@@ -40,6 +40,8 @@
 
 use std::time::Duration;
 
+use crate::closed_set::closed_set;
+
 /// The screen the UI draws into, measured in character cells.
 ///
 /// Cells rather than pixels, so that a terminal and a panel are describable by
@@ -79,28 +81,7 @@ impl ScreenProfile {
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 
-macro_rules! panel_control {
-    (
-        $(#[$control_doc:meta])*
-        enum $control:ident;
-        $(#[$all_doc:meta])*
-        const ALL;
-        $($(#[$variant_doc:meta])* $variant:ident,)+
-    ) => {
-        $(#[$control_doc])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum $control {
-            $($(#[$variant_doc])* $variant,)+
-        }
-
-        impl $control {
-            $(#[$all_doc])*
-            pub const ALL: [Self; [$(stringify!($variant)),+].len()] = [$(Self::$variant),+];
-        }
-    };
-}
-
-panel_control! {
+closed_set! {
     /// An encoder on the panel.
     ///
     /// The panel has one, and it is a closed set of one rather than a bare
@@ -123,7 +104,7 @@ panel_control! {
     Main,
 }
 
-panel_control! {
+closed_set! {
     /// A button on the panel, named for what it does rather than numbered.
     ///
     /// Naming them is what lets a backend's key mapping be checked: a `match`
