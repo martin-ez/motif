@@ -6,10 +6,12 @@
 
 use std::io::Read;
 
-use crate::device::{Button, Encoder};
-use crate::ui::{ControlEvent, Controls, Turn};
+use crate::device::{Button, Control, Encoder};
+use crate::ui::{ControlEvent, Controls, Hint, Turn};
 
 const ESCAPE: u8 = 0x1b;
+const SHIFT: char = '⇧';
+const TURN: char = '/';
 const PARAMETERS_START: usize = 2;
 const PENDING_CAPACITY: usize = 64;
 
@@ -20,6 +22,7 @@ enum Key {
     Down,
     Left,
     Right,
+    Shift,
 }
 
 #[derive(Clone, Copy)]
@@ -39,18 +42,20 @@ fn key_of(button: Button) -> Key {
         Button::Down => Key::Down,
         Button::Left => Key::Left,
         Button::Right => Key::Right,
+        Button::FirstScene => Key::Glyph('1'),
+        Button::SecondScene => Key::Glyph('2'),
+        Button::ThirdScene => Key::Glyph('3'),
+        Button::FourthScene => Key::Glyph('4'),
         Button::Play => Key::Glyph('z'),
         Button::Stop => Key::Glyph('x'),
         Button::Record => Key::Glyph('c'),
+        Button::Shift => Key::Shift,
     }
 }
 
 fn keys_of(encoder: Encoder) -> [Key; 2] {
     match encoder {
-        Encoder::First => [Key::Glyph('q'), Key::Glyph('w')],
-        Encoder::Second => [Key::Glyph('e'), Key::Glyph('r')],
-        Encoder::Third => [Key::Glyph('t'), Key::Glyph('y')],
-        Encoder::Fourth => [Key::Glyph('u'), Key::Glyph('i')],
+        Encoder::Main => [Key::Glyph(','), Key::Glyph('.')],
     }
 }
 
@@ -86,6 +91,27 @@ fn encoder_turned(press: Press) -> Option<ControlEvent> {
 
 fn control_of(press: Press) -> Option<ControlEvent> {
     button_pressed(press).or_else(|| encoder_turned(press))
+}
+
+fn glyph_of(key: Key) -> char {
+    match key {
+        Key::Glyph(glyph) => glyph,
+        Key::Up => '^',
+        Key::Down => 'v',
+        Key::Left => '<',
+        Key::Right => '>',
+        Key::Shift => SHIFT,
+    }
+}
+
+fn hint_of(control: Control) -> Hint {
+    match control {
+        Control::Button(button) => Hint::new([glyph_of(key_of(button))]),
+        Control::Encoder(encoder) => {
+            let [anticlockwise, clockwise] = keys_of(encoder);
+            Hint::new([glyph_of(anticlockwise), TURN, glyph_of(clockwise)])
+        }
+    }
 }
 
 fn arrow(final_byte: u8) -> Option<Key> {
@@ -171,13 +197,24 @@ fn next_press(bytes: &[u8]) -> Step {
 
 /// The keys a terminal sends, reported as the panel's controls.
 ///
-/// The mapping puts the four encoders on four adjacent pairs of keys along the
-/// top row — `q`/`w`, `e`/`r`, `t`/`y`, `u`/`i` — left to right in panel order,
-/// with the left key of a pair turning anticlockwise and the right key
-/// clockwise. Transport sits on `z`, `x` and `c`, in the panel's order of play,
-/// stop and record; navigation is on the arrow keys. Holding shift is an upper
-/// case letter, or an arrow whose escape sequence carries modifier 2, and it is
-/// resolved here rather than reported as a control of its own.
+/// The scene buttons are the number row, `1` to `4`, left to right in panel
+/// order. Transport sits on `z`, `x` and `c`, in the panel's order of play,
+/// stop and record; navigation is on the arrow keys; the encoder turns with
+/// `,` and `.`, which sit under the right hand beside them, anticlockwise on
+/// the left. Holding shift is an upper case letter, or an arrow whose escape
+/// sequence carries modifier 2, and it is resolved here rather than reported as
+/// a control of its own. A shifted digit is whatever glyph the player's layout
+/// puts there, so it reaches nothing.
+///
+/// Shift is the one button on the panel that never leaves here as a press. A
+/// terminal does not report the key at all — it reports what was typed while it
+/// was held — so there is nothing to send until the control it modifies
+/// arrives, and then it is that control's event carrying it.
+///
+/// The same mapping is what the reader hands the screen to name a control by,
+/// so the legend a player reads cannot disagree with the keys that work. A key
+/// that has no glyph of its own is named by the shape it points in — `^`, `v`,
+/// `<`, `>`, `⇧` — and the encoder by its pair, as `,/.`.
 ///
 /// Reads are never waited on: a read that hands back nothing ends the poll, so
 /// a source that blocks until a key is pressed will spend the frame budget. The
@@ -230,6 +267,10 @@ impl<R: Read> KeyReader<R> {
 }
 
 impl<R: Read> Controls for KeyReader<R> {
+    fn hint(&self, control: Control) -> Option<Hint> {
+        Some(hint_of(control))
+    }
+
     fn poll(&mut self) -> Option<ControlEvent> {
         for _ in 0..PENDING_CAPACITY {
             match next_press(&self.pending[..self.filled]) {

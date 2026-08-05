@@ -10,8 +10,8 @@ use std::io::{self, Stdin, Stdout, Write};
 use std::mem::MaybeUninit;
 
 use super::{KeyReader, Viewport};
-use crate::device::DeviceProfile;
-use crate::ui::{ControlEvent, Controls, Frame, RenderError, Renderer};
+use crate::device::{Control, DeviceProfile};
+use crate::ui::{ControlEvent, Controls, Frame, Hint, RenderError, Renderer};
 
 const ENTER_ALTERNATE_SCREEN: &str = "\u{1b}[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\u{1b}[?1049l";
@@ -187,6 +187,10 @@ impl Renderer for CentredScreen<'_> {
 }
 
 impl Controls for TerminalScreen {
+    fn hint(&self, control: Control) -> Option<Hint> {
+        self.reader.hint(control)
+    }
+
     fn poll(&mut self) -> Option<ControlEvent> {
         self.reader.poll()
     }

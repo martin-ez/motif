@@ -13,7 +13,7 @@
 //! ```
 //! use motif::device::Button;
 //! use motif::ui::{
-//!     App, Cell, ControlEvent, EventLoop, Flow, Frame, NullRenderer, ScriptedControls,
+//!     App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, NullRenderer, ScriptedControls,
 //! };
 //!
 //! struct Splash;
@@ -24,6 +24,10 @@
 //!             ControlEvent::Pressed { button: Button::Stop, .. } => Flow::Exit,
 //!             _ => Flow::Continue,
 //!         }
+//!     }
+//!
+//!     fn legend(&self) -> Legend {
+//!         Legend::blank().answering(Button::Stop)
 //!     }
 //!
 //!     fn draw(&mut self, frame: &mut Frame) -> Flow {
@@ -48,7 +52,7 @@
 use std::time::Duration;
 
 use crate::device::DeviceProfile;
-use crate::ui::{Clock, ControlEvent, Controls, Frame, RenderError, Renderer, SystemClock};
+use crate::ui::{Clock, ControlEvent, Controls, Frame, Legend, RenderError, Renderer, SystemClock};
 
 /// The most control events one frame will take.
 ///
@@ -56,7 +60,7 @@ use crate::ui::{Clock, ControlEvent, Controls, Frame, RenderError, Renderer, Sys
 /// run dry: a terminal handed a pasted page of text produces a control per
 /// character for as long as the paste lasts, and a drain that read until it
 /// stopped would spend the frame reading instead of drawing. The panel has
-/// eleven controls and a player has two hands, so this is far more than one
+/// a dozen controls and a player has two hands, so this is far more than one
 /// frame of playing; reaching it means the source is not a player, and what is
 /// left over waits for the next frame rather than being dropped.
 pub const EVENTS_PER_FRAME: usize = 32;
@@ -79,20 +83,31 @@ impl Flow {
 
 /// An application an [`EventLoop`] can run.
 ///
-/// Both methods answer with a [`Flow`], because a run ends for more reasons
-/// than a player pressing something: a state the application reaches between
-/// frames can end it too.
+/// Taking a control and drawing both answer with a [`Flow`], because a run ends
+/// for more reasons than a player pressing something: a state the application
+/// reaches between frames can end it too.
 pub trait App {
     /// Take one thing the player did.
     ///
     /// Called once per event, for every event waiting when the frame began.
     fn control(&mut self, event: ControlEvent) -> Flow;
 
+    /// Which controls this application answers, and what each one does here.
+    ///
+    /// Required rather than defaulted, because a control answered without being
+    /// declared is exactly what the legend exists to stop: a page that says
+    /// nothing has decided to say nothing, instead of having forgotten to.
+    fn legend(&self) -> Legend;
+
     /// Put the application's state on `frame`.
     ///
     /// The frame arrives blank. Drawing is what the frame budget is for, so
     /// this is the one place in a frame where an application is expected to
     /// spend it.
+    ///
+    /// The whole frame is the application's to draw into, but the bottom
+    /// [`Legend::ROWS`] rows are drawn over afterwards with what
+    /// [`legend`](Self::legend) declared.
     fn draw(&mut self, frame: &mut Frame) -> Flow;
 }
 
@@ -165,9 +180,15 @@ impl<K: Clock> EventLoop<K> {
     /// drawing to `screen`.
     ///
     /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws once,
-    /// renders, and then waits out the rest of its budget. An event arriving
-    /// mid-frame is handled by the next one: the frame boundary is what makes a
-    /// draw see one state rather than a state that changed underneath it.
+    /// draws the application's [`Legend`] over the bottom of that, renders, and
+    /// then waits out the rest of its budget. An event arriving mid-frame is
+    /// handled by the next one: the frame boundary is what makes a draw see one
+    /// state rather than a state that changed underneath it.
+    ///
+    /// The legend is drawn here because this is the only place holding both
+    /// halves of it: the application knows what its controls mean and the panel
+    /// knows what to call them, and neither can be shown the other without one
+    /// of them learning something it must not know.
     ///
     /// An exit from [`App::control`] ends the run without drawing, because the
     /// application has just said there is nothing further to show. An exit from
@@ -199,6 +220,7 @@ impl<K: Clock> EventLoop<K> {
 
             self.frame = Frame::blank();
             let flow = app.draw(&mut self.frame);
+            app.legend().draw(&mut self.frame, controls);
             screen.render(&self.frame)?;
             report.frames += 1;
 

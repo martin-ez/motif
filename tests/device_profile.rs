@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use motif::device::{AudioProfile, Button, DeviceProfile, Encoder, ScreenProfile};
+use motif::device::{AudioProfile, Button, Control, DeviceProfile, Encoder, ScreenProfile};
 
 fn target() -> DeviceProfile {
     DeviceProfile::TARGET
@@ -135,6 +135,63 @@ fn the_panel_navigates_in_four_directions() {
 fn the_panel_carries_the_transport() {
     for transport in [Button::Play, Button::Stop, Button::Record] {
         assert!(Button::ALL.contains(&transport), "{transport:?} is missing");
+    }
+}
+
+#[test]
+fn every_button_is_a_control_on_the_panel() {
+    for button in Button::ALL {
+        let listed = Control::ALL.contains(&Control::Button(button));
+
+        assert!(listed, "{button:?} is not listed as a control");
+    }
+}
+
+#[test]
+fn every_encoder_is_a_control_on_the_panel() {
+    for encoder in Encoder::ALL {
+        let listed = Control::ALL.contains(&Control::Encoder(encoder));
+
+        assert!(listed, "{encoder:?} is not listed as a control");
+    }
+}
+
+#[test]
+fn shift_is_a_button_on_the_panel_like_any_other() {
+    assert!(Button::ALL.contains(&Button::Shift));
+    assert!(Control::ALL.contains(&Control::Button(Button::Shift)));
+}
+
+#[test]
+fn the_panel_is_twelve_buttons_and_an_encoder() {
+    assert_eq!(Button::ALL.len(), 12);
+    assert_eq!(Encoder::ALL.len(), 1);
+    assert_eq!(Control::ALL.len(), Button::ALL.len() + Encoder::ALL.len());
+}
+
+#[test]
+fn the_panel_carries_four_scene_buttons() {
+    let scenes = [
+        Button::FirstScene,
+        Button::SecondScene,
+        Button::ThirdScene,
+        Button::FourthScene,
+    ];
+
+    for scene in scenes {
+        assert!(Button::ALL.contains(&scene), "{scene:?} is missing");
+    }
+}
+
+#[test]
+fn the_panel_carries_one_encoder() {
+    assert_eq!(Encoder::ALL.len(), 1);
+}
+
+#[test]
+fn a_control_is_its_own_position_on_the_panel() {
+    for (position, control) in Control::ALL.iter().enumerate() {
+        assert_eq!(control.position(), position);
     }
 }
 

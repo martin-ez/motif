@@ -11,11 +11,14 @@
 //! window — so what is on screen is the page as the application would show it.
 //! Any control leaves.
 //!
-//! This is a ruler, not a screen the application has. Whether 40x15 has room
-//! for a transport, a meter and a position readout at once is the one number in
-//! [`DeviceProfile`] that cannot be checked in isolation, and the only way to
-//! answer it is to lay the three out and look. The real widgets are built
-//! elsewhere; what is measured here is the space they have to fit in.
+//! This is a ruler, not a screen the application has. Whether the profile's
+//! screen has room for a transport, a meter and a position readout at once is
+//! the one number in [`DeviceProfile`] that cannot be checked in isolation, and
+//! the only way to answer it is to lay the three out and look. The real widgets
+//! are built elsewhere; what is measured here is the space they have to fit in.
+//!
+//! The bottom [`Legend::ROWS`] rows are the panel's, so what is measured above
+//! them is the room a page actually has.
 //!
 //! Everything drawn comes from a type that already exists — [`Transport`] for
 //! the indicators, [`Levels`] for the meter, [`LoopBuffer`] for the position —
@@ -35,9 +38,11 @@
 use std::io::{self, IsTerminal, Write};
 
 use motif::audio::Levels;
-use motif::device::{DeviceProfile, Encoder};
+use motif::device::{Button, DeviceProfile, Encoder};
 use motif::looper::{LoopBuffer, Transport};
-use motif::ui::{App, Cell, ControlEvent, EventLoop, Flow, Frame, RenderError, TerminalScreen};
+use motif::ui::{
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, RenderError, TerminalScreen,
+};
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
 
@@ -149,17 +154,6 @@ fn draw_transport(frame: &mut Frame, row: usize, transport: Transport) {
     write_at(frame, 0, row, &indicators);
 }
 
-fn draw_encoders(frame: &mut Frame, row: usize) {
-    let slot = SCREEN.columns / Encoder::ALL.len();
-
-    for (position, _) in Encoder::ALL.iter().enumerate() {
-        let number = format!("{} ", position + 1);
-        let width = slot.saturating_sub(number.chars().count() + 2);
-        let label = number + &String::from(RULE).repeat(width);
-        write_at(frame, position * slot, row, &label);
-    }
-}
-
 struct Layout {
     transport: Transport,
     levels: Levels,
@@ -187,13 +181,13 @@ impl Layout {
         draw_position(frame, 5, &self.loop_buffer);
         draw_transport(frame, 8, self.transport);
 
-        rule(frame, SCREEN.rows - 3);
-        draw_encoders(frame, SCREEN.rows - 2);
+        rule(frame, SCREEN.rows - Legend::ROWS - 1);
     }
 
     fn page(&self) -> Frame {
         let mut frame = Frame::blank();
         self.draw_into(&mut frame);
+        self.legend().draw(&mut frame, &KeyReader::new(io::empty()));
         frame
     }
 }
@@ -201,6 +195,14 @@ impl Layout {
 impl App for Layout {
     fn control(&mut self, _: ControlEvent) -> Flow {
         Flow::Exit
+    }
+
+    fn legend(&self) -> Legend {
+        Legend::blank()
+            .answering(Button::Play)
+            .answering(Button::Stop)
+            .answering(Button::Record)
+            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {

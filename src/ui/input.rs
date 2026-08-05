@@ -19,8 +19,9 @@
 //! ```
 
 use std::collections::VecDeque;
+use std::fmt::{self, Write};
 
-use crate::device::{Button, Encoder};
+use crate::device::{Button, Control, Encoder};
 
 /// Which way an encoder was turned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +71,56 @@ impl ControlEvent {
     }
 }
 
+/// What a panel names the way a control is reached by.
+///
+/// A fixed-size value rather than a string, because it is asked for while a
+/// frame is being drawn and a legend that allocated would put an allocation per
+/// control into every frame. [`CAPACITY`](Self::CAPACITY) is three glyphs,
+/// which holds a key, or the pair of keys a terminal turns an encoder with
+/// written as `q/w`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hint {
+    glyphs: [char; Hint::CAPACITY],
+    filled: usize,
+}
+
+impl Hint {
+    /// The most glyphs a hint carries.
+    pub const CAPACITY: usize = 3;
+
+    /// A hint showing `glyphs`, of which it keeps the first
+    /// [`CAPACITY`](Self::CAPACITY).
+    ///
+    /// Clipped rather than refused, because a hint is drawn into an entry that
+    /// is narrow anyway: a backend naming a control with more than this has a
+    /// legend that no longer fits, which is a layout to settle rather than a
+    /// frame to stop drawing.
+    pub fn new(glyphs: impl IntoIterator<Item = char>) -> Self {
+        let mut hint = Self {
+            glyphs: [' '; Self::CAPACITY],
+            filled: 0,
+        };
+
+        for glyph in glyphs.into_iter().take(Self::CAPACITY) {
+            hint.glyphs[hint.filled] = glyph;
+            hint.filled += 1;
+        }
+
+        hint
+    }
+
+    /// The glyphs, in the order the panel gave them.
+    pub fn glyphs(self) -> impl Iterator<Item = char> {
+        (0..self.filled).map(move |at| self.glyphs[at])
+    }
+}
+
+impl fmt::Display for Hint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.glyphs().try_for_each(|glyph| f.write_char(glyph))
+    }
+}
+
 /// A panel the application takes control events from.
 ///
 /// [`poll`](Self::poll) returns what has already happened and nothing more: it
@@ -78,6 +129,22 @@ impl ControlEvent {
 pub trait Controls {
     /// The next event, or `None` when nothing is waiting.
     fn poll(&mut self) -> Option<ControlEvent>;
+
+    /// What to call the way this panel reaches `control`, if that is worth
+    /// drawing.
+    ///
+    /// A terminal answers with the key, because nothing in front of the player
+    /// is labelled with it and a legend that named the meaning alone would
+    /// leave them guessing. A panel whose controls are labelled where the
+    /// player's hands already are has nothing to add, which is what the default
+    /// answers — the meanings are then drawn on their own.
+    ///
+    /// This is the one thing a backend tells the screen about itself, and it
+    /// travels as glyphs rather than as a key: a hint is drawn, never matched
+    /// on, so nothing above the backend learns what reached it.
+    fn hint(&self, _control: Control) -> Option<Hint> {
+        None
+    }
 }
 
 /// A panel with no hardware behind it, handing back events given in advance.

@@ -5,7 +5,7 @@
 
 use std::io::{self, Read};
 
-use motif::device::{Button, Encoder};
+use motif::device::{Button, Control, Encoder};
 use motif::ui::{ControlEvent, Controls, KeyReader, Turn};
 
 /// A source that hands over one chunk per read, standing in for keys that
@@ -46,7 +46,7 @@ struct Endless;
 
 impl Read for Endless {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        buffer.fill(b'.');
+        buffer.fill(b';');
         Ok(buffer.len())
     }
 }
@@ -101,23 +101,21 @@ fn turned(encoder: Encoder, turn: Turn) -> Option<ControlEvent> {
 }
 
 #[test]
-fn the_right_key_of_a_pair_turns_its_encoder_clockwise() {
-    assert_eq!(only(b"w"), turned(Encoder::First, Turn::Clockwise));
+fn the_right_key_of_the_pair_turns_the_encoder_clockwise() {
+    assert_eq!(only(b"."), turned(Encoder::Main, Turn::Clockwise));
 }
 
 #[test]
-fn the_left_key_of_a_pair_turns_it_the_other_way() {
-    assert_eq!(only(b"q"), turned(Encoder::First, Turn::Anticlockwise));
+fn the_left_key_of_the_pair_turns_it_the_other_way() {
+    assert_eq!(only(b","), turned(Encoder::Main, Turn::Anticlockwise));
 }
 
 #[test]
-fn every_encoder_has_a_pair_of_its_own() {
-    assert_eq!(only(b"e"), turned(Encoder::Second, Turn::Anticlockwise));
-    assert_eq!(only(b"r"), turned(Encoder::Second, Turn::Clockwise));
-    assert_eq!(only(b"t"), turned(Encoder::Third, Turn::Anticlockwise));
-    assert_eq!(only(b"y"), turned(Encoder::Third, Turn::Clockwise));
-    assert_eq!(only(b"u"), turned(Encoder::Fourth, Turn::Anticlockwise));
-    assert_eq!(only(b"i"), turned(Encoder::Fourth, Turn::Clockwise));
+fn a_scene_key_presses_the_scene_button_it_numbers() {
+    assert_eq!(only(b"1"), pressed(Button::FirstScene));
+    assert_eq!(only(b"2"), pressed(Button::SecondScene));
+    assert_eq!(only(b"3"), pressed(Button::ThirdScene));
+    assert_eq!(only(b"4"), pressed(Button::FourthScene));
 }
 
 #[test]
@@ -142,14 +140,6 @@ fn a_transport_key_presses_its_button() {
 
 #[test]
 fn an_upper_case_key_is_the_same_control_shifted() {
-    assert_eq!(
-        only(b"W"),
-        Some(ControlEvent::Turned {
-            encoder: Encoder::First,
-            turn: Turn::Clockwise,
-            shifted: true,
-        })
-    );
     assert_eq!(
         only(b"Z"),
         Some(ControlEvent::Pressed {
@@ -177,7 +167,7 @@ fn an_arrow_with_another_modifier_is_not_shifted() {
 
 #[test]
 fn a_key_that_is_not_on_the_panel_is_no_event() {
-    assert!(events(b".").is_empty());
+    assert!(events(b";").is_empty());
     assert!(events(b"\x1b[H").is_empty());
 }
 
@@ -200,7 +190,7 @@ fn keys_that_arrive_together_are_separate_events() {
 
 #[test]
 fn a_key_after_an_unmapped_one_is_still_read() {
-    assert_eq!(only(b".z"), pressed(Button::Play));
+    assert_eq!(only(b";z"), pressed(Button::Play));
 }
 
 #[test]
@@ -254,4 +244,73 @@ fn a_poll_gives_up_on_a_source_that_never_runs_dry() {
 #[test]
 fn a_source_that_refuses_a_read_is_no_event() {
     assert!(events_from(BrokenSource).is_empty());
+}
+
+fn hint(control: Control) -> String {
+    KeyReader::new(&b""[..])
+        .hint(control)
+        .expect("every control is reached by a key")
+        .to_string()
+}
+
+#[test]
+fn a_transport_button_is_named_by_the_key_that_presses_it() {
+    assert_eq!(hint(Control::Button(Button::Play)), "z");
+    assert_eq!(hint(Control::Button(Button::Stop)), "x");
+    assert_eq!(hint(Control::Button(Button::Record)), "c");
+}
+
+#[test]
+fn a_navigation_button_is_named_by_the_arrow_that_points_at_it() {
+    assert_eq!(hint(Control::Button(Button::Up)), "^");
+    assert_eq!(hint(Control::Button(Button::Down)), "v");
+    assert_eq!(hint(Control::Button(Button::Left)), "<");
+    assert_eq!(hint(Control::Button(Button::Right)), ">");
+}
+
+#[test]
+fn a_scene_button_is_named_by_its_number() {
+    assert_eq!(hint(Control::Button(Button::FirstScene)), "1");
+    assert_eq!(hint(Control::Button(Button::FourthScene)), "4");
+}
+
+#[test]
+fn the_encoder_is_named_by_the_pair_of_keys_that_turn_it() {
+    assert_eq!(hint(Control::Encoder(Encoder::Main)), ",/.");
+}
+
+#[test]
+fn shift_is_named_by_the_key_that_holds_it() {
+    assert_eq!(hint(Control::Button(Button::Shift)), "⇧");
+}
+
+#[test]
+fn shift_never_arrives_as_a_press_of_its_own() {
+    let held = [&b"Z"[..], b"X", b"C", b"\x1b[1;2A", b"\x1b[1;2D"];
+
+    for typed in held {
+        let shift = events(typed).into_iter().find(|event| {
+            matches!(
+                event,
+                ControlEvent::Pressed {
+                    button: Button::Shift,
+                    ..
+                }
+            )
+        });
+
+        assert_eq!(shift, None, "{typed:?} reported shift as a press");
+    }
+}
+
+#[test]
+fn every_control_on_the_panel_is_reached_by_a_key() {
+    let reader = KeyReader::new(&b""[..]);
+
+    for control in Control::ALL {
+        assert!(
+            reader.hint(control).is_some(),
+            "{control:?} is on the panel and no key reaches it"
+        );
+    }
 }

@@ -1,5 +1,5 @@
 //! A page of rows with one of them selected, moved by the panel's arrows or by
-//! turning the first encoder.
+//! turning the encoder.
 //!
 //! Two routes to the same movement because the panel has both and a player
 //! reaches for whichever is nearer. Neither is a key: mapping an arrow key onto
@@ -13,7 +13,7 @@
 //! stays open.
 
 use crate::device::{Button, DeviceProfile, Encoder};
-use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Turn};
+use crate::ui::{App, Cell, ControlEvent, Flow, Frame, Legend, Turn};
 
 const MARKER: char = '>';
 const MARKER_COLUMN: usize = 0;
@@ -54,9 +54,14 @@ pub struct ListPage {
 impl ListPage {
     /// How many rows of the list are on screen at once.
     ///
-    /// The page fills the frame it is handed, so this is the screen's height and
-    /// not a number of its own.
-    pub const VISIBLE_ROWS: usize = DeviceProfile::TARGET.screen.rows;
+    /// The page fills the frame it is handed, so this is the screen's height
+    /// less the rows the panel takes along the bottom, and not a number of its
+    /// own. Counting the panel's rows in would scroll the selection into cells
+    /// the panel is drawn over, where it cannot be seen.
+    pub const VISIBLE_ROWS: usize = DeviceProfile::TARGET
+        .screen
+        .rows
+        .saturating_sub(Legend::ROWS);
 
     /// A page listing `rows`, with the first of them selected.
     pub fn new(rows: impl IntoIterator<Item = impl Into<String>>) -> Self {
@@ -115,7 +120,7 @@ impl App for ListPage {
                 ..
             }
             | ControlEvent::Turned {
-                encoder: Encoder::First,
+                encoder: Encoder::Main,
                 turn: Turn::Clockwise,
                 ..
             } => self.towards_the_end(),
@@ -123,7 +128,7 @@ impl App for ListPage {
                 button: Button::Up, ..
             }
             | ControlEvent::Turned {
-                encoder: Encoder::First,
+                encoder: Encoder::Main,
                 turn: Turn::Anticlockwise,
                 ..
             } => self.towards_the_start(),
@@ -131,6 +136,13 @@ impl App for ListPage {
         }
 
         Flow::Continue
+    }
+
+    fn legend(&self) -> Legend {
+        Legend::blank()
+            .answering(Button::Up)
+            .answering(Button::Down)
+            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {

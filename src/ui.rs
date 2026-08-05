@@ -35,12 +35,14 @@ use crate::device::DeviceProfile;
 mod clock;
 mod events;
 mod input;
+mod legend;
 mod list;
 mod terminal;
 
 pub use clock::{Clock, ScriptedClock, SystemClock};
 pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
-pub use input::{ControlEvent, Controls, ScriptedControls, Turn};
+pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
+pub use legend::Legend;
 pub use list::ListPage;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 

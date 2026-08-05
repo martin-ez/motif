@@ -6,7 +6,9 @@
 //! result is read back off the frame the page drew.
 
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
-use motif::ui::{App, ControlEvent, Controls, Flow, Frame, ListPage, ScriptedControls, Turn};
+use motif::ui::{
+    App, ControlEvent, Controls, Flow, Frame, Legend, ListPage, ScriptedControls, Turn,
+};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const MARKER: char = '>';
@@ -148,7 +150,7 @@ fn an_empty_page_ignores_the_arrows() {
 
 #[test]
 fn turning_the_first_encoder_clockwise_moves_down() {
-    let page = moved(4, [turned(Encoder::First, Turn::Clockwise)]);
+    let page = moved(4, [turned(Encoder::Main, Turn::Clockwise)]);
 
     assert_eq!(page.selected(), Some(1));
 }
@@ -158,9 +160,9 @@ fn turning_the_first_encoder_anticlockwise_moves_up() {
     let page = moved(
         4,
         [
-            turned(Encoder::First, Turn::Clockwise),
-            turned(Encoder::First, Turn::Clockwise),
-            turned(Encoder::First, Turn::Anticlockwise),
+            turned(Encoder::Main, Turn::Clockwise),
+            turned(Encoder::Main, Turn::Clockwise),
+            turned(Encoder::Main, Turn::Anticlockwise),
         ],
     );
 
@@ -169,21 +171,22 @@ fn turning_the_first_encoder_anticlockwise_moves_up() {
 
 #[test]
 fn the_encoder_stops_at_the_ends_like_the_arrows() {
-    let bottom = moved(4, repeated(turned(Encoder::First, Turn::Clockwise), 9));
-    let top = moved(4, repeated(turned(Encoder::First, Turn::Anticlockwise), 9));
+    let bottom = moved(4, repeated(turned(Encoder::Main, Turn::Clockwise), 9));
+    let top = moved(4, repeated(turned(Encoder::Main, Turn::Anticlockwise), 9));
 
     assert_eq!(bottom.selected(), Some(3));
     assert_eq!(top.selected(), Some(0));
 }
 
 #[test]
-fn another_encoder_leaves_the_selection_alone() {
+fn a_scene_button_leaves_the_selection_alone() {
     let page = moved(
         4,
         [
-            turned(Encoder::Second, Turn::Clockwise),
-            turned(Encoder::Third, Turn::Clockwise),
-            turned(Encoder::Fourth, Turn::Anticlockwise),
+            pressed(Button::FirstScene),
+            pressed(Button::SecondScene),
+            pressed(Button::ThirdScene),
+            pressed(Button::FourthScene),
         ],
     );
 
@@ -239,8 +242,18 @@ fn a_list_longer_than_the_viewport_draws_a_viewport() {
 }
 
 #[test]
-fn the_viewport_is_the_screen() {
-    assert_eq!(ListPage::VISIBLE_ROWS, SCREEN.rows);
+fn the_viewport_is_the_screen_above_the_panel() {
+    assert_eq!(ListPage::VISIBLE_ROWS, SCREEN.rows - Legend::ROWS);
+}
+
+#[test]
+fn the_page_declares_the_controls_it_moves_by() {
+    let legend = ListPage::new(["one", "two"]).legend();
+
+    assert!(legend.answers(Button::Up));
+    assert!(legend.answers(Button::Down));
+    assert!(legend.answers(Encoder::Main));
+    assert!(!legend.answers(Button::Play));
 }
 
 #[test]
@@ -288,7 +301,7 @@ fn the_selection_is_always_on_screen() {
 
     for _ in 0..count {
         assert_eq!(marked(&mut page).len(), 1);
-        driven_by(&mut page, [turned(Encoder::First, Turn::Anticlockwise)]);
+        driven_by(&mut page, [turned(Encoder::Main, Turn::Anticlockwise)]);
     }
 }
 
