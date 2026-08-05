@@ -231,8 +231,9 @@ impl LoopBuffer {
     /// [`mix_into`](Self::mix_into) does. An empty loop leaves it alone and
     /// reports a playhead of nothing.
     ///
-    /// Each pass over the loop fills at least one frame, so the work is bounded
-    /// by the length of `block` and this is safe on the audio callback.
+    /// The block is filled as the run up to the boundary and then one whole
+    /// loop at a time, so the work is a walk over `block` and nothing about it
+    /// is open-ended. That is what makes it safe on the audio callback.
     ///
     /// ```
     /// use motif::device::DeviceProfile;
@@ -252,16 +253,16 @@ impl LoopBuffer {
             return 0;
         }
 
-        let mut playhead = from % self.len();
-        let mut played = 0;
+        let playhead = from % self.len();
+        let to_the_boundary = (self.len() - playhead).min(block.len());
+        let (before, after) = block.split_at_mut(to_the_boundary);
 
-        while played < block.len() {
-            let heard = self.mix_into(&mut block[played..], playhead);
-            played += heard;
-            playhead = (playhead + heard) % self.len();
+        self.mix_into(before, playhead);
+        for repeat in after.chunks_mut(self.len()) {
+            self.mix_into(repeat, 0);
         }
 
-        playhead
+        (playhead + block.len()) % self.len()
     }
 
     /// How many frames long the loop is.
