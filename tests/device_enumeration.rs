@@ -107,6 +107,15 @@ fn a_default_selection_opens() {
 }
 
 #[test]
+fn a_default_selection_covers_the_width_the_device_runs_at_not_the_one_it_opens() {
+    let backend = NullBackend::offering(config(), vec![2, 8]);
+
+    let chosen = backend.defaults(48_000).expect("a listed device is chosen");
+
+    assert_eq!(chosen.input_channels, ChannelSelection::all(2));
+}
+
+#[test]
 fn a_direction_with_no_device_leaves_nothing_to_default_to() {
     let backend = NullBackend::rounding(StreamConfig {
         input_channels: 0,

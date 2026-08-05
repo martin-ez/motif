@@ -262,6 +262,72 @@ fn a_narrower_selection_still_opens_the_device_wide_enough_to_reach_it() {
 }
 
 #[test]
+fn a_selection_that_reaches_past_the_end_of_a_channel_count_is_an_error() {
+    let backend = NullBackend::rounding(config());
+
+    let opened = backend.open(
+        &DeviceSelection {
+            input_channels: ChannelSelection {
+                first: u16::MAX,
+                count: 1,
+            },
+            ..selection()
+        },
+        request(),
+    );
+
+    assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
+}
+
+fn opened_across(
+    natural: u16,
+    offers: Vec<u16>,
+    input_channels: ChannelSelection,
+) -> Result<u16, DeviceError> {
+    let backend = NullBackend::offering(
+        StreamConfig {
+            input_channels: natural,
+            ..config()
+        },
+        offers,
+    );
+    let chosen = backend
+        .defaults(48_000)
+        .expect("the null backend has a device in each direction");
+
+    backend
+        .open(
+            &DeviceSelection {
+                input_channels,
+                ..chosen
+            },
+            request(),
+        )
+        .map(|stream| stream.config().input_channels)
+}
+
+#[test]
+fn a_device_is_opened_at_the_narrowest_width_that_reaches_the_selection() {
+    let opened = opened_across(1, vec![1, 2, 4, 8], ChannelSelection { first: 2, count: 1 });
+
+    assert_eq!(opened, Ok(4));
+}
+
+#[test]
+fn a_device_is_opened_no_narrower_than_the_width_it_runs_at() {
+    let opened = opened_across(2, vec![1, 2, 4], ChannelSelection { first: 0, count: 1 });
+
+    assert_eq!(opened, Ok(2));
+}
+
+#[test]
+fn a_device_offering_nothing_that_wide_is_opened_across_the_selection_alone() {
+    let opened = opened_across(8, vec![1, 2], ChannelSelection { first: 0, count: 1 });
+
+    assert_eq!(opened, Ok(1));
+}
+
+#[test]
 fn a_stream_whose_device_is_present_reports_no_fault() {
     let backend = NullBackend::rounding(config());
     let stream = backend

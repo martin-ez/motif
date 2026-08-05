@@ -36,9 +36,10 @@ fn main() -> Result<(), DeviceError> {
     );
 
     let backend = CpalBackend::new();
-    let selection = backend
-        .defaults(request.sample_rate)
-        .ok_or(DeviceError::NoInputDevice)?;
+    let Some(selection) = backend.defaults(request.sample_rate) else {
+        println!("no device to capture from and play to at that rate");
+        return Ok(());
+    };
     println!("host       {}", selection.host);
     println!(
         "input      {}, {}",

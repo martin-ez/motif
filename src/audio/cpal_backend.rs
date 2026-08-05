@@ -69,9 +69,32 @@ fn named_device(device: &cpal::Device, channels: Vec<u16>) -> Option<AudioDevice
 }
 
 fn offered_selection(offered: &[u16], preferred: u16) -> Option<ChannelSelection> {
-    let width = opened_width(offered, ChannelSelection::all(preferred))
-        .or_else(|| offered.last().copied())?;
-    Some(ChannelSelection::all(width))
+    let widest = *offered.last()?;
+    Some(ChannelSelection::all(preferred.min(widest).max(1)))
+}
+
+fn listed_default(
+    listed: Vec<AudioDevice>,
+    default: Option<&cpal::Device>,
+    preferred: Option<u16>,
+) -> Option<(String, ChannelSelection)> {
+    let named = default
+        .and_then(|device| device.description().ok())
+        .map(|description| description.name().to_owned());
+
+    let device = named
+        .and_then(|name| listed.iter().find(|device| device.name == name))
+        .or_else(|| listed.first())?;
+
+    let width = preferred.unwrap_or(*device.channels.last()?);
+    Some((
+        device.name.clone(),
+        offered_selection(&device.channels, width)?,
+    ))
+}
+
+fn default_width(config: Option<cpal::SupportedStreamConfig>) -> Option<u16> {
+    config.map(|config| config.channels())
 }
 
 fn host_named(name: &str) -> Option<cpal::Host> {
@@ -148,35 +171,54 @@ impl AudioBackend for CpalBackend {
             .collect()
     }
 
-    /// The default host's default devices, each across every channel of the
-    /// width its own default configuration uses.
+    /// The default host's default devices, each across the width its own
+    /// default configuration uses.
+    ///
+    /// Named out of [`hosts`](Self::hosts) rather than straight off the default
+    /// device, because those two are not always the same name for the same
+    /// thing: ALSA's default device describes itself as `Default Audio Device`,
+    /// while enumerating the same PCM gives whatever its hint says. Taking the
+    /// name from the listing that [`open`](Self::open) searches is what makes a
+    /// default selection one it can find; a default device the listing does not
+    /// carry falls back to the first device listed.
     ///
     /// The device's default width rather than the narrowest it offers: a
     /// two-channel interface defaulting to stereo is a player with a stereo
     /// source, and narrowing that to one channel unasked would throw half of it
-    /// away. Where that width is not among the ones the device offers `f32` on
-    /// at `sample_rate`, the selection is one that is, so what comes back is
-    /// something [`open`](Self::open) can meet.
+    /// away. The width is what the selection *covers*, not what the device is
+    /// opened at — `open` decides that — so a device offering only counts wider
+    /// than its default is still selected across its default width rather than
+    /// folded across everything it has.
     fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection> {
         let host = cpal::default_host();
-        let input = host.default_input_device()?;
-        let output = host.default_output_device()?;
+        let default_input = host.default_input_device();
+        let default_output = host.default_output_device();
 
-        let offered_input = channel_counts(input.supported_input_configs().ok()?, sample_rate);
-        let offered_output = channel_counts(output.supported_output_configs().ok()?, sample_rate);
+        let (input, input_channels) = listed_default(
+            input_devices(&host, sample_rate),
+            default_input.as_ref(),
+            default_width(
+                default_input
+                    .as_ref()
+                    .and_then(|device| device.default_input_config().ok()),
+            ),
+        )?;
+        let (output, output_channels) = listed_default(
+            output_devices(&host, sample_rate),
+            default_output.as_ref(),
+            default_width(
+                default_output
+                    .as_ref()
+                    .and_then(|device| device.default_output_config().ok()),
+            ),
+        )?;
 
         Some(DeviceSelection {
             host: host.id().name().to_owned(),
-            input: input.description().ok()?.name().to_owned(),
-            input_channels: offered_selection(
-                &offered_input,
-                input.default_input_config().ok()?.channels(),
-            )?,
-            output: output.description().ok()?.name().to_owned(),
-            output_channels: offered_selection(
-                &offered_output,
-                output.default_output_config().ok()?.channels(),
-            )?,
+            input,
+            input_channels,
+            output,
+            output_channels,
         })
     }
 
@@ -229,10 +271,14 @@ impl AudioBackend for CpalBackend {
             request.sample_rate,
         );
 
-        let input_channels = opened_width(&offered_input, selection.input_channels)
+        let natural_input = default_width(input.default_input_config().ok()).unwrap_or_default();
+        let natural_output = default_width(output.default_output_config().ok()).unwrap_or_default();
+
+        let input_channels = opened_width(&offered_input, selection.input_channels, natural_input)
             .ok_or(DeviceError::UnsupportedConfig)?;
-        let output_channels = opened_width(&offered_output, selection.output_channels)
-            .ok_or(DeviceError::UnsupportedConfig)?;
+        let output_channels =
+            opened_width(&offered_output, selection.output_channels, natural_output)
+                .ok_or(DeviceError::UnsupportedConfig)?;
 
         let input_config = cpal::StreamConfig {
             channels: input_channels,

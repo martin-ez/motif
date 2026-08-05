@@ -126,10 +126,13 @@ impl ChannelSelection {
     /// three and four cannot be reached without opening four, so a device is
     /// opened at the narrowest count it offers that reaches the selection.
     ///
-    /// Saturates, so a selection past the end of `u16` asks for more channels
-    /// than any device has rather than wrapping to a width one meets.
-    pub const fn reach(self) -> u16 {
-        self.first.saturating_add(self.count)
+    /// Wider than a channel count, because the sum of two `u16` is not one. A
+    /// selection past the end of `u16` has to come back as a reach no device
+    /// meets: saturating it would land on `u16::MAX`, which the widest
+    /// conceivable device does meet, and which then describes an empty run of
+    /// channels — a fold across none of them, on the audio thread.
+    pub const fn reach(self) -> u32 {
+        self.first as u32 + self.count as u32
     }
 }
 
@@ -251,10 +254,17 @@ pub trait AudioBackend {
     /// Open an input and an output stream on `selection` at `request`.
     ///
     /// Each device is opened at the narrowest channel count it offers that
-    /// reaches its [`ChannelSelection`], since a channel cannot be captured
-    /// from a device opened too narrow to have it. The channels outside the
-    /// selection are opened and then left alone: nothing is captured from them,
-    /// and nothing is played to them.
+    /// reaches both its [`ChannelSelection`] and the width the device runs at
+    /// by default. Reaching the selection is what makes the channel available
+    /// at all; reaching the default width is what makes it the channel the
+    /// player meant. A stereo interface asked for its first input alone would
+    /// otherwise be opened in mono, and what arrives in that one channel is the
+    /// host's fold of the pair — the very loss selecting a channel is for. A
+    /// device offering nothing that wide is opened at the narrowest count that
+    /// reaches the selection instead, since that is still openable.
+    ///
+    /// The channels outside the selection are opened and then left alone:
+    /// nothing is captured from them, and nothing is played to them.
     ///
     /// # Errors
     ///
@@ -269,14 +279,20 @@ pub trait AudioBackend {
     ) -> Result<Self::Stream, DeviceError>;
 }
 
-fn opened_width(offered: &[u16], selection: ChannelSelection) -> Option<u16> {
+fn opened_width(offered: &[u16], selection: ChannelSelection, natural: u16) -> Option<u16> {
     if selection.count == 0 {
         return None;
     }
-    offered
-        .iter()
-        .copied()
-        .find(|&width| width >= selection.reach())
+
+    let narrowest_reaching = |needed: u32| {
+        offered
+            .iter()
+            .copied()
+            .find(move |&width| u32::from(width) >= needed)
+    };
+
+    narrowest_reaching(selection.reach().max(u32::from(natural)))
+        .or_else(|| narrowest_reaching(selection.reach()))
 }
 
 /// An input and an output stream running together on one device.
@@ -339,6 +355,7 @@ pub trait DuplexStream {
 pub struct NullBackend {
     granted: StreamConfig,
     rejects_mismatch: bool,
+    widths: Option<Vec<u16>>,
 }
 
 impl NullBackend {
@@ -348,6 +365,7 @@ impl NullBackend {
         Self {
             granted,
             rejects_mismatch: false,
+            widths: None,
         }
     }
 
@@ -357,6 +375,40 @@ impl NullBackend {
         Self {
             granted,
             rejects_mismatch: true,
+            widths: None,
+        }
+    }
+
+    /// A rounding backend whose device can be opened at each of `widths` in
+    /// either direction, rather than only at the one it grants.
+    ///
+    /// An interface offering several channel counts is what decides which one
+    /// [`AudioBackend::open`] picks, and a device offering one cannot show that
+    /// choice being made at all — the rule and its opposite both open the only
+    /// width there is. The width the granted configuration names stays the
+    /// device's natural one, so both halves of that rule are reachable here.
+    ///
+    /// `widths` is sorted and deduplicated, since that is what a listing
+    /// promises.
+    pub fn offering(granted: StreamConfig, widths: Vec<u16>) -> Self {
+        let mut widths = widths;
+        widths.sort_unstable();
+        widths.dedup();
+
+        Self {
+            granted,
+            rejects_mismatch: false,
+            widths: Some(widths),
+        }
+    }
+
+    fn offered(&self, natural: u16) -> Vec<u16> {
+        if natural == 0 {
+            return Vec::new();
+        }
+        match &self.widths {
+            Some(widths) => widths.clone(),
+            None => vec![natural],
         }
     }
 }
@@ -365,13 +417,13 @@ const NULL_HOST: &str = "null";
 const NULL_INPUT: &str = "null input";
 const NULL_OUTPUT: &str = "null output";
 
-fn null_device(name: &str, channels: u16) -> Vec<AudioDevice> {
-    if channels == 0 {
+fn null_device(name: &str, channels: Vec<u16>) -> Vec<AudioDevice> {
+    if channels.is_empty() {
         return Vec::new();
     }
     vec![AudioDevice {
         name: name.to_owned(),
-        channels: vec![channels],
+        channels,
     }]
 }
 
@@ -389,8 +441,8 @@ impl AudioBackend for NullBackend {
 
         let host = AudioHost {
             name: NULL_HOST.to_owned(),
-            inputs: null_device(NULL_INPUT, self.granted.input_channels),
-            outputs: null_device(NULL_OUTPUT, self.granted.output_channels),
+            inputs: null_device(NULL_INPUT, self.offered(self.granted.input_channels)),
+            outputs: null_device(NULL_OUTPUT, self.offered(self.granted.output_channels)),
         };
 
         if host.inputs.is_empty() && host.outputs.is_empty() {
@@ -399,7 +451,8 @@ impl AudioBackend for NullBackend {
         vec![host]
     }
 
-    /// The one device it has in each direction, at the rate it grants them.
+    /// The one device it has in each direction, across the width it grants
+    /// them at, at the rate it lists them at.
     fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection> {
         let host = self.hosts(sample_rate).into_iter().next()?;
         let input = host.inputs.first()?;
@@ -407,9 +460,9 @@ impl AudioBackend for NullBackend {
 
         Some(DeviceSelection {
             input: input.name.clone(),
-            input_channels: ChannelSelection::all(*input.channels.last()?),
+            input_channels: ChannelSelection::all(self.granted.input_channels),
             output: output.name.clone(),
-            output_channels: ChannelSelection::all(*output.channels.last()?),
+            output_channels: ChannelSelection::all(self.granted.output_channels),
             host: host.name,
         })
     }
@@ -426,20 +479,29 @@ impl AudioBackend for NullBackend {
             return Err(DeviceError::NoSuchHost);
         }
 
-        let inputs = null_device(NULL_INPUT, self.granted.input_channels);
+        let inputs = null_device(NULL_INPUT, self.offered(self.granted.input_channels));
         let input = inputs
             .iter()
             .find(|device| device.name == selection.input)
             .ok_or(DeviceError::NoInputDevice)?;
-        let outputs = null_device(NULL_OUTPUT, self.granted.output_channels);
+        let outputs = null_device(NULL_OUTPUT, self.offered(self.granted.output_channels));
         let output = outputs
             .iter()
             .find(|device| device.name == selection.output)
             .ok_or(DeviceError::NoOutputDevice)?;
 
-        opened_width(&input.channels, selection.input_channels)
-            .and_then(|_| opened_width(&output.channels, selection.output_channels))
-            .ok_or(DeviceError::UnsupportedConfig)?;
+        let input_channels = opened_width(
+            &input.channels,
+            selection.input_channels,
+            self.granted.input_channels,
+        )
+        .ok_or(DeviceError::UnsupportedConfig)?;
+        let output_channels = opened_width(
+            &output.channels,
+            selection.output_channels,
+            self.granted.output_channels,
+        )
+        .ok_or(DeviceError::UnsupportedConfig)?;
 
         let matches_exactly = request.sample_rate == self.granted.sample_rate
             && request.block_size == self.granted.block_size;
@@ -450,7 +512,11 @@ impl AudioBackend for NullBackend {
         let (reporter, faults) = fault_channel();
 
         Ok(NullStream {
-            config: self.granted,
+            config: StreamConfig {
+                input_channels,
+                output_channels,
+                ..self.granted
+            },
             state: StreamState::Stopped,
             reporter,
             faults,

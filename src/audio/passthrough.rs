@@ -113,7 +113,8 @@ pub fn passthrough(
         "a passthrough path carries nothing without channels"
     );
     assert!(
-        input.reach() <= config.input_channels && output.reach() <= config.output_channels,
+        input.reach() <= u32::from(config.input_channels)
+            && output.reach() <= u32::from(config.output_channels),
         "a passthrough path cannot reach a channel the device has not got"
     );
 
