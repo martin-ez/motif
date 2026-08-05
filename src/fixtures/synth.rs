@@ -131,20 +131,15 @@ impl Fixture {
 
 /// Every synthetic fixture, in the order they are written.
 ///
-/// Each one breaks a different assumption an analyser might make: the steady
-/// pairs are the baseline, the waltz denies that a bar is four beats, the ramp
-/// and the rubato passage deny that a tempo is a number, and the syncopated
-/// case denies that a sound implies a beat.
+/// Each one breaks a different assumption: the steady pairs are the baseline,
+/// the waltz denies that a bar is four beats, the ramp and rubato passage deny
+/// that a tempo is a number, the syncopated case that a sound implies a beat.
 ///
-/// The rubato passage pulls 130 ms against its underlying pulse, which is more
-/// than the +/-70 ms window a beat is scored against: a tracker that fits a
-/// steady tempo to it is then measurably wrong rather than accidentally right.
+/// The rubato passage pulls 130 ms against its pulse — more than the +/-70 ms
+/// scoring window — so a steady-tempo tracker is measurably wrong, not lucky.
 ///
-/// Every fixture here is a few seconds long, and one that is not is a mistake
-/// rather than a choice. At 16 KB of PCM per second, the 512 KiB the set is
-/// held under divides into roughly half a minute of audio in total, so a
-/// fixture running longer than ten seconds cannot be part of a set that fits.
-/// Rendering rejects one rather than allocating for it.
+/// At 16 KB of PCM per second, the 512 KiB the set is held under is about half
+/// a minute of audio, so rendering rejects a fixture over ten seconds long.
 pub fn set() -> Vec<Fixture> {
     vec![
         rendered(

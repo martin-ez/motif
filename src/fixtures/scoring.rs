@@ -35,15 +35,12 @@ impl Score {
     /// `annotated`.
     ///
     /// A candidate within [`TOLERANCE`](Self::TOLERANCE) of an annotated
-    /// position is a hit, and the match is one-to-one: an annotated position
-    /// admits one hit and a candidate answers for one annotation. Without that,
-    /// a detector emitting beats at double rate scores as perfect.
+    /// position is a hit, and the match is one-to-one: without that, a detector
+    /// emitting beats at double rate scores as perfect.
     ///
-    /// Each annotated position takes the nearest candidate still free, working
-    /// through `annotated` in the order given. That is greedy rather than an
-    /// optimal assignment, so a candidate can be taken by an earlier annotation
-    /// that a later one also had a claim on — which scores at or below the
-    /// optimum, never above it.
+    /// Each annotated position takes the nearest candidate still free, in the
+    /// order given. That is greedy rather than optimal, so it scores at or below
+    /// the optimum, never above it.
     ///
     /// ```
     /// use motif::fixtures::Score;
