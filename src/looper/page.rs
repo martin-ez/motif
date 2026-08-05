@@ -8,18 +8,21 @@
 //!
 //! The input gain and its mute are held here for the first of those reasons.
 //! The page is where they are moved, and a composition forwards them to the
-//! engine as commands; nothing is sent from here.
+//! engine as commands. The transport is the one thing sent from here, because
+//! it is the one the playhead comes back from: a page that ordered nothing
+//! would read a loop nobody was moving.
 //!
 //! Nothing here names a key, a terminal or an escape sequence. The page is
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
 //! hardware panel once there is one.
 
-use crate::audio::SampleClockReader;
-use crate::device::{Button, DeviceProfile, Encoder};
-use crate::looper::{PositionReader, Transport};
+use crate::audio::{Command, CommandSender, SampleClockReader, command_channel};
+use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
+use crate::looper::{LoopEngine, PositionReader, Transport, position_meter};
 use crate::seq::{BeatGrid, TapTempo};
 use crate::ui::{ControlEvent, Legend, Page, Region, Turn};
 
+const QUEUED_COMMANDS: usize = 8;
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
 const TEMPO_ROW: usize = 1;
@@ -91,13 +94,13 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 /// so the page can sit under a shell that uses them for something else.
 ///
 /// ```
-/// use motif::audio::sample_clock;
+/// use motif::audio::{command_channel, sample_clock};
 /// use motif::device::Button;
 /// use motif::looper::{LooperPage, Transport, position_meter};
 /// use motif::ui::{ControlEvent, Page};
 ///
 /// let (_writer, reader) = position_meter();
-/// let mut page = LooperPage::new(reader, sample_clock(48_000).1);
+/// let mut page = LooperPage::new(reader, sample_clock(48_000).1, command_channel(8).0);
 ///
 /// page.control(ControlEvent::Pressed { button: Button::Record, shifted: false });
 ///
@@ -105,6 +108,8 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 /// ```
 pub struct LooperPage {
     transport: Transport,
+    ordered: Transport,
+    commands: CommandSender,
     position: PositionReader,
     elapsed: SampleClockReader,
     taps: TapTempo,
@@ -113,15 +118,21 @@ pub struct LooperPage {
 }
 
 impl LooperPage {
-    /// A page over an idle transport, reading its playhead from `position` and
-    /// timing its taps by `elapsed`.
+    /// A page over an idle transport, reading its playhead from `position`,
+    /// timing its taps by `elapsed`, and ordering the engine over `commands`.
     ///
     /// A tap is stamped with the frame the device had reached, so the grid it
     /// makes lines up with the audio captured around it.
-    pub fn new(position: PositionReader, elapsed: SampleClockReader) -> Self {
+    pub fn new(
+        position: PositionReader,
+        elapsed: SampleClockReader,
+        commands: CommandSender,
+    ) -> Self {
         Self {
             transport: Transport::default(),
+            ordered: Transport::default(),
             taps: TapTempo::new(elapsed.sample_rate()),
+            commands,
             position,
             elapsed,
             decibels: 0.0,
@@ -129,12 +140,43 @@ impl LooperPage {
         }
     }
 
+    /// A page and the engine it drives, wired to each other.
+    ///
+    /// The page holds the reading end of the playhead and the sending end of
+    /// the command queue; the engine holds the other end of each and the loop
+    /// itself, sized from `profile`. Taps are timed by `elapsed`.
+    ///
+    /// Both ends are allocated here and never again, so this belongs in setup,
+    /// before the stream starts. The engine is what a stream plays, so it goes
+    /// to whatever opens one.
+    pub fn driving(profile: AudioProfile, elapsed: SampleClockReader) -> (Self, LoopEngine) {
+        let (commands, orders) = command_channel(QUEUED_COMMANDS);
+        let (position, playhead) = position_meter();
+
+        (
+            Self::new(playhead, elapsed, commands),
+            LoopEngine::new(profile, orders, position),
+        )
+    }
+
+    fn order_transport(&mut self) {
+        if self.ordered == self.transport {
+            return;
+        }
+
+        if self
+            .commands
+            .send(Command::SetTransport(self.transport))
+            .is_ok()
+        {
+            self.ordered = self.transport;
+        }
+    }
+
     /// What the looper is doing.
     ///
-    /// Public because the transport is what the engine has to be told: a
-    /// composition holding this page and a command queue forwards this state
-    /// as [`Command::SetTransport`](crate::audio::Command::SetTransport) rather
-    /// than tracking the presses a second time.
+    /// What the page ordered rather than what the engine has reached: the order
+    /// crosses a queue, so the two agree a block later.
     pub const fn transport(&self) -> Transport {
         self.transport
     }
@@ -230,6 +272,7 @@ impl Page for LooperPage {
                 | Button::FourthScene
                 | Button::Shift => self.transport,
             };
+            self.order_transport();
         }
     }
 
@@ -241,7 +284,11 @@ impl Page for LooperPage {
             .answering(Encoder::Main)
     }
 
+    /// The transport is ordered again here where the queue was full when it was
+    /// pressed, an order the engine never took leaving the two disagreeing for
+    /// as long as the run lasts.
     fn draw(&mut self, mut region: Region<'_>) {
+        self.order_transport();
         let position = self.position.read();
 
         region.write(0, STATE_ROW, named(self.transport));
