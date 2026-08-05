@@ -9,6 +9,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -81,6 +82,15 @@ fn interleaved(left: &[f32], right: &[f32]) -> Vec<f32> {
         .zip(right)
         .flat_map(|(left, right)| [*left, *right])
         .collect()
+}
+
+#[test]
+fn the_allocation_counter_counts_an_allocation() {
+    let before = allocations();
+    black_box(Vec::<f32>::with_capacity(4));
+    let after = allocations();
+
+    assert!(after > before, "the counter is not wired to the allocator");
 }
 
 #[test]

@@ -7,6 +7,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::hint::black_box;
 use std::thread;
 
 use motif::audio::{
@@ -59,6 +60,15 @@ const GRANTED: StreamConfig = StreamConfig {
     input_channels: 1,
     output_channels: 2,
 };
+
+#[test]
+fn the_allocation_counter_counts_an_allocation() {
+    let before = allocations();
+    black_box(Vec::<f32>::with_capacity(4));
+    let after = allocations();
+
+    assert!(after > before, "the counter is not wired to the allocator");
+}
 
 #[test]
 fn a_counter_starts_with_nothing_counted() {

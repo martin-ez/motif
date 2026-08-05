@@ -8,7 +8,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::hint::spin_loop;
+use std::hint::{black_box, spin_loop};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -54,6 +54,15 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 fn allocations() -> usize {
     ALLOCATIONS.with(Cell::get)
+}
+
+#[test]
+fn the_allocation_counter_counts_an_allocation() {
+    let before = allocations();
+    black_box(Vec::<f32>::with_capacity(4));
+    let after = allocations();
+
+    assert!(after > before, "the counter is not wired to the allocator");
 }
 
 #[test]

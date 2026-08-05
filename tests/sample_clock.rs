@@ -278,6 +278,18 @@ fn the_allocation_counter_counts_an_allocation() {
 }
 
 #[test]
+fn the_allocation_counter_counts_a_zeroed_allocation() {
+    let before = allocations();
+    std::hint::black_box(vec![0.0_f32; 4]);
+    let after = allocations();
+
+    assert!(
+        after > before,
+        "the counter is not wired to zeroed allocation"
+    );
+}
+
+#[test]
 fn a_new_clock_has_counted_no_frames() {
     let (_writer, reader) = sample_clock(SAMPLE_RATE);
 
