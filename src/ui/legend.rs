@@ -8,17 +8,17 @@
 //!
 //! What it draws is a picture of the panel — the navigation cross the player's
 //! thumb sits in, the scene buttons with the transport under them, the encoder
-//! beside — and no words at all. A key the page answers wears the glyph that
-//! reaches it; a key it ignores wears a dot. That is deliberately all it says:
-//! a screen that explains its controls in prose can go on being unreadable,
-//! where one that says only *which* controls are live has to make the rest
-//! obvious where the player is already looking.
+//! beside — and no words at all. Every key wears the glyph that reaches it, so
+//! the picture is a map of the panel wherever the player is; the keys the page
+//! answers are lit, and the rest sit dark. That is deliberately all it says: a
+//! screen that explains its controls in prose can go on being unreadable, where
+//! one that says only *which* controls are live has to make the rest obvious
+//! where the player is already looking.
 
 use crate::device::{Button, Control, DeviceProfile, Encoder};
 use crate::ui::{Cell, Controls, Frame, Hint};
 
-const DEAD: char = '·';
-const LIVE: char = '▒';
+const LIT: char = '▒';
 
 const TOP_LEFT: char = '┌';
 const TOP_RIGHT: char = '┐';
@@ -37,6 +37,7 @@ const ROUND_BOTTOM_LEFT: char = '╰';
 const ROUND_BOTTOM_RIGHT: char = '╯';
 
 const KEY_WIDTH: usize = 5;
+const ENCODER_WIDTH: usize = 7;
 
 const CROSS_LEFT_AT: usize = 9;
 const CROSS_MIDDLE_AT: usize = CROSS_LEFT_AT + KEY_WIDTH + 1;
@@ -66,11 +67,11 @@ const ACTIONS: [Control; GRID_WIDE] = [
     Control::Button(Button::Shift),
 ];
 
-/// How a key is drawn: named by the panel, live but unnamed, or dead.
-enum Look {
-    Named(Hint),
-    Live,
-    Dead,
+/// A key as it is drawn: what the panel calls it, and whether it does anything
+/// on this page.
+struct Look {
+    hint: Option<Hint>,
+    lit: bool,
 }
 
 fn centred(
@@ -96,30 +97,32 @@ fn span(frame: &mut Frame, row: usize, at: usize, width: usize, left: char, righ
     frame.set(at + width.saturating_sub(1), row, Cell::new(right));
 }
 
-fn face(frame: &mut Frame, row: usize, at: usize, look: Look) {
-    let inside = KEY_WIDTH - 2;
+fn face(frame: &mut Frame, row: usize, at: usize, width: usize, look: Look) {
+    let inside = width.saturating_sub(2);
 
     frame.set(at, row, Cell::new(VERTICAL));
-    frame.set(at + KEY_WIDTH - 1, row, Cell::new(VERTICAL));
+    frame.set(at + width.saturating_sub(1), row, Cell::new(VERTICAL));
 
-    match look {
-        Look::Named(hint) => centred(
+    if look.lit {
+        centred(
+            frame,
+            row,
+            at + 1,
+            inside,
+            inside,
+            std::iter::repeat_n(LIT, inside),
+        );
+    }
+
+    if let Some(hint) = look.hint {
+        centred(
             frame,
             row,
             at + 1,
             inside,
             hint.glyphs().count(),
             hint.glyphs(),
-        ),
-        Look::Live => centred(
-            frame,
-            row,
-            at + 1,
-            inside,
-            inside,
-            std::iter::repeat_n(LIVE, inside),
-        ),
-        Look::Dead => centred(frame, row, at + 1, inside, 1, std::iter::once(DEAD)),
+        );
     }
 }
 
@@ -128,7 +131,7 @@ fn face(frame: &mut Frame, row: usize, at: usize, look: Look) {
 /// A page answers a handful of controls and ignores the rest, and until it says
 /// which, the only way to find out is to press one and watch. Declaring it is
 /// what the screen is drawn from, so a control a page does not answer is drawn
-/// dead rather than left out — the panel then reads the same everywhere, and a
+/// dark rather than left out — the panel then reads the same everywhere, and a
 /// key that does nothing here is a fact on the screen rather than a silence.
 ///
 /// ```
@@ -181,14 +184,17 @@ impl Legend {
     }
 
     /// Draw the panel along the bottom [`ROWS`](Self::ROWS) rows of `frame`,
-    /// with each live key wearing the glyph `panel` reaches it by.
+    /// each key wearing the glyph `panel` reaches it by.
     ///
-    /// Every key keeps a place of its own, so nothing moves as the player
-    /// crosses from page to page and only what is on the keys changes. A live
-    /// key on a panel that offers no glyph — one whose keys are labelled under
-    /// the player's hands — is filled instead, because the screen still has to
-    /// say that it does something. The rows are cleared first, so nothing drawn
-    /// underneath shows through the gaps between keys.
+    /// A key the page answers is lit — filled behind its glyph, which is as
+    /// close to a backlit button as a screen of characters gets — and the rest
+    /// sit dark. Both are drawn, so the picture is a map of the panel wherever
+    /// the player is, and every key keeps a place of its own so that nothing
+    /// moves from page to page. A panel that offers no glyph, its keys being
+    /// labelled under the player's hands, lights the key alone.
+    ///
+    /// The rows are cleared first, so nothing drawn underneath shows through
+    /// the gaps between keys.
     pub fn draw(&self, frame: &mut Frame, panel: &impl Controls) {
         let screen = DeviceProfile::TARGET.screen;
         let top = screen.rows.saturating_sub(Self::ROWS);
@@ -217,6 +223,7 @@ impl Legend {
             frame,
             top + UP,
             CROSS_MIDDLE_AT,
+            KEY_WIDTH,
             self.look_of(Button::Up, panel),
         );
         span(
@@ -236,7 +243,13 @@ impl Legend {
             if at != CROSS_MIDDLE_AT {
                 span(frame, top + MIDDLE, at, KEY_WIDTH, TOP_LEFT, TOP_RIGHT);
             }
-            face(frame, top + BOTTOM, at, self.look_of(button, panel));
+            face(
+                frame,
+                top + BOTTOM,
+                at,
+                KEY_WIDTH,
+                self.look_of(button, panel),
+            );
             span(frame, top + UNDER, at, KEY_WIDTH, BOTTOM_LEFT, BOTTOM_RIGHT);
         }
     }
@@ -248,11 +261,17 @@ impl Legend {
 
         for (place, control) in SCENES.into_iter().enumerate() {
             let at = GRID_AT + place * GRID_STEP;
-            face(frame, top + UP, at, self.look_of(control, panel));
+            face(frame, top + UP, at, KEY_WIDTH, self.look_of(control, panel));
         }
         for (place, control) in ACTIONS.into_iter().enumerate() {
             let at = GRID_AT + place * GRID_STEP;
-            face(frame, top + BOTTOM, at, self.look_of(control, panel));
+            face(
+                frame,
+                top + BOTTOM,
+                at,
+                KEY_WIDTH,
+                self.look_of(control, panel),
+            );
         }
     }
 
@@ -261,7 +280,7 @@ impl Legend {
             frame,
             top + TOP_OF_UP,
             ENCODER_AT,
-            KEY_WIDTH,
+            ENCODER_WIDTH,
             ROUND_TOP_LEFT,
             ROUND_TOP_RIGHT,
         );
@@ -269,26 +288,23 @@ impl Legend {
             frame,
             top + UP,
             ENCODER_AT,
+            ENCODER_WIDTH,
             self.look_of(Encoder::Main, panel),
         );
         span(
             frame,
             top + MIDDLE,
             ENCODER_AT,
-            KEY_WIDTH,
+            ENCODER_WIDTH,
             ROUND_BOTTOM_LEFT,
             ROUND_BOTTOM_RIGHT,
         );
     }
 
     fn look_of(&self, control: impl Into<Control> + Copy, panel: &impl Controls) -> Look {
-        if !self.answers(control) {
-            return Look::Dead;
-        }
-
-        match panel.hint(control.into()) {
-            Some(hint) => Look::Named(hint),
-            None => Look::Live,
+        Look {
+            hint: panel.hint(control.into()),
+            lit: self.answers(control),
         }
     }
 }
