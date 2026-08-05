@@ -64,12 +64,12 @@ fn an_event_pushed_after_the_script_ran_out_is_polled_next() {
 
 #[test]
 fn a_turn_names_the_encoder_and_which_way_it_went() {
-    let event = turned(Encoder::Third, Turn::Anticlockwise);
+    let event = turned(Encoder::Main, Turn::Anticlockwise);
 
     assert_eq!(
         event,
         ControlEvent::Turned {
-            encoder: Encoder::Third,
+            encoder: Encoder::Main,
             turn: Turn::Anticlockwise,
             shifted: false,
         }
@@ -79,7 +79,7 @@ fn a_turn_names_the_encoder_and_which_way_it_went() {
 #[test]
 fn an_unshifted_event_is_not_shifted() {
     assert!(!pressed(Button::Play).is_shifted());
-    assert!(!turned(Encoder::First, Turn::Clockwise).is_shifted());
+    assert!(!turned(Encoder::Main, Turn::Clockwise).is_shifted());
 }
 
 #[test]
@@ -95,7 +95,7 @@ fn a_shifted_press_is_shifted() {
 #[test]
 fn a_shifted_turn_is_shifted() {
     let event = ControlEvent::Turned {
-        encoder: Encoder::First,
+        encoder: Encoder::Main,
         turn: Turn::Clockwise,
         shifted: true,
     };

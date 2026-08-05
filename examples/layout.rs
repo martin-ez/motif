@@ -38,7 +38,7 @@
 use std::io::{self, IsTerminal, Write};
 
 use motif::audio::Levels;
-use motif::device::{Button, DeviceProfile};
+use motif::device::{Button, DeviceProfile, Encoder};
 use motif::looper::{LoopBuffer, Transport};
 use motif::ui::{
     App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, RenderError, TerminalScreen,
@@ -199,9 +199,10 @@ impl App for Layout {
 
     fn legend(&self) -> Legend {
         Legend::blank()
-            .naming(Button::Play, "play")
-            .naming(Button::Stop, "stop")
-            .naming(Button::Record, "rec")
+            .answering(Button::Play)
+            .answering(Button::Stop)
+            .answering(Button::Record)
+            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {

@@ -27,7 +27,7 @@
 //!     }
 //!
 //!     fn legend(&self) -> Legend {
-//!         Legend::blank().naming(Button::Stop, "quit")
+//!         Legend::blank().answering(Button::Stop)
 //!     }
 //!
 //!     fn draw(&mut self, frame: &mut Frame) -> Flow {
@@ -60,7 +60,7 @@ use crate::ui::{Clock, ControlEvent, Controls, Frame, Legend, RenderError, Rende
 /// run dry: a terminal handed a pasted page of text produces a control per
 /// character for as long as the paste lasts, and a drain that read until it
 /// stopped would spend the frame reading instead of drawing. The panel has
-/// eleven controls and a player has two hands, so this is far more than one
+/// a dozen controls and a player has two hands, so this is far more than one
 /// frame of playing; reaching it means the source is not a player, and what is
 /// left over waits for the next frame rather than being dropped.
 pub const EVENTS_PER_FRAME: usize = 32;

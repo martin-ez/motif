@@ -131,7 +131,7 @@ fn an_encoder_leaves_the_transport_alone() {
     let mut page = driven_by([Button::Record]);
 
     page.control(ControlEvent::Turned {
-        encoder: Encoder::First,
+        encoder: Encoder::Main,
         turn: Turn::Clockwise,
         shifted: false,
     });
@@ -226,18 +226,19 @@ fn the_bar_spans_the_screen() {
 }
 
 #[test]
-fn the_page_declares_what_the_transport_buttons_do() {
+fn the_page_declares_the_transport_buttons_it_answers() {
     let legend = page().legend();
 
-    assert_eq!(legend.meaning(Button::Play), Some("play"));
-    assert_eq!(legend.meaning(Button::Stop), Some("stop"));
-    assert_eq!(legend.meaning(Button::Record), Some("rec"));
+    assert!(legend.answers(Button::Play));
+    assert!(legend.answers(Button::Stop));
+    assert!(legend.answers(Button::Record));
 }
 
 #[test]
 fn the_page_declares_nothing_for_a_control_it_leaves_alone() {
     let legend = page().legend();
 
-    assert_eq!(legend.meaning(Button::Up), None);
-    assert_eq!(legend.meaning(Encoder::First), None);
+    assert!(!legend.answers(Button::Up));
+    assert!(!legend.answers(Button::FirstScene));
+    assert!(!legend.answers(Encoder::Main));
 }

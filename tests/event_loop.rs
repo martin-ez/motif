@@ -11,9 +11,10 @@ use motif::ui::{
     NullRenderer, RenderError, Renderer, ScriptedClock, ScriptedControls,
 };
 
-/// What the page below says its one answered control does, so a legend on the
-/// screen can be told apart from anything else drawn there.
-const MEANING: &str = "go";
+/// The edge of a key, which is drawn for every control whether the page answers
+/// it or not, so a panel on the screen can be told from anything else drawn
+/// there.
+const KEY_EDGE: char = '┌';
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
 
@@ -65,7 +66,7 @@ impl App for Page {
     }
 
     fn legend(&self) -> Legend {
-        Legend::blank().naming(Button::Play, MEANING)
+        Legend::blank().answering(Button::Play)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {
@@ -406,7 +407,7 @@ impl App for Covering {
     }
 
     fn legend(&self) -> Legend {
-        Legend::blank().naming(Button::Play, MEANING)
+        Legend::blank().answering(Button::Play)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {
@@ -444,7 +445,7 @@ fn a_run_puts_what_the_page_declares_on_the_screen() {
         .expect("the screen accepts the frames this run draws");
 
     let drawn = screen.rendered().expect("a frame was drawn");
-    assert!(text_of(drawn).contains(MEANING));
+    assert!(text_of(drawn).contains(KEY_EDGE));
 }
 
 #[test]

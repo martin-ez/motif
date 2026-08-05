@@ -1,24 +1,21 @@
-//! What a page says its controls do, and how that reaches the screen.
+//! Which controls a page answers, and the panel the screen draws from that.
 //!
-//! The legend is where a page's meanings and a backend's glyphs meet, so this
+//! The legend is where a page's declaration and a backend's glyphs meet, so this
 //! is the one thing that has to hold both without either knowing the other. No
 //! key is named here: the panels below hand out glyphs of their own invention,
 //! which is all a legend ever learns about how a control is reached.
 //!
 //! The drawing is checked by where things land rather than by the text of a
-//! row: a key is a border with a glyph inside it and its meaning beneath, and
-//! that is what the assertions look for.
+//! row: a key is an edge with a glyph inside it, and the arrangement of those
+//! keys is the picture of the panel.
 
 use motif::device::{Button, Control, DeviceProfile, Encoder, ScreenProfile};
 use motif::ui::{ControlEvent, Controls, Frame, Hint, Legend};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
+const DEAD: char = '·';
 
 /// The glyph the panels below reach `control` by.
-///
-/// Upper case, because every meaning in this file is lower case: a test that a
-/// panel drew no glyphs is only worth anything if a glyph cannot hide inside a
-/// meaning.
 fn glyph_of(control: impl Into<Control>) -> char {
     let control = control.into();
     let position = Control::ALL
@@ -27,6 +24,12 @@ fn glyph_of(control: impl Into<Control>) -> char {
         .expect("every control is listed in ALL");
 
     char::from(b'A' + position as u8)
+}
+
+fn every_control() -> Legend {
+    Control::ALL
+        .into_iter()
+        .fold(Legend::blank(), |legend, control| legend.answering(control))
 }
 
 /// A panel reached by glyphs, as a terminal's keyboard is.
@@ -42,7 +45,7 @@ impl Controls for Lettered {
     }
 }
 
-/// A panel whose controls are labelled on the hardware, so the screen has
+/// A panel whose keys are labelled under the player's hands, so the screen has
 /// nothing to name them with.
 struct Unlabelled;
 
@@ -85,7 +88,7 @@ struct At {
     column: usize,
 }
 
-/// Where `text` was drawn, counted in cells rather than bytes: a row of keys is
+/// Where `text` was drawn, counted in cells rather than bytes: the panel is
 /// mostly box-drawing characters, which are three bytes each and one cell each.
 fn found(frame: &Frame, text: &str) -> At {
     (0..SCREEN.rows)
@@ -105,39 +108,40 @@ fn key_of(frame: &Frame, control: impl Into<Control>) -> At {
 }
 
 #[test]
-fn a_page_declares_what_a_control_does_on_it() {
-    let legend = Legend::blank().naming(Button::Play, "play");
+fn a_page_declares_the_controls_it_answers() {
+    let legend = Legend::blank().answering(Button::Play);
 
-    assert_eq!(legend.meaning(Button::Play), Some("play"));
+    assert!(legend.answers(Button::Play));
 }
 
 #[test]
-fn a_control_a_page_leaves_alone_means_nothing_on_it() {
-    let legend = Legend::blank().naming(Button::Play, "play");
+fn a_control_a_page_leaves_alone_is_not_answered() {
+    let legend = Legend::blank().answering(Button::Play);
 
-    assert_eq!(legend.meaning(Button::Up), None);
-    assert_eq!(legend.meaning(Encoder::First), None);
+    assert!(!legend.answers(Button::Up));
+    assert!(!legend.answers(Encoder::Main));
+    assert!(!legend.answers(Control::Shift));
 }
 
 #[test]
-fn declaring_a_control_twice_keeps_the_later_meaning() {
+fn answering_a_control_twice_answers_it_once() {
     let legend = Legend::blank()
-        .naming(Encoder::First, "gain")
-        .naming(Encoder::First, "level");
+        .answering(Encoder::Main)
+        .answering(Encoder::Main);
 
-    assert_eq!(legend.meaning(Encoder::First), Some("level"));
+    assert!(legend.answers(Encoder::Main));
 }
 
 #[test]
-fn what_a_control_does_is_on_screen() {
-    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
+fn a_control_the_page_answers_wears_the_glyph_that_reaches_it() {
+    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
 
-    assert!(text_of(&frame).contains("play"));
+    assert!(text_of(&frame).contains(glyph_of(Button::Play)));
 }
 
 #[test]
 fn a_control_is_drawn_as_a_key_with_an_edge_around_it() {
-    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
+    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
     let key = key_of(&frame, Button::Play);
 
     assert_eq!(glyph_at(&frame, key.column, key.row - 1), '─');
@@ -147,28 +151,45 @@ fn a_control_is_drawn_as_a_key_with_an_edge_around_it() {
 }
 
 #[test]
-fn what_a_control_does_is_written_under_its_key() {
-    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
-    let key = key_of(&frame, Button::Play);
-    let meaning = found(&frame, "play");
+fn every_control_on_the_panel_is_on_screen() {
+    let frame = drawn(&every_control(), &Lettered);
+    let text = text_of(&frame);
 
-    assert_eq!(meaning.row, key.row + 2);
-    assert!(meaning.column.abs_diff(key.column) <= 2);
+    for control in Control::ALL {
+        assert!(
+            text.contains(glyph_of(control)),
+            "{control:?} is not on the screen"
+        );
+    }
 }
 
 #[test]
-fn an_encoder_is_drawn_as_a_key_of_its_own() {
-    let frame = drawn(&Legend::blank().naming(Encoder::Third, "gain"), &Lettered);
-    let key = key_of(&frame, Encoder::Third);
-    let meaning = found(&frame, "gain");
+fn a_control_the_page_does_not_answer_is_drawn_dead_rather_than_dropped() {
+    let answered = drawn(&every_control(), &Lettered);
+    let frame = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let stop = key_of(&answered, Button::Stop);
 
-    assert_eq!(glyph_at(&frame, key.column, key.row - 1), '─');
-    assert_eq!(meaning.row, key.row + 2);
+    assert!(!text_of(&frame).contains(glyph_of(Button::Stop)));
+    assert_eq!(glyph_at(&frame, stop.column, stop.row), DEAD);
+}
+
+#[test]
+fn a_panel_that_labels_its_own_keys_still_says_which_are_live() {
+    let frame = drawn(&Legend::blank().answering(Button::Play), &Unlabelled);
+    let text = text_of(&frame);
+
+    assert!(text.contains('▒'));
+    for control in Control::ALL {
+        assert!(
+            !text.contains(glyph_of(control)),
+            "{control:?} was named by a glyph the panel does not have"
+        );
+    }
 }
 
 #[test]
 fn the_navigation_keys_are_drawn_in_the_pattern_they_sit_in() {
-    let frame = drawn(&Legend::blank(), &Lettered);
+    let frame = drawn(&every_control(), &Lettered);
     let (up, down) = (key_of(&frame, Button::Up), key_of(&frame, Button::Down));
     let (left, right) = (key_of(&frame, Button::Left), key_of(&frame, Button::Right));
 
@@ -181,53 +202,56 @@ fn the_navigation_keys_are_drawn_in_the_pattern_they_sit_in() {
 }
 
 #[test]
-fn the_key_at_the_top_of_the_cluster_is_named_beside_it() {
-    let frame = drawn(&Legend::blank().naming(Button::Up, "up"), &Lettered);
-    let key = key_of(&frame, Button::Up);
-    let meaning = found(&frame, "up");
+fn the_scene_buttons_run_left_to_right_in_a_row_of_their_own() {
+    let frame = drawn(&every_control(), &Lettered);
+    let scenes = [
+        Button::FirstScene,
+        Button::SecondScene,
+        Button::ThirdScene,
+        Button::FourthScene,
+    ]
+    .map(|scene| key_of(&frame, scene));
 
-    assert_eq!(meaning.row, key.row);
-    assert!(meaning.column > key.column);
-}
-
-#[test]
-fn every_control_on_the_panel_is_on_screen() {
-    let frame = drawn(&Legend::blank(), &Lettered);
-    let text = text_of(&frame);
-
-    for control in Control::ALL {
-        assert!(
-            text.contains(glyph_of(control)),
-            "{control:?} is not on the screen"
-        );
+    for pair in scenes.windows(2) {
+        assert_eq!(pair[0].row, pair[1].row);
+        assert!(pair[0].column < pair[1].column);
     }
 }
 
 #[test]
-fn a_control_the_page_does_not_answer_reads_as_unavailable() {
-    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
-    let key = key_of(&frame, Button::Stop);
+fn the_action_keys_are_drawn_under_the_scene_buttons() {
+    let frame = drawn(&every_control(), &Lettered);
+    let scene = key_of(&frame, Button::FirstScene);
+    let actions = [Button::Play, Button::Stop, Button::Record].map(|action| key_of(&frame, action));
 
-    assert_eq!(glyph_at(&frame, key.column, key.row + 2), '-');
+    assert_eq!(actions[0].column, scene.column);
+    for action in &actions {
+        assert_eq!(action.row, scene.row + 2);
+    }
 }
 
 #[test]
-fn a_panel_that_labels_its_own_controls_is_drawn_without_glyphs() {
-    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Unlabelled);
-    let text = text_of(&frame);
+fn shift_is_a_key_on_the_panel_like_any_other() {
+    let frame = drawn(&every_control(), &Lettered);
+    let shift = key_of(&frame, Control::Shift);
+    let record = key_of(&frame, Button::Record);
 
-    assert!(text.contains("play"));
-    for control in Control::ALL {
-        assert!(
-            !text.contains(glyph_of(control)),
-            "{control:?} was named by a glyph the panel does not have"
-        );
-    }
+    assert_eq!(shift.row, record.row);
+    assert!(shift.column > record.column);
+}
+
+#[test]
+fn the_encoder_is_drawn_as_a_knob_rather_than_a_key() {
+    let frame = drawn(&every_control(), &Lettered);
+    let encoder = key_of(&frame, Encoder::Main);
+
+    assert_eq!(glyph_at(&frame, encoder.column - 2, encoder.row - 1), '╭');
+    assert_eq!(glyph_at(&frame, encoder.column + 2, encoder.row + 1), '╯');
 }
 
 #[test]
 fn the_legend_keeps_to_the_rows_it_reserves() {
-    let frame = drawn(&Legend::blank().naming(Button::Play, "play"), &Lettered);
+    let frame = drawn(&every_control(), &Lettered);
 
     for row in 0..SCREEN.rows - Legend::ROWS {
         assert_eq!(row_of(&frame, row).trim(), "", "row {row} was drawn on");
@@ -235,31 +259,12 @@ fn the_legend_keeps_to_the_rows_it_reserves() {
 }
 
 #[test]
-fn a_key_keeps_its_place_whatever_the_page_means_by_it() {
-    let bare = drawn(&Legend::blank(), &Lettered);
-    let filled = drawn(
-        &Legend::blank()
-            .naming(Button::Play, "play")
-            .naming(Encoder::First, "gain"),
-        &Lettered,
-    );
-    let (before, after) = (
-        key_of(&bare, Encoder::Fourth),
-        key_of(&filled, Encoder::Fourth),
-    );
+fn a_key_keeps_its_place_whether_it_is_live_or_dead() {
+    let all = drawn(&every_control(), &Lettered);
+    let one = drawn(&Legend::blank().answering(Button::Record), &Lettered);
+    let (before, after) = (key_of(&all, Button::Record), key_of(&one, Button::Record));
 
     assert_eq!((before.row, before.column), (after.row, after.column));
-}
-
-#[test]
-fn a_meaning_too_long_for_its_key_does_not_reach_the_next_one() {
-    let crowded = drawn(
-        &Legend::blank().naming(Encoder::First, "a meaning far longer than a key is wide"),
-        &Lettered,
-    );
-    let next = key_of(&crowded, Encoder::Second);
-
-    assert_eq!(glyph_at(&crowded, next.column, next.row + 2), '-');
 }
 
 #[test]

@@ -157,8 +157,31 @@ fn every_encoder_is_a_control_on_the_panel() {
 }
 
 #[test]
-fn the_panel_holds_nothing_but_its_buttons_and_encoders() {
-    assert_eq!(Control::ALL.len(), Button::ALL.len() + Encoder::ALL.len());
+fn shift_is_a_control_on_the_panel_without_being_a_button() {
+    assert!(Control::ALL.contains(&Control::Shift));
+    assert_eq!(
+        Control::ALL.len(),
+        Button::ALL.len() + Encoder::ALL.len() + 1
+    );
+}
+
+#[test]
+fn the_panel_carries_four_scene_buttons() {
+    let scenes = [
+        Button::FirstScene,
+        Button::SecondScene,
+        Button::ThirdScene,
+        Button::FourthScene,
+    ];
+
+    for scene in scenes {
+        assert!(Button::ALL.contains(&scene), "{scene:?} is missing");
+    }
+}
+
+#[test]
+fn the_panel_carries_one_encoder() {
+    assert_eq!(Encoder::ALL.len(), 1);
 }
 
 #[test]

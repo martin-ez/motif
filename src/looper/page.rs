@@ -124,7 +124,14 @@ impl App for LooperPage {
                 Button::Record => self.transport.record(),
                 Button::Play => self.transport.play(),
                 Button::Stop => self.transport.stop(),
-                Button::Up | Button::Down | Button::Left | Button::Right => self.transport,
+                Button::Up
+                | Button::Down
+                | Button::Left
+                | Button::Right
+                | Button::FirstScene
+                | Button::SecondScene
+                | Button::ThirdScene
+                | Button::FourthScene => self.transport,
             };
         }
 
@@ -133,9 +140,9 @@ impl App for LooperPage {
 
     fn legend(&self) -> Legend {
         Legend::blank()
-            .naming(Button::Play, "play")
-            .naming(Button::Stop, "stop")
-            .naming(Button::Record, "rec")
+            .answering(Button::Play)
+            .answering(Button::Stop)
+            .answering(Button::Record)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {

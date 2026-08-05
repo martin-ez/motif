@@ -29,7 +29,7 @@
 //! assert_eq!(frame.len(), CELLS);
 //!
 //! let mut parameters = [0.0; Encoder::ALL.len()];
-//! parameters[Encoder::Third as usize] = 0.5;
+//! parameters[Encoder::Main as usize] = 0.5;
 //! ```
 
 use std::time::Duration;
@@ -95,12 +95,13 @@ macro_rules! panel_control {
 }
 
 panel_control! {
-    /// An encoder on the panel, named for where it sits.
+    /// An encoder on the panel.
     ///
-    /// The name is the position and nothing else: an encoder adjusts whatever
-    /// the page beneath it is showing, so unlike a [`Button`] it carries no
-    /// meaning of its own. It is a closed set rather than a count because an
-    /// encoder the panel does not have should not be expressible.
+    /// The panel has one, and it is a closed set of one rather than a bare
+    /// marker: what the panel carries is a decision, so a second encoder should
+    /// be a variant added here rather than a new type threaded through every
+    /// consumer. Unlike a [`Button`] it carries no meaning of its own — it
+    /// adjusts whatever the page beneath it is showing.
     ///
     /// The set is declared once, and [`ALL`](Self::ALL) is generated from that
     /// declaration. An encoder cannot be added to the panel and left out of the
@@ -112,18 +113,12 @@ panel_control! {
     /// An encoder's position here is its discriminant, so `encoder as usize`
     /// indexes an array sized by `ALL.len()`.
     const ALL;
-    /// The leftmost encoder.
-    First,
-    /// The second encoder from the left.
-    Second,
-    /// The third encoder from the left.
-    Third,
-    /// The rightmost encoder.
-    Fourth,
+    /// The encoder beside the screen.
+    Main,
 }
 
 panel_control! {
-    /// A button on the panel, named for what it is rather than numbered.
+    /// A button on the panel, named for what it does rather than numbered.
     ///
     /// Naming them is what lets a backend's key mapping be checked: a `match`
     /// over this enum stops compiling when the panel gains a button, so the
@@ -131,11 +126,17 @@ panel_control! {
     /// [`Encoder`], the set is declared once and [`ALL`](Self::ALL) is
     /// generated from it, so the two cannot drift apart.
     ///
-    /// Shift is absent deliberately. It is a modifier — it changes what another
+    /// The scene buttons are the exception, and are named for where they sit:
+    /// which scene a button selects is a fact about the song rather than about
+    /// the panel, so the fourth button is the fourth button whatever is loaded
+    /// under it.
+    ///
+    /// Shift is not a button. It is a modifier — it changes what another
     /// control means rather than meaning anything alone — so a backend resolves
     /// it and stamps it onto the event. A `Shift` variant here would put the
     /// held state back into every consumer, which is key handling with a new
-    /// name.
+    /// name. It is still a key under the player's hand, so it is drawable as
+    /// [`Control::Shift`].
     enum Button;
     /// Every button, in panel order.
     ///
@@ -150,6 +151,14 @@ panel_control! {
     Left,
     /// Navigate right.
     Right,
+    /// The leftmost scene button.
+    FirstScene,
+    /// The second scene button from the left.
+    SecondScene,
+    /// The third scene button from the left.
+    ThirdScene,
+    /// The rightmost scene button.
+    FourthScene,
     /// Start playback.
     Play,
     /// Halt playback.
@@ -163,7 +172,7 @@ panel_control! {
 /// [`Button`] and [`Encoder`] are separate sets because a button is pressed and
 /// an encoder is turned, and an event is one or the other. Anything describing
 /// the panel as a whole — which controls a page answers, how a backend reaches
-/// them — needs the two as one set, and this is it.
+/// them — needs them as one set, and this is it.
 ///
 /// [`ALL`](Self::ALL) is derived from the two arrays rather than written out, so
 /// a control added to the panel cannot be left out of it.
@@ -173,33 +182,41 @@ pub enum Control {
     Button(Button),
     /// An encoder, which is turned.
     Encoder(Encoder),
+    /// The shift key, which is held.
+    ///
+    /// It is here and not in [`Button`] because it never arrives as an event:
+    /// it changes what another control means, and a backend resolves it onto
+    /// that control's event. It is still a key on the panel that a player has
+    /// to find, so anything drawing the panel has to be able to name it.
+    Shift,
 }
 
 impl Control {
     /// Every control on the panel: the buttons in panel order, then the
-    /// encoders left to right.
+    /// encoders left to right, then shift.
     ///
     /// A control's place here is its [`position`](Self::position), so an array
     /// sized by `ALL.len()` holds one entry per control.
-    pub const ALL: [Self; Button::ALL.len() + Encoder::ALL.len()] = Self::listed();
+    pub const ALL: [Self; Button::ALL.len() + Encoder::ALL.len() + 1] = Self::listed();
 
     /// Where this control sits in [`ALL`](Self::ALL).
     pub const fn position(self) -> usize {
         match self {
             Self::Button(button) => button as usize,
             Self::Encoder(encoder) => Button::ALL.len() + encoder as usize,
+            Self::Shift => Button::ALL.len() + Encoder::ALL.len(),
         }
     }
 
-    const fn listed() -> [Self; Button::ALL.len() + Encoder::ALL.len()] {
-        let mut listed = [Self::Button(Button::Up); Button::ALL.len() + Encoder::ALL.len()];
+    const fn listed() -> [Self; Button::ALL.len() + Encoder::ALL.len() + 1] {
+        let mut listed = [Self::Shift; Button::ALL.len() + Encoder::ALL.len() + 1];
         let mut at = 0;
 
         while at < Button::ALL.len() {
             listed[at] = Self::Button(Button::ALL[at]);
             at += 1;
         }
-        while at < listed.len() {
+        while at < Button::ALL.len() + Encoder::ALL.len() {
             listed[at] = Self::Encoder(Encoder::ALL[at - Button::ALL.len()]);
             at += 1;
         }
