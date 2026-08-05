@@ -6,8 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+fn unique_to_this_run(name: &str) -> String {
+    format!("motif-harness-{}-{name}", std::process::id())
+}
+
 fn scratch(name: &str) -> PathBuf {
-    let directory = std::env::temp_dir().join(format!("motif-harness-{name}"));
+    let directory = std::env::temp_dir().join(unique_to_this_run(name));
     let _ = fs::remove_dir_all(&directory);
     fs::create_dir_all(&directory).expect("the scratch directory is writable");
     directory

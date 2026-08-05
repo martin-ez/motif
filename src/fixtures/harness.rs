@@ -9,6 +9,7 @@
 //! A candidate arrives as a sequence of timestamps, so nothing here knows about
 //! analysers or audio.
 
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -97,9 +98,9 @@ pub fn checked_in() -> PathBuf {
 ///
 /// # Errors
 ///
-/// Returns [`RunError`] naming the fixture at fault, and scores nothing. A
-/// fixture that cannot be read is not skipped: dropping one from the run raises
-/// the aggregate over those that remain, which reads as an improvement.
+/// Returns [`RunError`] naming what was at fault, and scores nothing. A fixture
+/// that cannot be read is not skipped: dropping one from the run raises the
+/// aggregate over those that remain, which reads as an improvement.
 ///
 /// ```
 /// use motif::fixtures::harness::{self, Target};
@@ -176,11 +177,11 @@ fn load(directory: &Path) -> Result<Vec<GroundTruth>, RunError> {
 }
 
 fn fixture_name(path: &Path) -> Option<String> {
-    if path.extension()?.to_str()? != ANNOTATION_EXTENSION {
+    if path.extension()? != OsStr::new(ANNOTATION_EXTENSION) {
         return None;
     }
 
-    path.file_stem()?.to_str().map(str::to_owned)
+    Some(path.file_stem()?.to_string_lossy().into_owned())
 }
 
 /// What a candidate scored over a fixture set.
