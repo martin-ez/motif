@@ -148,9 +148,8 @@ pub trait AudioBackend {
     /// repeats. One that cannot is absent rather than listed and unopenable, as
     /// is a host left with nothing behind it, or one that will not answer.
     ///
-    /// Only that direction is promised — a backend may open something it did
-    /// not list, as [`NullBackend::rounding`] does — so this is a menu to choose
-    /// from rather than a ruling on what would work.
+    /// Only that direction is promised — a backend may open something it did not
+    /// list, as [`NullBackend::rounding`] does — so this is a menu, not a ruling.
     ///
     /// Blocks and allocates; never reach it from the audio callback.
     fn hosts(&self, sample_rate: u32) -> Vec<AudioHost>;

@@ -46,17 +46,13 @@ impl Levels {
     /// Measure `samples`.
     ///
     /// Channel layout does not matter: interleaved samples are measured across
-    /// every channel at once, which is what a meter watching for clipping
-    /// wants. Folding the channels together first would let one channel at full
-    /// scale hide against another.
+    /// every channel at once, which is what a meter watching for clipping wants.
+    /// Folding the channels together would let one at full scale hide.
     ///
-    /// A block with no samples in it measures as [`SILENT`](Self::SILENT), and
-    /// so does a sample that is not finite. A driver is free to hand back
-    /// whatever is in its buffer, and left alone one such sample poisons the
-    /// whole block: comparison ignores a NaN where addition carries it, so the
-    /// block would read as an infinite peak beside an RMS of NaN — a pair no
-    /// block ever had, which is the thing packing the two into one word exists
-    /// to prevent.
+    /// A block with no samples measures as [`SILENT`](Self::SILENT), and so does
+    /// one holding a sample that is not finite — a driver is free to hand back
+    /// whatever was in its buffer, and comparison ignores a NaN where addition
+    /// carries it.
     ///
     /// ```
     /// use motif::audio::Levels;
