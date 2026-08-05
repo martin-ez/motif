@@ -11,4 +11,5 @@ pub mod fixtures;
 pub mod looper;
 pub mod monitor;
 pub mod seq;
+pub mod settings;
 pub mod ui;
