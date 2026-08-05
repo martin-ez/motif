@@ -306,6 +306,15 @@ fn reopening_uses_the_selection_the_link_was_last_given() {
 }
 
 #[test]
+fn a_link_lends_the_backend_it_opens_through() {
+    let link = opened();
+
+    let listed = link.backend().hosts(48_000);
+
+    assert_eq!(listed, NullBackend::rounding(config()).hosts(48_000));
+}
+
+#[test]
 fn an_audio_state_describes_itself() {
     assert_eq!(AudioState::Playing.to_string(), "playing");
 }

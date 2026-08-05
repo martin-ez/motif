@@ -92,6 +92,14 @@ impl<B: AudioBackend> DeviceLink<B> {
         self.request
     }
 
+    /// The backend every stream this link opens comes from.
+    ///
+    /// Lent rather than cloned, so a [`DeviceCatalog`](super::DeviceCatalog)
+    /// can be refreshed through the same backend the link is playing through.
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
     /// The devices and channels the link is opening, or last tried to.
     ///
     /// A selection a device refused stays here rather than being rolled back,

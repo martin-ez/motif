@@ -1,9 +1,9 @@
 //! Opening a duplex audio stream, and the boundary between its callback and
 //! the rest of the system.
 //!
-//! Devices are reached through [`AudioBackend`] rather than directly, so the
-//! rest of the crate compiles against the abstraction and a backend with no
-//! hardware behind it can stand in where no audio device exists.
+//! Devices are reached through [`AudioBackend`] rather than directly, so a
+//! backend with no hardware behind it can stand in where none exists, and
+//! [`DeviceCatalog`] holds what one last listed rather than asking again.
 //!
 //! Everything crossing the callback boundary does so over a lock-free channel
 //! built here: [`sample_ring`] for the audio, [`command_channel`] for changes
@@ -15,6 +15,7 @@
 
 use std::fmt;
 
+mod catalog;
 mod command;
 mod cpal_backend;
 mod fault;
@@ -25,6 +26,7 @@ mod passthrough;
 mod ring;
 mod xrun;
 
+pub use catalog::DeviceCatalog;
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
 pub use fault::{FaultReader, FaultReporter, fault_channel};
