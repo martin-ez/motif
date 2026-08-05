@@ -6,7 +6,7 @@
 //! result is read back off the frame the page drew.
 
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
-use motif::ui::{ControlEvent, Controls, Frame, Legend, ListPage, Page, ScriptedControls, Turn};
+use motif::ui::{ControlEvent, Controls, Frame, ListPage, Page, ScriptedControls, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const MARKER: char = '>';
@@ -240,8 +240,8 @@ fn a_list_longer_than_the_viewport_draws_a_viewport() {
 }
 
 #[test]
-fn the_viewport_is_the_screen_above_the_panel() {
-    assert_eq!(ListPage::VISIBLE_ROWS, SCREEN.rows - Legend::ROWS);
+fn the_viewport_is_the_whole_screen() {
+    assert_eq!(ListPage::VISIBLE_ROWS, SCREEN.rows);
 }
 
 #[test]

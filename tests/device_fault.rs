@@ -46,6 +46,7 @@ fn two_reporters_share_one_channel() {
 #[test]
 fn every_device_error_survives_the_crossing() {
     let errors = [
+        DeviceError::NoSuchHost,
         DeviceError::NoInputDevice,
         DeviceError::NoOutputDevice,
         DeviceError::UnsupportedConfig,

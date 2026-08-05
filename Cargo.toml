@@ -18,6 +18,11 @@ path = "src/lib.rs"
 name = "motif"
 path = "src/main.rs"
 
+# Off by default: a diagnostic that ships in a production build is one a player
+# will find rather than whoever needed it.
+[features]
+frame-pace = []
+
 [dependencies]
 cpal = "0.18.1"
 libc = "0.2.189"

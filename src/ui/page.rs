@@ -8,8 +8,8 @@ use crate::ui::{ControlEvent, Frame, Legend};
 /// [`Flow`](crate::ui::Flow): a page cannot end the run, having nothing to
 /// return that would say so. Quitting belongs to the shell.
 ///
-/// A page is handed the whole frame, of which the bottom [`Legend::ROWS`] rows
-/// are drawn over afterwards with what it declared.
+/// A page is handed the whole frame and keeps all of it: what it declares is
+/// drawn beside the screen, never over it.
 ///
 /// ```
 /// use motif::device::Button;

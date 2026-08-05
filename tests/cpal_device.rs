@@ -5,7 +5,8 @@
 //! has one.
 
 use motif::audio::{
-    AudioBackend, AudioDevice, CpalBackend, DuplexStream, StreamRequest, StreamState,
+    AudioBackend, AudioDevice, ChannelSelection, CpalBackend, DeviceError, DeviceSelection,
+    DuplexStream, StreamRequest, StreamState,
 };
 
 fn request() -> StreamRequest {
@@ -15,11 +16,19 @@ fn request() -> StreamRequest {
     }
 }
 
+fn selection() -> DeviceSelection {
+    CpalBackend::new()
+        .defaults(48_000)
+        .expect("a machine with an audio device has a default one")
+}
+
 #[test]
 #[ignore = "requires an audio device"]
 fn a_device_grants_a_configuration_it_can_run() {
     let backend = CpalBackend::new();
-    let stream = backend.open(request()).expect("a default device opens");
+    let stream = backend
+        .open(&selection(), request())
+        .expect("a default device opens");
 
     let config = stream.config();
     assert_eq!(config.sample_rate, 48_000);
@@ -32,7 +41,9 @@ fn a_device_grants_a_configuration_it_can_run() {
 #[ignore = "requires an audio device"]
 fn a_device_stream_starts_and_stops() {
     let backend = CpalBackend::new();
-    let mut stream = backend.open(request()).expect("a default device opens");
+    let mut stream = backend
+        .open(&selection(), request())
+        .expect("a default device opens");
 
     assert_eq!(stream.state(), StreamState::Stopped);
     stream.start().expect("a default device starts");
@@ -46,10 +57,13 @@ fn a_device_stream_starts_and_stops() {
 fn a_block_size_of_zero_is_an_error_rather_than_a_panic() {
     let backend = CpalBackend::new();
 
-    let opened = backend.open(StreamRequest {
-        sample_rate: 48_000,
-        block_size: 0,
-    });
+    let opened = backend.open(
+        &selection(),
+        StreamRequest {
+            sample_rate: 48_000,
+            block_size: 0,
+        },
+    );
 
     assert!(opened.is_err());
 }
@@ -59,12 +73,102 @@ fn a_block_size_of_zero_is_an_error_rather_than_a_panic() {
 fn a_sample_rate_no_device_supports_is_an_error() {
     let backend = CpalBackend::new();
 
-    let opened = backend.open(StreamRequest {
-        sample_rate: 1,
-        block_size: 256,
-    });
+    let opened = backend.open(
+        &selection(),
+        StreamRequest {
+            sample_rate: 1,
+            block_size: 256,
+        },
+    );
 
     assert!(opened.is_err());
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_default_selection_names_devices_the_backend_lists() {
+    let chosen = selection();
+    let hosts = CpalBackend::new().hosts(48_000);
+
+    let host = hosts
+        .iter()
+        .find(|host| host.name == chosen.host)
+        .expect("the default host is listed");
+
+    assert!(host.inputs.iter().any(|device| device.name == chosen.input));
+    assert!(
+        host.outputs
+            .iter()
+            .any(|device| device.name == chosen.output)
+    );
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_device_opens_against_a_selection_taken_from_the_listing() {
+    let hosts = CpalBackend::new().hosts(48_000);
+    let host = hosts
+        .iter()
+        .find(|host| !host.inputs.is_empty() && !host.outputs.is_empty())
+        .expect("a machine with an audio device has a host with both");
+
+    let stream = CpalBackend::new().open(
+        &DeviceSelection {
+            host: host.name.clone(),
+            input: host.inputs[0].name.clone(),
+            input_channels: ChannelSelection::all(host.inputs[0].channels[0]),
+            output: host.outputs[0].name.clone(),
+            output_channels: ChannelSelection::all(host.outputs[0].channels[0]),
+        },
+        request(),
+    );
+
+    assert!(stream.is_ok(), "listed means openable");
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_host_no_backend_has_is_an_error_rather_than_a_default() {
+    let opened = CpalBackend::new().open(
+        &DeviceSelection {
+            host: "a host nobody has".to_owned(),
+            ..selection()
+        },
+        request(),
+    );
+
+    assert_eq!(opened.err(), Some(DeviceError::NoSuchHost));
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_device_no_host_has_is_an_error_rather_than_a_default() {
+    let opened = CpalBackend::new().open(
+        &DeviceSelection {
+            input: "a device nobody has".to_owned(),
+            ..selection()
+        },
+        request(),
+    );
+
+    assert_eq!(opened.err(), Some(DeviceError::NoInputDevice));
+}
+
+#[test]
+#[ignore = "requires an audio device"]
+fn a_selection_reaching_past_the_device_is_an_error() {
+    let opened = CpalBackend::new().open(
+        &DeviceSelection {
+            input_channels: ChannelSelection {
+                first: u16::MAX - 1,
+                count: 1,
+            },
+            ..selection()
+        },
+        request(),
+    );
+
+    assert_eq!(opened.err(), Some(DeviceError::UnsupportedConfig));
 }
 
 fn listed_devices(sample_rate: u32) -> Vec<AudioDevice> {

@@ -15,10 +15,14 @@ cargo test
 cargo fmt --all
 cargo clippy --all-targets --all-features -- -D warnings
 scripts/check-style.sh
+scripts/check-mutants.sh
 cargo check --target aarch64-unknown-linux-gnu
 ```
 
-Run all of them before opening a pull request.
+Run all of them before opening a pull request. The sweep is the slow one and
+the one most often skipped, which is why it is on the list: it is scoped to the
+diff, it is the only check that can fail a change the other six approved, and
+CI runs it on every pull request whether or not you did.
 
 ## Design invariants
 

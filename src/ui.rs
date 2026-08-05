@@ -37,6 +37,8 @@ mod input;
 mod legend;
 mod list;
 mod mode;
+#[cfg(feature = "frame-pace")]
+mod pace;
 mod page;
 mod shell;
 mod terminal;
@@ -44,9 +46,11 @@ mod terminal;
 pub use clock::{Clock, ScriptedClock, SystemClock};
 pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
-pub use legend::Legend;
+pub use legend::{Legend, Panel};
 pub use list::ListPage;
 pub use mode::Mode;
+#[cfg(feature = "frame-pace")]
+pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
 pub use page::Page;
 pub use shell::Shell;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
@@ -170,15 +174,30 @@ pub trait Renderer {
     ///
     /// Returns [`RenderError`] when the screen cannot be written to.
     fn render(&mut self, frame: &Frame) -> Result<(), RenderError>;
+
+    /// Show `panel` beside the screen, wherever this backend keeps it.
+    ///
+    /// Doing nothing is the default, and the right answer for the device: the
+    /// picture stands in for keys a backend does not have, and a panel under
+    /// the player's hands needs no drawing. It never reaches the [`Frame`],
+    /// which is what keeps the rows a page draws into the same everywhere.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError`] when the screen cannot be written to.
+    fn show_panel(&mut self, _panel: &Panel) -> Result<(), RenderError> {
+        Ok(())
+    }
 }
 
-/// A renderer with no screen behind it, which keeps the frame instead.
+/// A renderer with no screen behind it, which keeps what it was given instead.
 ///
 /// It exists so that drawing can be exercised where no screen is present, and
 /// so that a test can read back what the application drew.
 #[derive(Debug, Default)]
 pub struct NullRenderer {
     rendered: Option<Frame>,
+    shown: Option<Panel>,
 }
 
 impl NullRenderer {
@@ -191,11 +210,21 @@ impl NullRenderer {
     pub fn rendered(&self) -> Option<&Frame> {
         self.rendered.as_ref()
     }
+
+    /// The most recent panel shown, or `None` before the first.
+    pub fn shown(&self) -> Option<&Panel> {
+        self.shown.as_ref()
+    }
 }
 
 impl Renderer for NullRenderer {
     fn render(&mut self, frame: &Frame) -> Result<(), RenderError> {
         self.rendered = Some(frame.clone());
+        Ok(())
+    }
+
+    fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
+        self.shown = Some(panel.clone());
         Ok(())
     }
 }

@@ -99,6 +99,7 @@ fn encoded(error: DeviceError) -> u8 {
         DeviceError::DeviceNotAvailable => 4,
         DeviceError::PermissionDenied => 5,
         DeviceError::BackendFailure => 6,
+        DeviceError::NoSuchHost => 7,
     }
 }
 
@@ -110,6 +111,7 @@ fn decoded(code: u8) -> Option<DeviceError> {
         4 => Some(DeviceError::DeviceNotAvailable),
         5 => Some(DeviceError::PermissionDenied),
         6 => Some(DeviceError::BackendFailure),
+        7 => Some(DeviceError::NoSuchHost),
         _ => None,
     }
 }
