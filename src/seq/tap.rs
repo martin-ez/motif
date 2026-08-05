@@ -5,12 +5,13 @@
 //! little unevenly has stated exactly that rather than an average of it.
 //!
 //! Which taps belong together is the whole of the work here. A sequence is a
-//! run of taps at a comparable interval, and anything that does not resemble
-//! one starts a fresh sequence rather than being folded into the old one: a
-//! player who fumbles or comes back later taps again, and a tempo nobody is
-//! still stating is not one to keep offering. What counts as resembling it is
-//! a wide band, because it is telling a fumble from a fresh start rather than
-//! smoothing the pulse — an uneven tap belongs on the grid.
+//! run of taps at a comparable interval, and one that does not resemble it
+//! starts a fresh sequence instead of dragging the old one along. That band is
+//! wide, because it tells a fumble from a fresh start rather than smoothing
+//! the pulse.
+//!
+//! Silence ends a sequence but does not withdraw its tempo: the last one
+//! tapped stands until a tap replaces it.
 
 use crate::seq::BeatGrid;
 
@@ -91,8 +92,9 @@ impl TapTempo {
     /// The tempo the sequence states, or `None` below
     /// [`TAPS_TO_A_TEMPO`](Self::TAPS_TO_A_TEMPO) taps.
     ///
-    /// Derived from the grid on every call, so it follows a player who tapped
-    /// their way into a different tempo without anything being updated.
+    /// Derived from the whole sequence on every call, nothing stored, so a
+    /// tap moves it less the longer the sequence has run. Stating a different
+    /// tempo means starting a sequence, not out-tapping the old one.
     pub fn tempo(&self) -> Option<f64> {
         if self.grid.len() < Self::TAPS_TO_A_TEMPO {
             return None;
