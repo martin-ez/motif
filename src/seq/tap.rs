@@ -8,7 +8,9 @@
 //! run of taps at a comparable interval, and anything that does not resemble
 //! one starts a fresh sequence rather than being folded into the old one: a
 //! player who fumbles or comes back later taps again, and a tempo nobody is
-//! still stating is not one to keep offering.
+//! still stating is not one to keep offering. What counts as resembling it is
+//! a wide band, because it is telling a fumble from a fresh start rather than
+//! smoothing the pulse — an uneven tap belongs on the grid.
 
 use crate::seq::BeatGrid;
 
@@ -59,10 +61,9 @@ impl TapTempo {
     /// A tap starts a fresh sequence when it is the first, when it comes more
     /// than [`STALE_AFTER_SECONDS`](Self::STALE_AFTER_SECONDS) after the one
     /// before, or when its interval is less than half or more than double the
-    /// sequence's average. That band is wide because it is telling a fumble
-    /// from a fresh start, not smoothing the pulse: an uneven tap belongs on
-    /// the grid. A timestamp that does not come after the last tap is a stale
-    /// reading of the clock and is dropped, leaving the sequence alone.
+    /// sequence's average. A timestamp that does not come after the last tap
+    /// is a stale reading of the clock and is dropped, leaving the sequence
+    /// alone.
     pub fn tap(&mut self, at: u64) -> bool {
         let Some(&last) = self.grid.beats().last() else {
             return self.restart(at);
