@@ -5,14 +5,17 @@
 //! composition question and not something the shell knows. Each draws a glyph of
 //! its own and keeps what it was handed, so a test reads back which page drew
 //! and what reached it.
+//!
+//! The navigation is the test's own for the same reason: which gestures navigate
+//! is a scheme, and the shell is what does not change when one does.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use motif::device::Button;
 use motif::ui::{
-    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Legend, Mode, NullRenderer, Page,
-    Region, Renderer, ScriptedClock, ScriptedControls, Shell,
+    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Intent, Legend, Mode, Navigation,
+    NullRenderer, Page, Region, Renderer, ScriptedClock, ScriptedControls, Shell,
 };
 
 const MARKER: char = '*';
@@ -75,6 +78,26 @@ impl Page for Marked {
     }
 }
 
+/// A scheme resolving the buttons it was given, and nothing else.
+struct Navigating(Vec<Button>);
+
+impl Navigating {
+    fn everything() -> Self {
+        Self(Button::ALL.to_vec())
+    }
+}
+
+impl Navigation for Navigating {
+    fn intent(&self, event: ControlEvent) -> Option<Intent> {
+        match event {
+            ControlEvent::Pressed { button, .. } if self.0.contains(&button) => {
+                Some(Intent::Show(Mode::ALL[0]))
+            }
+            _ => None,
+        }
+    }
+}
+
 fn shell_of(page: Marked) -> Shell {
     Shell::new([Box::new(page)])
 }
@@ -84,6 +107,13 @@ fn showing(glyph: char) -> (Shell, Taken) {
     let taken = page.taken();
 
     (shell_of(page), taken)
+}
+
+fn navigated(navigation: Navigating) -> (Shell, Taken) {
+    let page = Marked::new(MARKER, Button::Play);
+    let taken = page.taken();
+
+    (Shell::navigated_by([Box::new(page)], navigation), taken)
 }
 
 fn driven_by(shell: &mut Shell, events: impl IntoIterator<Item = ControlEvent>) -> Flow {
@@ -207,6 +237,58 @@ fn a_draw_does_not_end_the_run() {
     let (mut shell, _) = showing(MARKER);
 
     assert_eq!(shell.draw(Frame::blank().region()), Flow::Continue);
+}
+
+#[test]
+fn every_mode_can_be_shown_by_an_intent() {
+    let (mut shell, _) = showing(MARKER);
+
+    for mode in Mode::ALL {
+        shell.apply(Intent::Show(mode));
+
+        assert_eq!(shell.showing(), mode);
+    }
+}
+
+#[test]
+fn a_control_the_navigation_resolves_does_not_reach_the_page() {
+    let (mut shell, taken) = navigated(Navigating(vec![Button::Up]));
+
+    driven_by(&mut shell, [pressed(Button::Up)]);
+
+    assert!(taken.events().is_empty());
+}
+
+#[test]
+fn a_control_the_navigation_ignores_reaches_the_page() {
+    let (mut shell, taken) = navigated(Navigating(vec![Button::Up]));
+
+    driven_by(&mut shell, [pressed(Button::Play)]);
+
+    assert_eq!(taken.events(), vec![pressed(Button::Play)]);
+}
+
+#[test]
+fn a_control_that_navigates_does_not_end_the_run() {
+    let (mut shell, _) = navigated(Navigating(vec![Button::Up]));
+
+    assert_eq!(shell.control(pressed(Button::Up)), Flow::Continue);
+}
+
+#[test]
+fn a_shell_with_no_navigation_hands_every_control_to_the_page() {
+    let (mut shell, taken) = showing(MARKER);
+
+    driven_by(&mut shell, Button::ALL.map(pressed));
+
+    assert_eq!(taken.events(), Button::ALL.map(pressed).to_vec());
+}
+
+#[test]
+fn the_way_out_is_not_a_gesture_a_scheme_can_take() {
+    let (mut shell, _) = navigated(Navigating::everything());
+
+    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Exit);
 }
 
 #[test]

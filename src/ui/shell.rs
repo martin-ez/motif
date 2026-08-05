@@ -2,7 +2,7 @@
 //! reaches it.
 
 use crate::device::Button;
-use crate::ui::{App, ControlEvent, Flow, Legend, Mode, Page, Region};
+use crate::ui::{App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page, Region};
 
 /// The pages the instrument has, and the one it is showing.
 ///
@@ -10,15 +10,15 @@ use crate::ui::{App, ControlEvent, Flow, Legend, Mode, Page, Region};
 /// it and a mode with no page cannot be expressed. Which pages those are is a
 /// composition question, the way choosing a backend is.
 ///
-/// Showing a mode is a call, not a gesture: the shell is what does not change
-/// when a navigation scheme does, so it is built without one.
+/// A control a [`Navigation`] resolves into an [`Intent`] is applied here and
+/// not forwarded, so a page never sees what navigates.
 ///
-/// It keeps shift + stop and forwards the rest to the showing page, declaring
-/// both halves so the way out is drawn live on a page that ignores stop.
+/// Shift + stop is kept whatever a scheme says, and declared beside the page's
+/// legend so the way out is drawn live on a page that ignores stop.
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{App, Cell, ControlEvent, Frame, Legend, Mode, Page, Region, Shell};
+/// use motif::ui::{App, Cell, ControlEvent, Frame, Intent, Legend, Mode, Page, Region, Shell};
 ///
 /// struct Blank;
 ///
@@ -35,7 +35,7 @@ use crate::ui::{App, ControlEvent, Flow, Legend, Mode, Page, Region};
 /// }
 ///
 /// let mut shell = Shell::new([Box::new(Blank)]);
-/// shell.show(Mode::Looper);
+/// shell.apply(Intent::Show(Mode::Looper));
 ///
 /// let mut frame = Frame::blank();
 /// shell.draw(frame.region());
@@ -46,32 +46,55 @@ use crate::ui::{App, ControlEvent, Flow, Legend, Mode, Page, Region};
 pub struct Shell {
     pages: [Box<dyn Page>; Mode::ALL.len()],
     showing: Mode,
+    navigation: Option<Box<dyn Navigation>>,
 }
 
 impl Shell {
     /// A shell over `pages`, one per [`Mode`] and in that order, showing the
-    /// first of them.
+    /// first of them and navigated by nothing.
     ///
     /// The first mode is where the instrument opens, that being what the order
-    /// of the set is for.
+    /// of the set is for. With no scheme every control reaches the showing
+    /// page, which is a shell that has not been given one rather than one that
+    /// refuses to navigate.
     pub fn new(pages: [Box<dyn Page>; Mode::ALL.len()]) -> Self {
         Self {
             pages,
             showing: Mode::ALL[0],
+            navigation: None,
         }
     }
 
-    /// Show `mode`.
+    /// The same shell, resolving controls through `navigation` first.
+    pub fn navigated_by(
+        pages: [Box<dyn Page>; Mode::ALL.len()],
+        navigation: impl Navigation + 'static,
+    ) -> Self {
+        Self {
+            navigation: Some(Box::new(navigation)),
+            ..Self::new(pages)
+        }
+    }
+
+    /// Do what `intent` asks.
     ///
-    /// The page that was showing is kept rather than dropped, so coming back to
-    /// it finds it as it was left.
-    pub fn show(&mut self, mode: Mode) {
-        self.showing = mode;
+    /// The one way what is showing changes, whether the intent came from a
+    /// scheme or from a caller with no panel in front of it. The page that was
+    /// showing is kept rather than dropped, so coming back to it finds it as it
+    /// was left.
+    pub fn apply(&mut self, intent: Intent) {
+        match intent {
+            Intent::Show(mode) => self.showing = mode,
+        }
     }
 
     /// Which mode is showing.
     pub const fn showing(&self) -> Mode {
         self.showing
+    }
+
+    fn intent(&self, event: ControlEvent) -> Option<Intent> {
+        self.navigation.as_ref()?.intent(event)
     }
 
     fn page(&self) -> &dyn Page {
@@ -93,6 +116,12 @@ impl App for Shell {
             }
         ) {
             return Flow::Exit;
+        }
+
+        if let Some(intent) = self.intent(event) {
+            self.apply(intent);
+
+            return Flow::Continue;
         }
 
         self.page_mut().control(event);

@@ -11,8 +11,8 @@
 //! rather than the whole thing, so chrome and a page cannot claim the same
 //! cell. [`ListPage`], [`LevelMeter`] and [`Mode`] belong to no one screen.
 //!
-//! A [`Page`] is one screen and a [`Shell`] holds one per [`Mode`], forwarding
-//! to whichever is showing, so an `App` is implemented once and not per screen.
+//! A [`Page`] is one screen and a [`Shell`] holds one per [`Mode`], so an `App`
+//! is implemented once; what a [`Navigation`] makes an [`Intent`] of, it keeps.
 //!
 //! ```
 //! use motif::ui::{Cell, Frame, NullRenderer, RenderError, Renderer};
@@ -41,6 +41,7 @@ mod legend;
 mod list;
 mod meter;
 mod mode;
+mod navigation;
 #[cfg(feature = "frame-pace")]
 mod pace;
 mod page;
@@ -55,6 +56,7 @@ pub use legend::{Legend, Panel};
 pub use list::ListPage;
 pub use meter::LevelMeter;
 pub use mode::Mode;
+pub use navigation::{Intent, Navigation};
 #[cfg(feature = "frame-pace")]
 pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
 pub use page::Page;
