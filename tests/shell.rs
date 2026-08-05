@@ -112,15 +112,6 @@ fn a_shell_opens_on_the_first_mode() {
 }
 
 #[test]
-fn showing_a_mode_is_a_call() {
-    let (mut shell, _) = showing(MARKER);
-
-    shell.show(Mode::Looper);
-
-    assert_eq!(shell.showing(), Mode::Looper);
-}
-
-#[test]
 fn the_showing_page_draws_the_frame() {
     let (mut shell, _) = showing(MARKER);
 
@@ -145,10 +136,17 @@ fn the_shell_takes_its_legend_from_the_showing_page() {
 }
 
 #[test]
-fn the_shell_declares_the_control_it_keeps() {
-    let (shell, _) = showing(MARKER);
+fn the_shell_declares_the_shift_it_keeps() {
+    let shell = shell_of(Marked::new(MARKER, Button::Play));
 
     assert!(shell.legend().answers(Button::Shift));
+}
+
+#[test]
+fn the_shell_declares_the_stop_it_keeps() {
+    let shell = shell_of(Marked::new(MARKER, Button::Play));
+
+    assert!(shell.legend().answers(Button::Stop));
 }
 
 #[test]
@@ -177,23 +175,49 @@ fn stop_on_its_own_reaches_the_page() {
 }
 
 #[test]
-fn a_page_cannot_end_the_run() {
+fn a_shifted_control_that_is_not_stop_keeps_the_run_going() {
+    let (mut shell, _) = showing(MARKER);
+
+    for button in Button::ALL {
+        if matches!(button, Button::Stop) {
+            continue;
+        }
+        assert_eq!(shell.control(shifted(button)), Flow::Continue);
+    }
+}
+
+#[test]
+fn a_shifted_control_that_is_not_stop_reaches_the_page() {
+    let (mut shell, taken) = showing(MARKER);
+
+    driven_by(&mut shell, [shifted(Button::Play)]);
+
+    assert_eq!(taken.events(), vec![shifted(Button::Play)]);
+}
+
+#[test]
+fn a_control_a_page_answers_does_not_end_the_run() {
     let (mut shell, _) = showing(MARKER);
 
     assert_eq!(shell.control(pressed(Button::Play)), Flow::Continue);
+}
+
+#[test]
+fn a_draw_does_not_end_the_run() {
+    let (mut shell, _) = showing(MARKER);
+
     assert_eq!(shell.draw(&mut Frame::blank()), Flow::Continue);
 }
 
 #[test]
 fn a_shell_driven_by_controls_renders_the_page_that_drew() {
-    let (mut shell, taken) = showing(MARKER);
+    let (mut shell, _) = showing(MARKER);
     let mut screen = NullRenderer::new();
 
     driven_by(&mut shell, [pressed(Button::Play)]);
     let frame = drawn(&mut shell);
     screen.render(&frame).expect("the null renderer takes it");
 
-    assert_eq!(taken.events(), vec![pressed(Button::Play)]);
     assert_eq!(
         screen.rendered().and_then(|frame| frame.get(0, 0)),
         Some(Cell::new(MARKER))

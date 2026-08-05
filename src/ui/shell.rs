@@ -21,6 +21,11 @@ use crate::ui::{App, ControlEvent, Flow, Frame, Legend, Mode, Page};
 /// the showing page. Ending the run is the one decision that cannot belong to a
 /// screen, because a screen only knows about itself.
 ///
+/// Both halves of that gesture are added to the showing page's legend, so the
+/// way out is drawn as a live key on every page rather than only on the ones
+/// that happen to answer stop themselves. A player who cannot see the exit has
+/// a terminal they can only leave by killing the process.
+///
 /// ```
 /// use motif::device::Button;
 /// use motif::ui::{App, Cell, ControlEvent, Frame, Legend, Mode, Page, Shell};
@@ -106,7 +111,10 @@ impl App for Shell {
     }
 
     fn legend(&self) -> Legend {
-        self.page().legend().answering(Button::Shift)
+        self.page()
+            .legend()
+            .answering(Button::Shift)
+            .answering(Button::Stop)
     }
 
     fn draw(&mut self, frame: &mut Frame) -> Flow {
