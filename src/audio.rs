@@ -93,6 +93,69 @@ pub struct AudioDevice {
     pub channels: Vec<u16>,
 }
 
+/// Which of a device's channels carry audio.
+///
+/// A run of adjacent channels rather than an arbitrary set: an instrument is
+/// patched into neighbouring inputs of an interface, and a set would put a
+/// per-channel branch in the callback for a case nobody is asking for.
+///
+/// Which channels rather than how many, because folding a whole frame together
+/// costs level: a source wired to one input of a stereo pair arrives 6 dB down
+/// in the mean of the two. Input gain is the answer where a player has no
+/// choice; naming the channel is the better one where they have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelSelection {
+    /// The first channel used, counted from zero.
+    pub first: u16,
+    /// How many consecutive channels from [`first`](Self::first) are used.
+    pub count: u16,
+}
+
+impl ChannelSelection {
+    /// Every channel of a device that is `channels` wide.
+    pub const fn all(channels: u16) -> Self {
+        Self {
+            first: 0,
+            count: channels,
+        }
+    }
+
+    /// The narrowest a device can be opened and still have these channels.
+    ///
+    /// This is what a selection is met by rather than the count itself: inputs
+    /// three and four cannot be reached without opening four, so a device is
+    /// opened at the narrowest count it offers that reaches the selection.
+    ///
+    /// Saturates, so a selection past the end of `u16` asks for more channels
+    /// than any device has rather than wrapping to a width one meets.
+    pub const fn reach(self) -> u16 {
+        self.first.saturating_add(self.count)
+    }
+}
+
+/// Which devices to open, and which of their channels carry audio.
+///
+/// The names are [`AudioHost::name`] and [`AudioDevice::name`] as
+/// [`AudioBackend::hosts`] gives them, so a selection is built straight out of a
+/// listing and nothing has to translate between the two.
+///
+/// A listing was true when it was drawn and nothing promises it still is, so a
+/// selection naming a device that has since gone is the ordinary case rather
+/// than a misuse: [`AudioBackend::open`] reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceSelection {
+    /// The host both devices are reached through.
+    pub host: String,
+    /// The device audio is captured from.
+    pub input: String,
+    /// Which of the input device's channels are captured.
+    pub input_channels: ChannelSelection,
+    /// The device audio is played to.
+    pub output: String,
+    /// Which of the output device's channels are played to.
+    pub output_channels: ChannelSelection,
+}
+
 /// Whether a stream is currently calling back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamState {
@@ -110,9 +173,11 @@ pub enum StreamState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DeviceError {
-    /// The host offers no input device.
+    /// The backend has no host by the name that was selected.
+    NoSuchHost,
+    /// The host has no input device by the name that was selected.
     NoInputDevice,
-    /// The host offers no output device.
+    /// The host has no output device by the name that was selected.
     NoOutputDevice,
     /// The device cannot run at the requested configuration.
     UnsupportedConfig,
@@ -129,8 +194,9 @@ pub enum DeviceError {
 impl fmt::Display for DeviceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let described = match self {
-            Self::NoInputDevice => "the host offers no input device",
-            Self::NoOutputDevice => "the host offers no output device",
+            Self::NoSuchHost => "there is no host by that name",
+            Self::NoInputDevice => "the host has no input device by that name",
+            Self::NoOutputDevice => "the host has no output device by that name",
             Self::UnsupportedConfig => "the device cannot run at the requested configuration",
             Self::DeviceNotAvailable => "the device is not available",
             Self::PermissionDenied => "access to the device was refused",
@@ -142,8 +208,8 @@ impl fmt::Display for DeviceError {
 
 impl std::error::Error for DeviceError {}
 
-/// A source of duplex audio streams, and a description of what there is to
-/// open.
+/// A source of duplex audio streams, a description of what there is to open,
+/// and what it would open if nobody chose.
 pub trait AudioBackend {
     /// The stream this backend opens.
     type Stream: DuplexStream;
@@ -169,14 +235,48 @@ pub trait AudioBackend {
     /// reached from the audio callback.
     fn hosts(&self, sample_rate: u32) -> Vec<AudioHost>;
 
-    /// Open an input and an output stream at `request`.
+    /// What the backend would open at `sample_rate` if nobody chose, or `None`
+    /// where it has no device in one of the two directions.
+    ///
+    /// The host's own defaults rather than the first row of
+    /// [`hosts`](Self::hosts): an operating system's default device is a better
+    /// guess than an enumeration order, and a guess is what this is — a
+    /// starting point for something that has not been chosen yet, not a promise
+    /// that [`open`](Self::open) will meet it.
+    ///
+    /// This talks to the host, so it blocks and allocates, and must never be
+    /// reached from the audio callback.
+    fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection>;
+
+    /// Open an input and an output stream on `selection` at `request`.
+    ///
+    /// Each device is opened at the narrowest channel count it offers that
+    /// reaches its [`ChannelSelection`], since a channel cannot be captured
+    /// from a device opened too narrow to have it. The channels outside the
+    /// selection are opened and then left alone: nothing is captured from them,
+    /// and nothing is played to them.
     ///
     /// # Errors
     ///
-    /// Returns [`DeviceError`] when no device is available or the device cannot
-    /// run at the requested configuration. A device that cannot meet the
-    /// request never panics.
-    fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError>;
+    /// Returns [`DeviceError`] when the selection names a host or a device that
+    /// is not there, when no channel count the device offers reaches the
+    /// selection, or when the device cannot run at the requested configuration.
+    /// A selection a device cannot meet never panics.
+    fn open(
+        &self,
+        selection: &DeviceSelection,
+        request: StreamRequest,
+    ) -> Result<Self::Stream, DeviceError>;
+}
+
+fn opened_width(offered: &[u16], selection: ChannelSelection) -> Option<u16> {
+    if selection.count == 0 {
+        return None;
+    }
+    offered
+        .iter()
+        .copied()
+        .find(|&width| width >= selection.reach())
 }
 
 /// An input and an output stream running together on one device.
@@ -299,7 +399,48 @@ impl AudioBackend for NullBackend {
         vec![host]
     }
 
-    fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
+    /// The one device it has in each direction, at the rate it grants them.
+    fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection> {
+        let host = self.hosts(sample_rate).into_iter().next()?;
+        let input = host.inputs.first()?;
+        let output = host.outputs.first()?;
+
+        Some(DeviceSelection {
+            input: input.name.clone(),
+            input_channels: ChannelSelection::all(*input.channels.last()?),
+            output: output.name.clone(),
+            output_channels: ChannelSelection::all(*output.channels.last()?),
+            host: host.name,
+        })
+    }
+
+    /// Names are checked against the device this backend has whatever the rate
+    /// asked for, so that a rounding device can still be asked for a rate it
+    /// does not list and grant its own.
+    fn open(
+        &self,
+        selection: &DeviceSelection,
+        request: StreamRequest,
+    ) -> Result<Self::Stream, DeviceError> {
+        if selection.host != NULL_HOST {
+            return Err(DeviceError::NoSuchHost);
+        }
+
+        let inputs = null_device(NULL_INPUT, self.granted.input_channels);
+        let input = inputs
+            .iter()
+            .find(|device| device.name == selection.input)
+            .ok_or(DeviceError::NoInputDevice)?;
+        let outputs = null_device(NULL_OUTPUT, self.granted.output_channels);
+        let output = outputs
+            .iter()
+            .find(|device| device.name == selection.output)
+            .ok_or(DeviceError::NoOutputDevice)?;
+
+        opened_width(&input.channels, selection.input_channels)
+            .and_then(|_| opened_width(&output.channels, selection.output_channels))
+            .ok_or(DeviceError::UnsupportedConfig)?;
+
         let matches_exactly = request.sample_rate == self.granted.sample_rate
             && request.block_size == self.granted.block_size;
         if self.rejects_mismatch && !matches_exactly {

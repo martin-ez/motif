@@ -349,11 +349,18 @@ fn reading_the_clock_does_not_allocate() {
 
 #[test]
 fn a_stream_that_moves_no_samples_reports_an_idle_callback() {
-    let stream = NullBackend::rounding(GRANTED)
-        .open(StreamRequest {
-            sample_rate: GRANTED.sample_rate,
-            block_size: GRANTED.block_size,
-        })
+    let backend = NullBackend::rounding(GRANTED);
+    let selection = backend
+        .defaults(GRANTED.sample_rate)
+        .expect("the null backend has a device in each direction");
+    let stream = backend
+        .open(
+            &selection,
+            StreamRequest {
+                sample_rate: GRANTED.sample_rate,
+                block_size: GRANTED.block_size,
+            },
+        )
         .expect("a rounding backend opens whatever it is asked for");
 
     assert_eq!(stream.headroom(), Headroom::IDLE);
