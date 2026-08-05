@@ -33,4 +33,7 @@ exclude_re = [
   # buttons' length and subtracting it land in the same slot. A second encoder
   # makes the two differ, and this line should go when one arrives.
   'replace \+ with - in Control::position',
+  # `<=` admits a playhead of exactly the loop's length, which leaves no run
+  # before the boundary, so the block is filled from the start either way.
+  'replace < with <= in LoopBuffer::play_into',
 ]
