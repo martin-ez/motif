@@ -3,6 +3,8 @@
 //!
 //! `AGENTS.md` holds the design invariants that constrain what belongs here.
 
+mod closed_set;
+
 pub mod audio;
 pub mod device;
 pub mod fixtures;
