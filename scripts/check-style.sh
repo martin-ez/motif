@@ -171,11 +171,20 @@ fi
 # to name the thing they forbid. CLAUDE.md is a symlink to AGENTS.md, and GNU
 # grep follows symlinks named on the command line where BSD grep does not — so
 # leaving it out here passes on macOS and fails on Linux.
+#
+# An issue number on its own is not the signal. A doc comment naming the issue
+# that owns a case the code deliberately does not handle is describing today's
+# boundary, and src/ui.rs does exactly that. What turns a reference into prose
+# about the future is the promise beside it: a verb saying the issue changes
+# this code, or a clause holding until it lands. Those are what `anchored`
+# matches, so a bare `[#193]` passes and `#216 replaces this` does not.
+phrases='coming soon|not yet implemented|will be implemented|planned for a|in a future release|once implemented|for now, this is a placeholder'
+anchored='#[0-9]+ *(replaces|supersedes|removes|rewrites|will|lands\b)|(replaced|superseded|removed|rewritten|handled|fixed) (by|in) #[0-9]+|\b(until|once|when) #[0-9]+'
 targets=$(git ls-files '*.md' '*.rs' |
 	grep -vE '^(AGENTS\.md|CLAUDE\.md|\.github/pull_request_template\.md)$' || true)
 if [ -n "$targets" ]; then
 	found=$(printf '%s\n' "$targets" | tr '\n' '\0' |
-		xargs -0 grep -rniE 'coming soon|not yet implemented|will be implemented|planned for a|in a future release|once implemented|for now, this is a placeholder' 2>/dev/null || true)
+		xargs -0 grep -rniE "$phrases|$anchored" 2>/dev/null || true)
 	if [ -n "$found" ]; then
 		report "documentation of something that does not exist (AGENTS.md 1.7)" "$found
 Describe what the code does today. Work that has not happened belongs in a
