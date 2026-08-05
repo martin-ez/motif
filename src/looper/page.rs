@@ -14,7 +14,7 @@ use crate::audio::SampleClockReader;
 use crate::device::{Button, DeviceProfile};
 use crate::looper::{PositionReader, Transport};
 use crate::seq::{BeatGrid, TapTempo};
-use crate::ui::{Cell, ControlEvent, Frame, Legend, Page};
+use crate::ui::{ControlEvent, Frame, Legend, Page};
 
 const STATE_ROW: usize = 0;
 const ARMED_COLUMN: usize = 14;
@@ -34,12 +34,6 @@ fn named(transport: Transport) -> &'static str {
         Transport::Playing => "PLAYING",
         Transport::Overdubbing => "OVERDUBBING",
         Transport::Stopped => "STOPPED",
-    }
-}
-
-fn write(frame: &mut Frame, column: usize, row: usize, text: &str) {
-    for (offset, glyph) in text.chars().enumerate() {
-        frame.set(column + offset, row, Cell::new(glyph));
     }
 }
 
@@ -118,10 +112,9 @@ impl LooperPage {
     /// What the looper is doing.
     ///
     /// Public because the transport is what the engine has to be told: a
-    /// composition holding this page and a command queue forwards
-    /// [`Command::SetArmed`](crate::audio::Command::SetArmed) from
-    /// [`Transport::captures_input`] rather than tracking the presses a second
-    /// time.
+    /// composition holding this page and a command queue forwards this state
+    /// as [`Command::SetTransport`](crate::audio::Command::SetTransport) rather
+    /// than tracking the presses a second time.
     pub const fn transport(&self) -> Transport {
         self.transport
     }
@@ -175,12 +168,12 @@ impl Page for LooperPage {
     fn draw(&mut self, frame: &mut Frame) {
         let position = self.position.read();
 
-        write(frame, 0, STATE_ROW, named(self.transport));
+        frame.write(0, STATE_ROW, named(self.transport));
         if self.transport.captures_input() {
-            write(frame, ARMED_COLUMN, STATE_ROW, ARMED);
+            frame.write(ARMED_COLUMN, STATE_ROW, ARMED);
         }
         if let Some(tempo) = self.taps.tempo() {
-            write(frame, 0, TEMPO_ROW, &format!("{tempo:.1} BPM"));
+            frame.write(0, TEMPO_ROW, &format!("{tempo:.1} BPM"));
         }
 
         let readout = format!(
@@ -188,12 +181,7 @@ impl Page for LooperPage {
             clock(position.playhead()),
             clock(position.recorded())
         );
-        write(frame, 0, READOUT_ROW, &readout);
-        write(
-            frame,
-            0,
-            BAR_ROW,
-            &bar(position.playhead(), position.recorded()),
-        );
+        frame.write(0, READOUT_ROW, &readout);
+        frame.write(0, BAR_ROW, &bar(position.playhead(), position.recorded()));
     }
 }

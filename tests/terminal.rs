@@ -158,6 +158,40 @@ fn a_writer_given_an_origin_offsets_every_position() {
 }
 
 #[test]
+fn a_wide_glyph_is_written_once_for_the_two_columns_it_fills() {
+    let output = render_after(&Frame::blank(), &drawn(&[(3, 2, 'オ')]));
+
+    assert_eq!(output, "\u{1b}[3;4Hオ");
+}
+
+#[test]
+fn a_cell_after_a_wide_glyph_is_written_where_the_frame_put_it() {
+    let output = render_after(&Frame::blank(), &drawn(&[(3, 2, 'オ'), (5, 2, 'x')]));
+
+    assert_eq!(output, "\u{1b}[3;4Hオx");
+}
+
+#[test]
+fn a_wide_glyph_that_goes_away_is_covered_in_both_columns() {
+    let mut writer = FrameWriter::new(Vec::new());
+    writer
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    writer
+        .render(&drawn(&[(3, 2, 'オ')]))
+        .expect("a vec accepts every write");
+    let already_written = writer.sink().len();
+    writer
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+
+    let output =
+        String::from_utf8(writer.sink()[already_written..].to_vec()).expect("the output is utf-8");
+
+    assert_eq!(output, "\u{1b}[3;4H  ");
+}
+
+#[test]
 fn a_screen_that_refuses_a_write_is_an_error() {
     let mut writer = FrameWriter::new(BrokenSink);
 

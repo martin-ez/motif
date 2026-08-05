@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use motif::audio::{Command, SendError, command_channel};
+use motif::looper::Transport;
 
 /// How long a concurrent test goes without moving a single command before it
 /// decides the queue has stalled. It bounds a run of fruitless attempts rather
@@ -71,7 +72,7 @@ fn a_command_arrives_at_the_receiver() {
 fn commands_arrive_in_the_order_they_were_sent() {
     let (mut sender, mut receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     sender
         .send(Command::SetMuted(true))
@@ -79,18 +80,70 @@ fn commands_arrive_in_the_order_they_were_sent() {
 
     let received: Vec<Command> = receiver.drain().collect();
 
-    assert_eq!(received, [Command::SetArmed(true), Command::SetMuted(true)]);
+    assert_eq!(
+        received,
+        [
+            Command::SetTransport(Transport::Recording),
+            Command::SetMuted(true)
+        ]
+    );
 }
 
 #[test]
-fn an_arm_command_carries_the_state_it_was_given() {
+fn a_transport_command_carries_the_state_it_was_given() {
     let (mut sender, mut receiver) = command_channel(8);
 
     sender
-        .send(Command::SetArmed(false))
+        .send(Command::SetTransport(Transport::Overdubbing))
         .expect("a queue with room accepts a command");
 
-    assert_eq!(receiver.recv(), Some(Command::SetArmed(false)));
+    assert_eq!(
+        receiver.recv(),
+        Some(Command::SetTransport(Transport::Overdubbing))
+    );
+}
+
+#[test]
+fn every_transport_state_survives_the_crossing() {
+    let (mut sender, mut receiver) = command_channel(8);
+    let states = [
+        Transport::Idle,
+        Transport::Recording,
+        Transport::Playing,
+        Transport::Overdubbing,
+        Transport::Stopped,
+    ];
+
+    for state in states {
+        sender
+            .send(Command::SetTransport(state))
+            .expect("a queue with room accepts a command");
+    }
+
+    let received: Vec<Command> = receiver.drain().collect();
+    assert_eq!(received, states.map(Command::SetTransport));
+}
+
+#[test]
+fn an_undo_command_crosses_the_boundary() {
+    let (mut sender, mut receiver) = command_channel(8);
+
+    sender
+        .send(Command::Undo)
+        .expect("a queue with room accepts a command");
+
+    assert_eq!(receiver.recv(), Some(Command::Undo));
+}
+
+#[test]
+fn a_clear_command_crosses_the_boundary() {
+    let (mut sender, mut receiver) = command_channel(8);
+
+    sender
+        .send(Command::Clear)
+        .expect("a queue with room accepts a command");
+
+    assert_eq!(receiver.recv(), Some(Command::Clear));
 }
 
 #[test]
@@ -131,6 +184,62 @@ fn a_gain_survives_the_crossing_at_the_edges_of_its_range() {
 }
 
 #[test]
+fn every_command_round_trips_through_its_bits() {
+    let commands = [
+        Command::SetTransport(Transport::Overdubbing),
+        Command::SetMuted(true),
+        Command::SetGain(0.375),
+        Command::Undo,
+        Command::Clear,
+    ];
+
+    let returned: Vec<Option<Command>> = commands
+        .into_iter()
+        .map(|command| Command::from_bits(command.to_bits()))
+        .collect();
+
+    assert_eq!(returned, commands.map(Some));
+}
+
+#[test]
+fn a_tag_naming_no_command_is_refused() {
+    assert_eq!(Command::from_bits(u64::MAX), None);
+}
+
+#[test]
+fn a_transport_state_that_does_not_exist_is_refused() {
+    let states = [
+        Transport::Idle,
+        Transport::Recording,
+        Transport::Playing,
+        Transport::Overdubbing,
+        Transport::Stopped,
+    ];
+    let last = states
+        .map(|state| Command::SetTransport(state).to_bits())
+        .into_iter()
+        .max()
+        .expect("the transport has states");
+
+    assert_eq!(Command::from_bits(last + 1), None);
+}
+
+#[test]
+fn a_flag_that_is_neither_set_nor_clear_is_refused() {
+    let set = Command::SetMuted(true).to_bits();
+
+    assert_eq!(Command::from_bits(set + 1), None);
+}
+
+#[test]
+fn a_command_carrying_no_payload_refuses_one() {
+    let refused =
+        [Command::Undo, Command::Clear].map(|command| Command::from_bits(command.to_bits() + 1));
+
+    assert_eq!(refused, [None, None]);
+}
+
+#[test]
 fn a_receiver_with_nothing_pending_takes_nothing() {
     let (_sender, mut receiver) = command_channel(8);
 
@@ -141,10 +250,10 @@ fn a_receiver_with_nothing_pending_takes_nothing() {
 fn a_full_queue_refuses_the_send() {
     let (mut sender, _receiver) = command_channel(2);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     sender
-        .send(Command::SetArmed(false))
+        .send(Command::SetTransport(Transport::Playing))
         .expect("a queue with room accepts a command");
 
     assert_eq!(sender.send(Command::SetMuted(true)), Err(SendError::Full));
@@ -153,15 +262,18 @@ fn a_full_queue_refuses_the_send() {
 #[test]
 fn a_refused_command_is_not_delivered() {
     let (mut sender, mut receiver) = command_channel(2);
-    let _ = sender.send(Command::SetArmed(true));
-    let _ = sender.send(Command::SetArmed(false));
+    let _ = sender.send(Command::SetTransport(Transport::Recording));
+    let _ = sender.send(Command::SetTransport(Transport::Playing));
     let _ = sender.send(Command::SetMuted(true));
 
     let received: Vec<Command> = receiver.drain().collect();
 
     assert_eq!(
         received,
-        [Command::SetArmed(true), Command::SetArmed(false)]
+        [
+            Command::SetTransport(Transport::Recording),
+            Command::SetTransport(Transport::Playing)
+        ]
     );
 }
 
@@ -169,10 +281,10 @@ fn a_refused_command_is_not_delivered() {
 fn receiving_frees_the_slot_it_took() {
     let (mut sender, mut receiver) = command_channel(2);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     sender
-        .send(Command::SetArmed(false))
+        .send(Command::SetTransport(Transport::Playing))
         .expect("a queue with room accepts a command");
 
     receiver.recv();
@@ -221,7 +333,7 @@ fn a_queue_that_is_not_a_power_of_two_wraps_cleanly() {
 fn a_drain_takes_everything_that_was_pending() {
     let (mut sender, mut receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     sender
         .send(Command::SetGain(0.5))
@@ -236,7 +348,7 @@ fn a_drain_takes_everything_that_was_pending() {
 fn a_drain_leaves_the_queue_empty() {
     let (mut sender, mut receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
 
     receiver.drain().count();
@@ -255,7 +367,7 @@ fn a_drain_of_an_empty_queue_takes_nothing() {
 fn a_drain_stops_at_what_was_pending_when_it_started() {
     let (mut sender, mut receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
 
     let mut drain = receiver.drain();
@@ -265,14 +377,20 @@ fn a_drain_stops_at_what_was_pending_when_it_started() {
         .expect("a queue with room accepts a command");
     let rest: Vec<Command> = drain.collect();
 
-    assert_eq!((first, rest), (Some(Command::SetArmed(true)), Vec::new()));
+    assert_eq!(
+        (first, rest),
+        (
+            Some(Command::SetTransport(Transport::Recording)),
+            Vec::new()
+        )
+    );
 }
 
 #[test]
 fn a_command_sent_after_a_drain_is_waiting_for_the_next_one() {
     let (mut sender, mut receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     receiver.drain().count();
 
@@ -295,7 +413,7 @@ fn a_queue_reports_the_capacity_it_was_built_with() {
 fn vacant_slots_fall_as_the_queue_fills() {
     let (mut sender, _receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
 
     assert_eq!(sender.vacant(), 7);
@@ -305,7 +423,7 @@ fn vacant_slots_fall_as_the_queue_fills() {
 fn pending_commands_rise_as_the_queue_fills() {
     let (mut sender, receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     sender
         .send(Command::SetMuted(true))
@@ -324,15 +442,18 @@ fn a_queue_with_no_capacity_is_refused_at_setup() {
 fn a_queue_of_one_command_still_carries_them_one_at_a_time() {
     let (mut sender, mut receiver) = command_channel(1);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
     receiver.recv();
 
     sender
-        .send(Command::SetArmed(false))
+        .send(Command::SetTransport(Transport::Playing))
         .expect("a drained queue has room");
 
-    assert_eq!(receiver.recv(), Some(Command::SetArmed(false)));
+    assert_eq!(
+        receiver.recv(),
+        Some(Command::SetTransport(Transport::Playing))
+    );
 }
 
 #[test]
@@ -415,11 +536,46 @@ fn neither_end_allocates_when_the_queue_is_full_or_empty() {
 fn draining_does_not_allocate() {
     let (mut sender, mut receiver) = command_channel(8);
     sender
-        .send(Command::SetArmed(true))
+        .send(Command::SetTransport(Transport::Recording))
         .expect("a queue with room accepts a command");
 
     let before = allocations();
     receiver.drain().count();
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
+
+#[test]
+fn crossing_the_looper_commands_does_not_allocate() {
+    let (mut sender, mut receiver) = command_channel(8);
+
+    let before = allocations();
+    for command in [
+        Command::SetTransport(Transport::Overdubbing),
+        Command::Undo,
+        Command::Clear,
+    ] {
+        let _ = sender.send(command);
+        let _ = receiver.recv();
+    }
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
+
+#[test]
+fn the_encoding_does_not_allocate() {
+    let before = allocations();
+    for command in [
+        Command::SetTransport(Transport::Recording),
+        Command::SetMuted(true),
+        Command::SetGain(0.5),
+        Command::Undo,
+        Command::Clear,
+    ] {
+        let _ = Command::from_bits(command.to_bits());
+    }
     let after = allocations();
 
     assert_eq!(after, before);

@@ -19,12 +19,6 @@ const MARKER: char = '>';
 const MARKER_COLUMN: usize = 0;
 const LABEL_COLUMN: usize = 2;
 
-fn write(frame: &mut Frame, column: usize, row: usize, text: &str) {
-    for (offset, glyph) in text.chars().enumerate() {
-        frame.set(column + offset, row, Cell::new(glyph));
-    }
-}
-
 /// A list the player moves a selection through.
 ///
 /// The selection stops at both ends rather than wrapping: a list that wraps
@@ -143,9 +137,9 @@ impl Page for ListPage {
 
         for (row, (index, label)) in visible.take(Self::VISIBLE_ROWS).enumerate() {
             if Some(index) == self.selected() {
-                write(frame, MARKER_COLUMN, row, &MARKER.to_string());
+                frame.set(MARKER_COLUMN, row, Cell::new(MARKER));
             }
-            write(frame, LABEL_COLUMN, row, label);
+            frame.write(LABEL_COLUMN, row, label);
         }
     }
 }

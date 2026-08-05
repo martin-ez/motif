@@ -26,6 +26,7 @@ frame-pace = []
 [dependencies]
 cpal = "0.18.1"
 libc = "0.2.189"
+unicode-width = "0.2"
 
 [dev-dependencies]
 
