@@ -87,7 +87,7 @@ fn bar(playhead: u32, recorded: u32) -> String {
 /// use motif::ui::{ControlEvent, Page};
 ///
 /// let (_writer, reader) = position_meter();
-/// let mut page = LooperPage::new(reader, sample_clock().1);
+/// let mut page = LooperPage::new(reader, sample_clock(48_000).1);
 ///
 /// page.control(ControlEvent::Pressed { button: Button::Record, shifted: false });
 ///
@@ -109,9 +109,9 @@ impl LooperPage {
     pub fn new(position: PositionReader, elapsed: SampleClockReader) -> Self {
         Self {
             transport: Transport::default(),
+            taps: TapTempo::new(elapsed.sample_rate()),
             position,
             elapsed,
-            taps: TapTempo::new(DeviceProfile::TARGET.audio.sample_rate),
         }
     }
 

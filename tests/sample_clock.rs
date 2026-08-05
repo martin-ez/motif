@@ -2,9 +2,9 @@
 //! it.
 //!
 //! The facts worth stating are that the count starts at nothing, that it
-//! accumulates block by block, that reading it takes nothing away, that a
-//! reader on another thread never sees it go backwards, and that advancing it
-//! allocates nothing.
+//! accumulates block by block, that it carries the rate those frames are
+//! counted at, that reading it takes nothing away, that a reader on another
+//! thread never sees it go backwards, and that advancing it allocates nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -57,6 +57,10 @@ fn allocations() -> usize {
 
 const BLOCK: usize = 128;
 
+/// A rate no device profile in the crate uses, so a reading of it can only have
+/// come from the clock it was made with.
+const SAMPLE_RATE: u32 = 44_100;
+
 /// How long the two-thread test spends looking for a count that went backwards.
 const SEARCH: Duration = Duration::from_millis(50);
 
@@ -71,14 +75,21 @@ fn the_allocation_counter_counts_an_allocation() {
 
 #[test]
 fn a_new_clock_has_counted_no_frames() {
-    let (_writer, reader) = sample_clock();
+    let (_writer, reader) = sample_clock(SAMPLE_RATE);
 
     assert_eq!(reader.read(), 0);
 }
 
 #[test]
+fn a_clock_carries_the_rate_its_frames_are_counted_at() {
+    let (_writer, reader) = sample_clock(SAMPLE_RATE);
+
+    assert_eq!(reader.sample_rate(), SAMPLE_RATE);
+}
+
+#[test]
 fn a_block_moves_the_clock_on_by_its_frames() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
 
     writer.advance(BLOCK);
 
@@ -87,7 +98,7 @@ fn a_block_moves_the_clock_on_by_its_frames() {
 
 #[test]
 fn blocks_accumulate() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
 
     for _ in 0..4 {
         writer.advance(BLOCK);
@@ -98,7 +109,7 @@ fn blocks_accumulate() {
 
 #[test]
 fn advancing_reports_the_count_it_reached() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
     writer.advance(BLOCK);
 
     let reached = writer.advance(BLOCK);
@@ -108,7 +119,7 @@ fn advancing_reports_the_count_it_reached() {
 
 #[test]
 fn a_block_of_no_frames_leaves_the_clock_where_it_is() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
     writer.advance(BLOCK);
 
     writer.advance(0);
@@ -118,7 +129,7 @@ fn a_block_of_no_frames_leaves_the_clock_where_it_is() {
 
 #[test]
 fn reading_leaves_the_clock_where_it_is() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
     writer.advance(BLOCK);
 
     let read = reader.read();
@@ -128,7 +139,7 @@ fn reading_leaves_the_clock_where_it_is() {
 
 #[test]
 fn a_reader_never_sees_the_clock_go_backwards() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
     let stop = Arc::new(AtomicBool::new(false));
     let advancing = {
         let stop = Arc::clone(&stop);
@@ -153,7 +164,7 @@ fn a_reader_never_sees_the_clock_go_backwards() {
 
 #[test]
 fn advancing_does_not_allocate() {
-    let (mut writer, reader) = sample_clock();
+    let (mut writer, reader) = sample_clock(SAMPLE_RATE);
 
     let before = allocations();
     for _ in 0..8 {

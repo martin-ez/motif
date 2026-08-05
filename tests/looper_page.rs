@@ -32,20 +32,24 @@ fn shifted(button: Button) -> ControlEvent {
 }
 
 fn page() -> LooperPage {
-    LooperPage::new(position_meter().1, sample_clock().1)
+    LooperPage::new(position_meter().1, sample_clock(SECOND).1)
 }
 
 fn page_showing(position: LoopPosition) -> LooperPage {
     let (mut writer, reader) = position_meter();
     writer.publish(position);
 
-    LooperPage::new(reader, sample_clock().1)
+    LooperPage::new(reader, sample_clock(SECOND).1)
+}
+
+fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
+    let (frames, elapsed) = sample_clock(sample_rate);
+
+    (LooperPage::new(position_meter().1, elapsed), frames)
 }
 
 fn page_on_a_clock() -> (LooperPage, SampleClockWriter) {
-    let (frames, elapsed) = sample_clock();
-
-    (LooperPage::new(position_meter().1, elapsed), frames)
+    page_on_a_clock_at(SECOND)
 }
 
 fn tapped(apart: &[usize]) -> LooperPage {
@@ -261,6 +265,19 @@ fn a_tap_lands_on_the_grid_where_the_clock_had_got_to() {
         page.grid().beats(),
         &[0, HALF_SECOND as u64, 2 * HALF_SECOND as u64]
     );
+}
+
+#[test]
+fn taps_are_read_at_the_rate_the_clock_counts_at() {
+    let half_rate = SECOND / 2;
+    let (mut page, mut frames) = page_on_a_clock_at(half_rate);
+    for _ in 0..TapTempo::TAPS_TO_A_TEMPO {
+        page.control(shifted(Button::Play));
+        frames.advance(half_rate as usize / 2);
+    }
+
+    assert_eq!(page.grid().sample_rate(), half_rate);
+    assert!(screen_of(&mut page).contains("120.0 BPM"));
 }
 
 #[test]

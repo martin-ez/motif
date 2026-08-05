@@ -14,8 +14,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Build a sample clock, and split it into the end that counts and the end that
-/// reads.
+/// Build a sample clock counting at `sample_rate`, and split it into the end
+/// that counts and the end that reads.
+///
+/// The rate is the stream's own, from
+/// [`StreamConfig`](crate::audio::StreamConfig) rather than from what was asked
+/// for, and it travels with the clock so that a reader turning frames into a
+/// duration cannot pair them with a rate the device never granted.
 ///
 /// The storage is allocated here and never again, so this belongs in setup,
 /// before the stream starts.
@@ -23,21 +28,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// ```
 /// use motif::audio::sample_clock;
 ///
-/// let (mut elapsed, now) = sample_clock();
+/// let (mut elapsed, now) = sample_clock(48_000);
 ///
 /// elapsed.advance(128);
 /// elapsed.advance(128);
 ///
 /// assert_eq!(now.read(), 256);
+/// assert_eq!(now.sample_rate(), 48_000);
 /// ```
-pub fn sample_clock() -> (SampleClockWriter, SampleClockReader) {
+pub fn sample_clock(sample_rate: u32) -> (SampleClockWriter, SampleClockReader) {
     let counted = Arc::new(AtomicU64::new(0));
 
     (
         SampleClockWriter {
             counted: Arc::clone(&counted),
         },
-        SampleClockReader { counted },
+        SampleClockReader {
+            counted,
+            sample_rate,
+        },
     )
 }
 
@@ -72,6 +81,7 @@ impl SampleClockWriter {
 /// against it.
 pub struct SampleClockReader {
     counted: Arc<AtomicU64>,
+    sample_rate: u32,
 }
 
 impl SampleClockReader {
@@ -82,5 +92,14 @@ impl SampleClockReader {
     /// was consumed.
     pub fn read(&self) -> u64 {
         self.counted.load(Ordering::Acquire)
+    }
+
+    /// The rate those frames are counted at, in frames per second.
+    ///
+    /// Anything timing against this clock takes its rate from here rather than
+    /// from a profile, since the two differ whenever the device granted
+    /// something other than what was asked for.
+    pub const fn sample_rate(&self) -> u32 {
+        self.sample_rate
     }
 }

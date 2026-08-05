@@ -65,7 +65,10 @@ impl App for Chrome {
 fn play() -> Result<(), RenderError> {
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();
-    let looper = LooperPage::new(position_meter().1, sample_clock().1);
+    let looper = LooperPage::new(
+        position_meter().1,
+        sample_clock(DeviceProfile::TARGET.audio.sample_rate).1,
+    );
     let mut chrome = Chrome {
         shell: Shell::new([Box::new(looper)]),
     };
