@@ -1,18 +1,29 @@
-//! The bordered viewport: where the panel's edges land in a larger terminal.
+//! The bordered viewport: where the screen's edges and the keys under them land
+//! in a larger terminal.
 //!
 //! Like `terminal.rs`, this file knows what an escape sequence is, because the
 //! backend is the one place allowed to know. What it is really asserting is
 //! that the box is the profile's size and sits clear of the frame — the border
-//! belongs to the terminal, and the panel it stands for has none.
+//! belongs to the terminal, and the screen it stands for has none — and that
+//! the keys the terminal draws for the panel it does not have stay outside it.
 
 use std::cell::{Cell as MutableCell, RefCell};
 use std::io::{self, Write};
 use std::rc::Rc;
 
-use motif::device::DeviceProfile;
-use motif::ui::{Cell, Frame, RenderError, Renderer, Viewport};
+use motif::device::{Button, DeviceProfile};
+use motif::ui::{Cell, Frame, Legend, Panel, RenderError, Renderer, ScriptedControls, Viewport};
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
+
+/// The first terminal line the panel is drawn on, counted from one, for a
+/// viewport at the origin: the border's two rows and the screen's, and a row
+/// left blank between the box and the keys.
+const PANEL_LINE: usize = SCREEN.rows + 4;
+
+/// The terminal column the panel starts in, counted from one, for a viewport at
+/// the origin.
+const PANEL_COLUMN: usize = (SCREEN.columns + 2 - Panel::COLUMNS) / 2 + 1;
 
 /// A sink that refuses its first write and accepts everything after it,
 /// standing in for a screen that came back.
@@ -124,6 +135,32 @@ fn drawn(cells: &[(usize, usize, char)]) -> Frame {
         frame.set(*column, *row, Cell::new(*glyph));
     }
     frame
+}
+
+fn picture() -> Panel {
+    Legend::blank()
+        .answering(Button::Play)
+        .picture(&ScriptedControls::new([]))
+}
+
+fn row_of(panel: &Panel, row: usize) -> String {
+    (0..Panel::COLUMNS)
+        .filter_map(|column| panel.get(column, row))
+        .map(|cell| cell.glyph())
+        .collect()
+}
+
+fn shown(panel: &Panel) -> String {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+    viewport
+        .show_panel(panel)
+        .expect("a vec accepts every write");
+
+    String::from_utf8(viewport.sink()[already_written..].to_vec()).expect("the output is utf-8")
 }
 
 fn top_border_at(column: usize, row: usize) -> String {
@@ -362,6 +399,207 @@ fn a_viewport_moved_along_one_axis_still_moves() {
     assert!(
         output.contains(&top_border_at(5, 0)),
         "a move that changed only the column was ignored: {output:?}"
+    );
+}
+
+#[test]
+fn a_viewport_draws_the_panel_under_its_border() {
+    let panel = picture();
+
+    let output = shown(&panel);
+
+    assert!(
+        output.contains(&format!(
+            "\u{1b}[{PANEL_LINE};{PANEL_COLUMN}H{}",
+            row_of(&panel, 0)
+        )),
+        "the panel is not under the border: {output:?}"
+    );
+}
+
+#[test]
+fn the_panel_is_drawn_clear_of_the_screen_and_its_border() {
+    let output = shown(&picture());
+
+    for line in 1..PANEL_LINE {
+        assert!(
+            !output.contains(&format!("\u{1b}[{line};")),
+            "the panel was drawn on line {line}, which the box has: {output:?}"
+        );
+    }
+}
+
+#[test]
+fn the_panel_ends_on_the_last_row_a_viewport_covers() {
+    let panel = picture();
+
+    let output = shown(&panel);
+
+    assert!(
+        output.contains(&format!(
+            "\u{1b}[{};{PANEL_COLUMN}H{}",
+            Viewport::<Vec<u8>>::ROWS,
+            row_of(&panel, Panel::ROWS - 1)
+        )),
+        "the panel runs past what a viewport says it covers: {output:?}"
+    );
+}
+
+#[test]
+fn a_panel_that_did_not_change_is_not_drawn_again() {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    viewport
+        .show_panel(&picture())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport
+        .show_panel(&picture())
+        .expect("a vec accepts every write");
+
+    assert_eq!(viewport.sink().len(), already_written);
+}
+
+#[test]
+fn a_panel_that_changed_is_drawn_again() {
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    viewport
+        .show_panel(&picture())
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport
+        .show_panel(&Legend::blank().picture(&ScriptedControls::new([])))
+        .expect("a vec accepts every write");
+
+    assert!(viewport.sink().len() > already_written);
+}
+
+#[test]
+fn moving_a_viewport_draws_the_panel_again_where_it_now_is() {
+    let panel = picture();
+    let mut viewport = Viewport::new(Vec::new());
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    viewport
+        .show_panel(&panel)
+        .expect("a vec accepts every write");
+    let already_written = viewport.sink().len();
+
+    viewport.place(5, 1);
+    viewport
+        .render(&Frame::blank())
+        .expect("a vec accepts every write");
+    viewport
+        .show_panel(&panel)
+        .expect("a vec accepts every write");
+
+    let output = String::from_utf8(viewport.sink()[already_written..].to_vec())
+        .expect("the output is utf-8");
+    assert!(
+        output.contains(&format!(
+            "\u{1b}[{};{}H{}",
+            PANEL_LINE + 1,
+            PANEL_COLUMN + 5,
+            row_of(&panel, 0)
+        )),
+        "the panel did not move with the box: {output:?}"
+    );
+}
+
+#[test]
+fn a_panel_a_screen_refused_is_drawn_again() {
+    let screen = Switchable::new();
+    let mut viewport = Viewport::new(screen.clone());
+    viewport
+        .render(&Frame::blank())
+        .expect("the screen is accepting writes");
+    viewport
+        .show_panel(&Legend::blank().picture(&ScriptedControls::new([])))
+        .expect("the screen is accepting writes");
+
+    screen.refuse(true);
+    let failed = viewport.show_panel(&picture());
+
+    screen.refuse(false);
+    let already_written = screen.len();
+    let recovered = viewport.show_panel(&picture());
+
+    assert_eq!(failed, Err(RenderError::WriteFailed));
+    assert_eq!(recovered, Ok(()));
+    assert!(
+        screen
+            .since(already_written)
+            .contains(&row_of(&picture(), 0)),
+        "the panel was not drawn again after the write that failed"
+    );
+}
+
+#[test]
+fn the_panel_a_screen_last_took_is_drawn_again_after_one_it_refused() {
+    let screen = Switchable::new();
+    let mut viewport = Viewport::new(screen.clone());
+    viewport
+        .render(&Frame::blank())
+        .expect("the screen is accepting writes");
+    viewport
+        .show_panel(&picture())
+        .expect("the screen is accepting writes");
+
+    screen.refuse(true);
+    let failed = viewport.show_panel(&Legend::blank().picture(&ScriptedControls::new([])));
+
+    screen.refuse(false);
+    let already_written = screen.len();
+    viewport
+        .show_panel(&picture())
+        .expect("the screen is accepting writes again");
+
+    assert_eq!(failed, Err(RenderError::WriteFailed));
+    assert!(
+        screen
+            .since(already_written)
+            .contains(&row_of(&picture(), 0)),
+        "a screen that refused a panel was taken to be showing the one before it"
+    );
+}
+
+#[test]
+fn the_panel_is_drawn_again_after_a_frame_failed_beside_it() {
+    let screen = Switchable::new();
+    let mut viewport = Viewport::new(screen.clone());
+    viewport
+        .render(&Frame::blank())
+        .expect("the screen is accepting writes");
+    viewport
+        .show_panel(&picture())
+        .expect("the screen is accepting writes");
+
+    screen.refuse(true);
+    let failed = viewport.render(&drawn(&[(3, 2, 'x')]));
+
+    screen.refuse(false);
+    let already_written = screen.len();
+    viewport
+        .render(&drawn(&[(3, 2, 'x')]))
+        .expect("the screen is accepting writes again");
+    viewport
+        .show_panel(&picture())
+        .expect("the screen is accepting writes again");
+
+    assert_eq!(failed, Err(RenderError::WriteFailed));
+    assert!(
+        screen
+            .since(already_written)
+            .contains(&row_of(&picture(), 0)),
+        "the panel was left for lost after a frame the screen refused"
     );
 }
 

@@ -105,9 +105,9 @@ pub trait App {
     /// this is the one place in a frame where an application is expected to
     /// spend it.
     ///
-    /// The whole frame is the application's to draw into, but the bottom
-    /// [`Legend::ROWS`] rows are drawn over afterwards with what
-    /// [`legend`](Self::legend) declared.
+    /// The whole frame is the application's to draw into, and nothing is drawn
+    /// over it afterwards: what [`legend`](Self::legend) declares goes to the
+    /// screen as a picture of its own.
     fn draw(&mut self, frame: &mut Frame) -> Flow;
 }
 
@@ -178,9 +178,9 @@ impl<K: Clock> EventLoop<K> {
 
     /// Run `app` until it asks to stop, drawing to `screen` and reading `controls`.
     ///
-    /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws, overlays
-    /// the application's [`Legend`], renders, and waits out its budget. The
-    /// legend is drawn here as the only place holding both halves of it.
+    /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws, renders,
+    /// hands the screen the panel the [`Legend`] makes, and waits out its budget.
+    /// The picture is made here, the only place holding both halves of it.
     ///
     /// An exit from [`App::control`] ends the run undrawn; one from [`App::draw`]
     /// renders that frame first. Neither waits out its budget.
@@ -205,8 +205,8 @@ impl<K: Clock> EventLoop<K> {
 
             self.frame = Frame::blank();
             let flow = app.draw(&mut self.frame);
-            app.legend().draw(&mut self.frame, controls);
             screen.render(&self.frame)?;
+            screen.show_panel(&app.legend().picture(controls))?;
             report.frames += 1;
 
             let spent = self.clock.now().duration_since(started);
