@@ -18,7 +18,7 @@ use std::hint::black_box;
 
 use motif::audio::{AudioPath, Command, CommandSender, command_channel};
 use motif::device::AudioProfile;
-use motif::looper::{LoopEngine, PositionReader, Transport, position_meter};
+use motif::looper::{LoopBuffer, LoopEngine, PositionReader, Transport, position_meter};
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -204,6 +204,42 @@ fn an_overdub_is_heard_over_the_loop_as_it_is_recorded() {
     press(&mut sender, Command::SetTransport(Transport::Overdubbing));
 
     assert_eq!(played(&mut engine, &[0.125, 0.125]), [0.375, 0.625]);
+}
+
+#[test]
+fn a_take_takes_an_overdub_for_every_layer_over_it() {
+    let (mut engine, mut sender, _position) = engine();
+    let layered = 0.125;
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 1);
+    for _ in 1..LoopBuffer::LAYERS {
+        press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+        played(&mut engine, &[layered]);
+        press(&mut sender, Command::SetTransport(Transport::Playing));
+        heard(&mut engine, 1);
+    }
+
+    let over_the_take = layered * (LoopBuffer::LAYERS - 1) as f32;
+    assert_eq!(heard(&mut engine, 1), [0.25 + over_the_take]);
+}
+
+#[test]
+fn stopping_a_stopped_loop_keeps_its_playhead() {
+    let (mut engine, mut sender, position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5, 0.75]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 2);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    heard(&mut engine, 2);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    heard(&mut engine, 2);
+
+    assert_eq!(position.read().playhead(), 2);
 }
 
 #[test]
