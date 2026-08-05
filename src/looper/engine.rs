@@ -15,7 +15,7 @@
 use crate::audio::{AudioPath, Command, StreamConfig};
 use crate::device::AudioProfile;
 
-use super::{LoopBuffer, LoopPosition, PositionWriter, Transport};
+use super::{LoopBuffer, LoopPosition, PositionWriter, Transport, WaveformWriter};
 
 const UNITY_GAIN: f32 = 1.0;
 
@@ -33,11 +33,12 @@ const UNITY_GAIN: f32 = 1.0;
 /// ```
 /// use motif::audio::{AudioPath, Command, Commanded, SendError, command_channel};
 /// use motif::device::DeviceProfile;
-/// use motif::looper::{LoopEngine, Transport, position_meter};
+/// use motif::looper::{LoopEngine, Transport, position_meter, waveform_meter};
 ///
 /// let (mut player, commands) = command_channel(4);
 /// let (writer, position) = position_meter();
-/// let engine = LoopEngine::new(DeviceProfile::TARGET.audio, writer);
+/// let (shape, _drawn) = waveform_meter();
+/// let engine = LoopEngine::new(DeviceProfile::TARGET.audio, writer, shape);
 /// let mut engine = Commanded::new(commands, engine);
 ///
 /// player.send(Command::SetTransport(Transport::Recording))?;
@@ -54,6 +55,7 @@ const UNITY_GAIN: f32 = 1.0;
 pub struct LoopEngine {
     buffer: LoopBuffer,
     position: PositionWriter,
+    waveform: WaveformWriter,
     gained: Box<[f32]>,
     transport: Transport,
     playhead: usize,
@@ -64,23 +66,23 @@ pub struct LoopEngine {
 
 impl LoopEngine {
     /// An engine over the longest loop `profile` allows, idle and unmuted at
-    /// unity gain, publishing to `position`.
-    ///
-    /// Its buffers are allocated here and never again, so this belongs in
-    /// setup, before the stream starts.
+    /// unity gain, publishing where the loop is to `position` and what is in
+    /// it to `waveform`. Its buffers are allocated here and never again, so
+    /// this belongs in setup, before the stream starts.
     ///
     /// # Panics
     ///
     /// Panics on a profile with no loop to record or no block to record it in,
     /// either being a mistake in setup rather than a condition worth reporting
     /// from the real-time thread.
-    pub fn new(profile: AudioProfile, position: PositionWriter) -> Self {
+    pub fn new(profile: AudioProfile, position: PositionWriter, waveform: WaveformWriter) -> Self {
         let block = profile.block_size as usize;
         assert!(block > 0, "an engine renders nothing block by block");
 
         Self {
             buffer: LoopBuffer::for_profile(profile),
             position,
+            waveform,
             gained: vec![0.0; block].into_boxed_slice(),
             transport: Transport::default(),
             playhead: 0,
@@ -134,6 +136,7 @@ impl LoopEngine {
             frame_count(self.playhead),
             frame_count(self.buffer.len()),
         ));
+        self.waveform.publish(self.buffer.waveform());
     }
 }
 

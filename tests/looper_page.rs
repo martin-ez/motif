@@ -9,7 +9,9 @@ use motif::audio::{
     Command, CommandReceiver, CommandSender, SampleClockWriter, command_channel, sample_clock,
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
-use motif::looper::{LoopPosition, LooperPage, Transport, position_meter};
+use motif::looper::{
+    LoopPosition, LoopWaveform, LooperPage, Transport, position_meter, waveform_meter,
+};
 use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Frame, Page, Turn};
 
@@ -54,14 +56,24 @@ fn shifted(button: Button) -> ControlEvent {
 }
 
 fn page() -> LooperPage {
-    LooperPage::new(position_meter().1, sample_clock(SECOND).1, sending())
+    LooperPage::new(
+        position_meter().1,
+        waveform_meter().1,
+        sample_clock(SECOND).1,
+        sending(),
+    )
 }
 
 fn page_ordering_with_room_for(commands: usize) -> (LooperPage, CommandReceiver) {
     let (sending, orders) = command_channel(commands);
 
     (
-        LooperPage::new(position_meter().1, sample_clock(SECOND).1, sending),
+        LooperPage::new(
+            position_meter().1,
+            waveform_meter().1,
+            sample_clock(SECOND).1,
+            sending,
+        ),
         orders,
     )
 }
@@ -74,14 +86,19 @@ fn page_showing(position: LoopPosition) -> LooperPage {
     let (mut writer, reader) = position_meter();
     writer.publish(position);
 
-    LooperPage::new(reader, sample_clock(SECOND).1, sending())
+    LooperPage::new(
+        reader,
+        waveform_meter().1,
+        sample_clock(SECOND).1,
+        sending(),
+    )
 }
 
 fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
     let (frames, elapsed) = sample_clock(sample_rate);
 
     (
-        LooperPage::new(position_meter().1, elapsed, sending()),
+        LooperPage::new(position_meter().1, waveform_meter().1, elapsed, sending()),
         frames,
     )
 }
@@ -148,6 +165,51 @@ fn drawn(page: &mut LooperPage) -> Vec<String> {
 
 fn screen_of(page: &mut LooperPage) -> String {
     drawn(page).join("\n")
+}
+
+/// The glyphs the loop's shape is drawn from, densest last.
+const BLOCKS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+fn recorded(samples: &[f32]) -> LoopWaveform {
+    let mut waveform = LoopWaveform::EMPTY;
+    waveform.take(0, samples.iter().copied());
+
+    waveform
+}
+
+/// A loop at full scale from end to end, so every column of it is drawn as
+/// tall as the page allows.
+fn recorded_at_full_scale() -> LoopWaveform {
+    recorded(&[1.0, -1.0].repeat(LoopWaveform::BUCKETS))
+}
+
+fn page_drawing(waveform: &LoopWaveform) -> LooperPage {
+    let (mut writer, reader) = waveform_meter();
+    writer.publish(waveform);
+
+    LooperPage::new(
+        position_meter().1,
+        reader,
+        sample_clock(SECOND).1,
+        sending(),
+    )
+}
+
+/// Which rows of the drawn page carry any of the loop's shape.
+fn shape_rows(page: &mut LooperPage) -> Vec<usize> {
+    drawn(page)
+        .iter()
+        .enumerate()
+        .filter(|(_row, drawn)| drawn.chars().any(|glyph| BLOCKS.contains(&glyph)))
+        .map(|(row, _drawn)| row)
+        .collect()
+}
+
+fn row_starting_with(page: &mut LooperPage, opening: &str) -> usize {
+    drawn(page)
+        .iter()
+        .position(|drawn| drawn.starts_with(opening))
+        .unwrap_or_else(|| panic!("the page draws a row opening {opening:?}"))
 }
 
 struct Bar {
@@ -731,4 +793,46 @@ fn turning_the_encoder_leaves_the_transport_alone() {
     page.control(turned(Turn::Clockwise));
 
     assert_eq!(page.transport(), Transport::Recording);
+}
+
+#[test]
+fn an_empty_loop_draws_no_shape() {
+    assert!(shape_rows(&mut page()).is_empty());
+}
+
+#[test]
+fn a_recorded_loop_is_drawn_under_the_playhead() {
+    let mut page = page_drawing(&recorded_at_full_scale());
+    let bar = row_starting_with(&mut page, "[");
+
+    assert!(
+        shape_rows(&mut page).iter().all(|row| *row > bar),
+        "the loop is drawn over the bar rather than under it"
+    );
+}
+
+#[test]
+fn a_full_scale_loop_is_drawn_the_whole_height_of_its_rows() {
+    let mut page = page_drawing(&recorded_at_full_scale());
+
+    assert_eq!(shape_rows(&mut page).len(), 4);
+}
+
+#[test]
+fn a_quiet_loop_is_drawn_shorter_than_a_loud_one() {
+    let quiet = recorded(&[0.125, -0.125].repeat(LoopWaveform::BUCKETS));
+    let loud = shape_rows(&mut page_drawing(&recorded_at_full_scale())).len();
+
+    assert!(shape_rows(&mut page_drawing(&quiet)).len() < loud);
+}
+
+#[test]
+fn the_gain_readout_sits_under_the_loop() {
+    let mut page = page_drawing(&recorded_at_full_scale());
+    let gain = row_starting_with(&mut page, "IN");
+
+    assert!(
+        shape_rows(&mut page).iter().all(|row| *row < gain),
+        "the loop is drawn over the gain readout"
+    );
 }

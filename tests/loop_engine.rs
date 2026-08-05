@@ -18,7 +18,10 @@ use std::hint::black_box;
 
 use motif::audio::{AudioPath, Command, CommandSender, Commanded, command_channel};
 use motif::device::AudioProfile;
-use motif::looper::{LoopBuffer, LoopEngine, PositionReader, Transport, position_meter};
+use motif::looper::{
+    LoopBuffer, LoopEngine, PositionReader, Transport, WaveformReader, position_meter,
+    waveform_meter,
+};
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -78,9 +81,27 @@ fn engine() -> (Commanded<LoopEngine>, CommandSender, PositionReader) {
     let (writer, reader) = position_meter();
 
     (
-        Commanded::new(receiver, LoopEngine::new(eight_frame_profile(), writer)),
+        Commanded::new(
+            receiver,
+            LoopEngine::new(eight_frame_profile(), writer, waveform_meter().0),
+        ),
         sender,
         reader,
+    )
+}
+
+/// An engine over an eight-frame loop, with the end its shape is drawn from.
+fn engine_drawing() -> (Commanded<LoopEngine>, CommandSender, WaveformReader) {
+    let (sender, receiver) = command_channel(8);
+    let (drawing, shape) = waveform_meter();
+
+    (
+        Commanded::new(
+            receiver,
+            LoopEngine::new(eight_frame_profile(), position_meter().0, drawing),
+        ),
+        sender,
+        shape,
     )
 }
 
@@ -136,13 +157,14 @@ fn a_profile_with_no_block_is_refused_at_setup() {
             ..eight_frame_profile()
         },
         writer,
+        waveform_meter().0,
     );
 }
 
 #[test]
 fn an_engine_answers_every_command_there_is() {
     let (writer, _position) = position_meter();
-    let mut engine = LoopEngine::new(eight_frame_profile(), writer);
+    let mut engine = LoopEngine::new(eight_frame_profile(), writer, waveform_meter().0);
 
     assert!(engine.apply(Command::SetTransport(Transport::Recording)));
     assert!(engine.apply(Command::SetGain(0.5)));
@@ -543,4 +565,39 @@ fn undoing_and_clearing_do_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "undo or clear allocated");
+}
+
+#[test]
+fn the_engine_publishes_the_shape_of_what_it_recorded() {
+    let (mut engine, mut sender, shape) = engine_drawing();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+
+    played(&mut engine, &[0.25, -0.5]);
+
+    assert_eq!(shape.read().buckets().len(), 2);
+    assert_eq!(shape.read().buckets()[0].peak, 0.25);
+}
+
+#[test]
+fn the_published_shape_is_of_the_input_the_gain_let_through() {
+    let (mut engine, mut sender, shape) = engine_drawing();
+    press(&mut sender, Command::SetGain(0.5));
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+
+    played(&mut engine, &[1.0]);
+
+    assert_eq!(shape.read().buckets()[0].peak, 0.5);
+}
+
+#[test]
+fn a_cleared_loop_publishes_no_shape() {
+    let (mut engine, mut sender, shape) = engine_drawing();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, -0.5]);
+
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::Clear);
+    played(&mut engine, &[0.75, 0.75]);
+
+    assert!(shape.read().buckets().is_empty());
 }

@@ -19,7 +19,7 @@ use std::cell::Cell;
 use std::hint::black_box;
 
 use motif::device::{AudioProfile, DeviceProfile};
-use motif::looper::LoopBuffer;
+use motif::looper::{Extremes, LoopBuffer, LoopWaveform};
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -708,4 +708,74 @@ fn layering_and_mixing_do_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before);
+}
+
+#[test]
+fn a_take_shows_in_the_waveform_as_it_is_recorded() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+
+    buffer.record(&[0.25, -0.5]);
+
+    assert_eq!(
+        buffer.waveform().buckets(),
+        [
+            Extremes {
+                peak: 0.25,
+                trough: 0.0
+            },
+            Extremes {
+                peak: 0.0,
+                trough: -0.5
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_cleared_loop_has_no_waveform() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+
+    buffer.clear();
+
+    assert!(buffer.waveform().buckets().is_empty());
+}
+
+#[test]
+fn the_waveform_of_a_stack_of_layers_is_their_sum() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+
+    buffer.overdub();
+    buffer.record(&[0.125, 0.125]);
+
+    assert_eq!(buffer.waveform().buckets()[0].peak, 0.375);
+    assert_eq!(buffer.waveform().buckets()[1].peak, 0.625);
+}
+
+#[test]
+fn an_overdub_repaints_only_as_far_as_it_has_reached() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+
+    buffer.overdub();
+    buffer.record(&[0.125]);
+
+    assert_eq!(buffer.waveform().buckets()[0].peak, 0.375);
+    assert_eq!(buffer.waveform().buckets()[1].peak, 0.5);
+}
+
+#[test]
+fn a_take_longer_than_the_buckets_still_spans_the_loop() {
+    let profile = DeviceProfile::TARGET.audio;
+    let mut buffer = LoopBuffer::for_profile(profile);
+    let block = vec![0.5; profile.block_size as usize];
+    for _ in 0..LoopWaveform::BUCKETS {
+        buffer.record(&block);
+    }
+
+    let buckets = buffer.waveform().buckets();
+
+    assert!(buckets.len() <= LoopWaveform::BUCKETS);
+    assert_eq!(buckets.last().map(|bucket| bucket.peak), Some(0.5));
 }
