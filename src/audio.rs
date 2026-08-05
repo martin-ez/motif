@@ -201,6 +201,25 @@ pub struct DeviceSelection {
     pub output_channels: ChannelSelection,
 }
 
+impl DeviceSelection {
+    /// A selection naming no host and no device.
+    ///
+    /// What a run starts from where the backend offered no default. Opening it
+    /// fails the way a device unplugged since the listing does, which is a state
+    /// the screen already draws — so a machine with nothing to open still
+    /// reaches the page that picks a device, instead of losing it exactly when
+    /// it is needed.
+    pub fn nothing() -> Self {
+        Self {
+            host: String::new(),
+            input: DeviceId::named(""),
+            input_channels: ChannelSelection::all(0),
+            output: DeviceId::named(""),
+            output_channels: ChannelSelection::all(0),
+        }
+    }
+}
+
 /// Whether a stream is currently calling back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamState {

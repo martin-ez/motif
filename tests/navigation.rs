@@ -76,11 +76,13 @@ impl Page for Marked {
 
 fn navigated_by(scheme: Scheme) -> (Shell, Taken) {
     let taken = Taken::default();
-    let page = Marked {
-        taken: taken.clone(),
-    };
+    let pages = Mode::ALL.map(|_| {
+        Box::new(Marked {
+            taken: taken.clone(),
+        }) as Box<dyn Page>
+    });
 
-    (Shell::navigated_by([Box::new(page)], scheme), taken)
+    (Shell::navigated_by(pages, scheme), taken)
 }
 
 #[test]
@@ -172,6 +174,67 @@ fn a_scheme_prints_the_gestures_it_binds() {
     let scheme = Scheme::new([(pressed(Button::Up), home())]);
 
     assert!(format!("{scheme:?}").contains("Up"));
+}
+
+#[test]
+fn the_first_scene_shows_the_looper() {
+    assert_eq!(
+        Scheme::scenes().intent(pressed(Button::FirstScene)),
+        Some(Intent::Show(Mode::Looper))
+    );
+}
+
+#[test]
+fn the_second_scene_shows_the_settings() {
+    assert_eq!(
+        Scheme::scenes().intent(pressed(Button::SecondScene)),
+        Some(Intent::Show(Mode::Settings))
+    );
+}
+
+#[test]
+fn every_mode_is_reached_by_one_gesture_of_the_scenes() {
+    let scheme = Scheme::scenes();
+
+    for mode in Mode::ALL {
+        let reaching = Button::ALL
+            .iter()
+            .filter(|&&button| scheme.intent(pressed(button)) == Some(Intent::Show(mode)))
+            .count();
+
+        assert_eq!(reaching, 1, "{mode:?} is reached by {reaching} gestures");
+    }
+}
+
+#[test]
+fn the_scenes_leave_the_transport_to_the_page() {
+    let scheme = Scheme::scenes();
+
+    for button in [Button::Play, Button::Stop, Button::Record] {
+        assert_eq!(scheme.intent(pressed(button)), None);
+    }
+}
+
+#[test]
+fn the_scenes_leave_the_arrows_to_the_page() {
+    let scheme = Scheme::scenes();
+
+    for button in [Button::Up, Button::Down, Button::Left, Button::Right] {
+        assert_eq!(scheme.intent(pressed(button)), None);
+    }
+}
+
+#[test]
+fn the_scenes_leave_the_encoder_to_the_page() {
+    let scheme = Scheme::scenes();
+
+    assert_eq!(scheme.intent(turned(Turn::Clockwise)), None);
+    assert_eq!(scheme.intent(turned(Turn::Anticlockwise)), None);
+}
+
+#[test]
+fn a_shifted_scene_is_not_a_gesture_the_scenes_name() {
+    assert_eq!(Scheme::scenes().intent(shifted(Button::FirstScene)), None);
 }
 
 #[test]

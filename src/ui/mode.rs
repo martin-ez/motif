@@ -22,4 +22,6 @@ closed_set! {
     const ALL;
     /// The looper, where a loop is recorded, layered and played.
     Looper,
+    /// The settings, where the audio path is chosen.
+    Settings,
 }

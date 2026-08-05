@@ -33,6 +33,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::device::DeviceProfile;
 
+mod chrome;
 mod clock;
 mod events;
 mod hold;
@@ -49,6 +50,7 @@ mod region;
 mod shell;
 mod terminal;
 
+pub use chrome::Chrome;
 pub use clock::{Clock, ScriptedClock, SystemClock};
 pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};

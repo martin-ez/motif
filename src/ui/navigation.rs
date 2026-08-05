@@ -6,10 +6,13 @@
 //! page never learns which control navigates and a scheme is one value rather
 //! than an opinion held by every page.
 //!
-//! [`Scheme`] is that value written as a table, and what a scheme binds belongs
-//! to whoever composes the application, the way choosing a backend does:
-//! nothing here binds a control to anything.
+//! [`Scheme`] is that value written as a table, and the mechanism takes any
+//! table: a composition that wants different gestures passes different rows.
+//! [`Scheme::scenes`] is the one the instrument runs today, named here rather
+//! than typed out where the application is built, so that a test can assert the
+//! bindings and a change to them is a change to one value.
 
+use crate::device::Button;
 use crate::ui::{ControlEvent, Mode};
 
 /// Something the application should do about where it is.
@@ -97,6 +100,40 @@ impl Scheme {
         Self {
             bindings: bindings.into_iter().collect(),
         }
+    }
+
+    /// The scheme the instrument navigates by: a scene button per mode, in the
+    /// order the modes sit in.
+    ///
+    /// A row per [`Mode`] rather than a ring, so what reaches a screen is one
+    /// press wherever the player is and the topology is the mode set rather
+    /// than an order written into a step. The scene buttons are what is free:
+    /// no page answers one, so nothing a scheme takes was doing something else.
+    ///
+    /// ```
+    /// use motif::device::Button;
+    /// use motif::ui::{ControlEvent, Intent, Mode, Navigation, Scheme};
+    ///
+    /// let scene = ControlEvent::Pressed { button: Button::SecondScene, shifted: false };
+    ///
+    /// assert_eq!(Scheme::scenes().intent(scene), Some(Intent::Show(Mode::Settings)));
+    /// ```
+    pub fn scenes() -> Self {
+        Self::new(Mode::ALL.map(|mode| (pressing(reaching(mode)), Intent::Show(mode))))
+    }
+}
+
+fn reaching(mode: Mode) -> Button {
+    match mode {
+        Mode::Looper => Button::FirstScene,
+        Mode::Settings => Button::SecondScene,
+    }
+}
+
+fn pressing(button: Button) -> ControlEvent {
+    ControlEvent::Pressed {
+        button,
+        shifted: false,
     }
 }
 
