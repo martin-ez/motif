@@ -144,6 +144,23 @@ fn a_tap_a_little_off_the_beat_joins_the_sequence() {
 }
 
 #[test]
+fn a_tap_a_little_early_joins_the_sequence() {
+    let mut taps = steady(TapTempo::TAPS_TO_A_TEMPO);
+
+    assert!(taps.tap(3 * HALF_SECOND + 5 * HALF_SECOND / 8));
+    assert_eq!(taps.grid().len(), TapTempo::TAPS_TO_A_TEMPO + 1);
+}
+
+#[test]
+fn a_tap_exactly_at_the_stale_limit_joins_the_sequence() {
+    let mut taps = steady(1);
+    let limit = TapTempo::STALE_AFTER_SECONDS * u64::from(SAMPLE_RATE);
+
+    assert!(taps.tap(HALF_SECOND + limit));
+    assert_eq!(taps.grid().len(), 2);
+}
+
+#[test]
 fn a_second_tap_at_any_interval_joins_the_first() {
     let mut taps = steady(1);
 
