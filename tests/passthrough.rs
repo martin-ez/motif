@@ -6,13 +6,16 @@
 //! reads, so the whole path is exercised here on one thread with no device.
 //!
 //! The facts worth stating are that a frame survives the fold to one sample and
-//! the spread back across channels, that a ring which is full or dry is
-//! reported rather than waited on, and that neither callback allocates.
+//! the spread back across channels, that only the selected channels carry it,
+//! that a ring which is full or dry is reported rather than waited on, and that
+//! neither callback allocates.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use motif::audio::{StreamConfig, passthrough};
+use motif::audio::{
+    ChannelSelection, PassthroughInput, PassthroughOutput, StreamConfig, passthrough,
+};
 use motif::device::DeviceProfile;
 
 thread_local! {
@@ -67,9 +70,22 @@ fn config(input_channels: u16, output_channels: u16) -> StreamConfig {
     }
 }
 
+fn whole(config: StreamConfig, slack: usize) -> (PassthroughInput, PassthroughOutput) {
+    passthrough(
+        config,
+        ChannelSelection::all(config.input_channels),
+        ChannelSelection::all(config.output_channels),
+        slack,
+    )
+}
+
+fn channels(first: u16, count: u16) -> ChannelSelection {
+    ChannelSelection { first, count }
+}
+
 #[test]
 fn captured_frames_are_played_back_in_order() {
-    let (mut input, mut output) = passthrough(config(1, 1), 0);
+    let (mut input, mut output) = whole(config(1, 1), 0);
     let mut played = [0.0; 4];
 
     input.capture(&[0.1, 0.2, 0.3, 0.4]);
@@ -80,7 +96,7 @@ fn captured_frames_are_played_back_in_order() {
 
 #[test]
 fn a_frame_is_the_mean_of_the_channels_it_was_captured_on() {
-    let (mut input, mut output) = passthrough(config(2, 1), 0);
+    let (mut input, mut output) = whole(config(2, 1), 0);
     let mut played = [0.0; 2];
 
     input.capture(&[1.0, 0.0, 0.5, 0.5]);
@@ -91,7 +107,7 @@ fn a_frame_is_the_mean_of_the_channels_it_was_captured_on() {
 
 #[test]
 fn a_frame_is_played_on_every_output_channel() {
-    let (mut input, mut output) = passthrough(config(1, 2), 0);
+    let (mut input, mut output) = whole(config(1, 2), 0);
     let mut played = [0.0; 4];
 
     input.capture(&[0.25, 0.75]);
@@ -101,15 +117,63 @@ fn a_frame_is_played_on_every_output_channel() {
 }
 
 #[test]
+fn a_frame_is_the_mean_of_the_selected_channels_alone() {
+    let (mut input, mut output) =
+        passthrough(config(4, 1), channels(1, 2), ChannelSelection::all(1), 0);
+    let mut played = [0.0; 2];
+
+    input.capture(&[9.0, 1.0, 0.0, 9.0, 9.0, 0.5, 0.5, 9.0]);
+    output.render(&mut played);
+
+    assert_eq!(played, [0.5, 0.5]);
+}
+
+#[test]
+fn one_selected_channel_arrives_at_the_level_it_was_captured() {
+    let (mut input, mut output) =
+        passthrough(config(2, 1), channels(0, 1), ChannelSelection::all(1), 0);
+    let mut played = [0.0; 2];
+
+    input.capture(&[1.0, 0.0, 0.25, 0.0]);
+    output.render(&mut played);
+
+    assert_eq!(played, [1.0, 0.25]);
+}
+
+#[test]
+fn an_output_channel_outside_the_selection_is_silent() {
+    let (mut input, mut output) =
+        passthrough(config(1, 4), ChannelSelection::all(1), channels(1, 2), 0);
+    let mut played = [9.0; 8];
+
+    input.capture(&[0.5, 0.25]);
+    output.render(&mut played);
+
+    assert_eq!(played, [0.0, 0.5, 0.5, 0.0, 0.0, 0.25, 0.25, 0.0]);
+}
+
+#[test]
+#[should_panic = "a passthrough path carries nothing without channels"]
+fn a_selection_of_no_channels_is_a_setup_error() {
+    passthrough(config(2, 2), channels(0, 0), ChannelSelection::all(2), 0);
+}
+
+#[test]
+#[should_panic = "a passthrough path cannot reach a channel the device has not got"]
+fn a_selection_past_the_end_of_the_device_is_a_setup_error() {
+    passthrough(config(2, 2), channels(1, 2), ChannelSelection::all(2), 0);
+}
+
+#[test]
 fn capture_reports_the_frames_it_took() {
-    let (mut input, _output) = passthrough(config(2, 2), 0);
+    let (mut input, _output) = whole(config(2, 2), 0);
 
     assert_eq!(input.capture(&[0.0; 6]), 3);
 }
 
 #[test]
 fn what_the_ring_cannot_supply_is_played_as_silence() {
-    let (mut input, mut output) = passthrough(config(1, 1), 0);
+    let (mut input, mut output) = whole(config(1, 1), 0);
     let mut played = [9.0; 4];
 
     input.capture(&[1.0]);
@@ -121,7 +185,7 @@ fn what_the_ring_cannot_supply_is_played_as_silence() {
 
 #[test]
 fn a_ring_that_has_run_dry_does_not_repeat_itself() {
-    let (mut input, mut output) = passthrough(config(1, 1), 0);
+    let (mut input, mut output) = whole(config(1, 1), 0);
     let mut played = [0.0; 4];
 
     input.capture(&[1.0, 1.0, 1.0, 1.0]);
@@ -134,7 +198,7 @@ fn a_ring_that_has_run_dry_does_not_repeat_itself() {
 
 #[test]
 fn a_trailing_part_of_a_frame_is_silenced_rather_than_left() {
-    let (mut input, mut output) = passthrough(config(1, 2), 0);
+    let (mut input, mut output) = whole(config(1, 2), 0);
     let mut played = [9.0; 5];
 
     input.capture(&[0.5, 0.5]);
@@ -145,7 +209,7 @@ fn a_trailing_part_of_a_frame_is_silenced_rather_than_left() {
 
 #[test]
 fn an_output_too_short_for_one_frame_is_silenced() {
-    let (mut input, mut output) = passthrough(config(1, 4), 0);
+    let (mut input, mut output) = whole(config(1, 4), 0);
     let mut played = [9.0; 3];
 
     input.capture(&[0.5]);
@@ -157,7 +221,7 @@ fn an_output_too_short_for_one_frame_is_silenced() {
 
 #[test]
 fn slack_delays_playback_by_that_many_frames() {
-    let (mut input, mut output) = passthrough(config(1, 1), 2);
+    let (mut input, mut output) = whole(config(1, 1), 2);
     let mut played = [0.0; 4];
 
     input.capture(&[1.0, 2.0]);
@@ -168,7 +232,7 @@ fn slack_delays_playback_by_that_many_frames() {
 
 #[test]
 fn a_block_larger_than_the_configured_one_is_carried_whole() {
-    let (mut input, mut output) = passthrough(config(1, 1), 0);
+    let (mut input, mut output) = whole(config(1, 1), 0);
     let captured: Vec<f32> = (1..=8).map(|frame| frame as f32).collect();
     let mut played = [0.0; 8];
 
@@ -180,7 +244,7 @@ fn a_block_larger_than_the_configured_one_is_carried_whole() {
 
 #[test]
 fn a_full_ring_drops_the_frames_it_cannot_hold() {
-    let (mut input, _output) = passthrough(config(1, 1), 0);
+    let (mut input, _output) = whole(config(1, 1), 0);
     let capacity = input.capacity();
 
     assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity);
@@ -190,7 +254,7 @@ fn a_full_ring_drops_the_frames_it_cannot_hold() {
 fn neither_callback_allocates() {
     let profile = DeviceProfile::TARGET.audio;
     let block = profile.block_size as usize;
-    let (mut input, mut output) = passthrough(
+    let (mut input, mut output) = whole(
         StreamConfig {
             sample_rate: profile.sample_rate,
             block_size: profile.block_size,
@@ -214,7 +278,7 @@ fn neither_callback_allocates() {
 
 #[test]
 fn neither_callback_allocates_when_the_ring_is_full_or_dry() {
-    let (mut input, mut output) = passthrough(config(1, 1), 0);
+    let (mut input, mut output) = whole(config(1, 1), 0);
     let captured = [0.25; 32];
     let mut played = [0.0; 32];
 

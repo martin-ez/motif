@@ -19,7 +19,9 @@
 
 use std::io::{self, Write};
 
-use motif::audio::{AudioBackend, CpalBackend, DeviceError, DuplexStream, StreamRequest};
+use motif::audio::{
+    AudioBackend, ChannelSelection, CpalBackend, DeviceError, DuplexStream, StreamRequest,
+};
 use motif::device::DeviceProfile;
 
 fn main() -> Result<(), DeviceError> {
@@ -33,7 +35,24 @@ fn main() -> Result<(), DeviceError> {
         request.sample_rate, request.block_size
     );
 
-    let mut stream = CpalBackend::new().open(request)?;
+    let backend = CpalBackend::new();
+    let Some(selection) = backend.defaults(request.sample_rate) else {
+        println!("no device to capture from and play to at that rate");
+        return Ok(());
+    };
+    println!("host       {}", selection.host);
+    println!(
+        "input      {}, {}",
+        selection.input,
+        described(selection.input_channels)
+    );
+    println!(
+        "output     {}, {}",
+        selection.output,
+        described(selection.output_channels)
+    );
+
+    let mut stream = backend.open(&selection, request)?;
 
     let granted = stream.config();
     println!(
@@ -53,6 +72,17 @@ fn main() -> Result<(), DeviceError> {
     println!("{:?}", stream.state());
 
     Ok(())
+}
+
+fn described(selection: ChannelSelection) -> String {
+    match selection.count {
+        1 => format!("channel {}", selection.first + 1),
+        _ => format!(
+            "channels {}-{}",
+            selection.first + 1,
+            selection.first + selection.count
+        ),
+    }
 }
 
 fn enter_pressed(prompt: &str) -> bool {

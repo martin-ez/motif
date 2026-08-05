@@ -2,19 +2,20 @@
 //! player sees when it does.
 //!
 //! A stream is the wrong thing to hand the rest of the application, because a
-//! device that vanishes takes it with it. What survives is the intent to be
-//! playing through *some* device — the backend, the configuration asked of it,
-//! and whichever stream is currently serving that intent. That is
-//! [`DeviceLink`], and [`AudioState`] is what it looks like from outside.
+//! device that vanishes takes it with it. What survives is the intent to play
+//! through a chosen device — the backend, the choice, the configuration asked
+//! of it, and whichever stream serves that intent. That is [`DeviceLink`], and
+//! [`AudioState`] is what it looks like from outside.
 //!
 //! Recovery is a replacement, never a repair: a faulted stream is stopped and
 //! dropped on the application thread, where dropping is allowed and is what
 //! joins the callback threads. [`open`](DeviceLink::open) replaces the stream
-//! whatever the reason, so a lost device and a changed choice are one mechanism.
+//! whatever the reason and [`select`](DeviceLink::select) is that call after
+//! changing the choice, so a lost device and a changed one are one mechanism.
 
 use std::fmt;
 
-use super::{AudioBackend, DeviceError, DuplexStream, StreamRequest};
+use super::{AudioBackend, DeviceError, DeviceSelection, DuplexStream, StreamRequest};
 
 /// What the audio path is doing, as far as the rest of the application is
 /// concerned.
@@ -56,19 +57,22 @@ impl fmt::Display for AudioState {
 pub struct DeviceLink<B: AudioBackend> {
     backend: B,
     request: StreamRequest,
+    selection: DeviceSelection,
     stream: Option<B::Stream>,
     state: AudioState,
 }
 
 impl<B: AudioBackend> DeviceLink<B> {
-    /// A link that will open `request` on `backend`, having opened nothing yet.
+    /// A link that will open `selection` at `request` on `backend`, having
+    /// opened nothing yet.
     ///
     /// Touches no device, so this cannot fail; the first
     /// [`open`](Self::open) is where a device gets a say.
-    pub fn new(backend: B, request: StreamRequest) -> Self {
+    pub fn new(backend: B, request: StreamRequest, selection: DeviceSelection) -> Self {
         Self {
             backend,
             request,
+            selection,
             stream: None,
             state: AudioState::Closed,
         }
@@ -86,6 +90,15 @@ impl<B: AudioBackend> DeviceLink<B> {
     /// The configuration every stream this link opens is asked for.
     pub fn request(&self) -> StreamRequest {
         self.request
+    }
+
+    /// The devices and channels the link is opening, or last tried to.
+    ///
+    /// A selection a device refused stays here rather than being rolled back,
+    /// so a link in [`AudioState::Lost`] says both what was tried and why it
+    /// failed, and [`open`](Self::open) is a retry of the same thing.
+    pub fn selection(&self) -> &DeviceSelection {
+        &self.selection
     }
 
     /// The stream currently serving the link, or `None` where none is open.
@@ -111,7 +124,7 @@ impl<B: AudioBackend> DeviceLink<B> {
     pub fn open(&mut self) -> Result<(), DeviceError> {
         self.close();
 
-        match self.backend.open(self.request) {
+        match self.backend.open(&self.selection, self.request) {
             Ok(stream) => {
                 self.stream = Some(stream);
                 self.state = AudioState::Idle;
@@ -119,6 +132,21 @@ impl<B: AudioBackend> DeviceLink<B> {
             }
             Err(error) => Err(self.lose(error)),
         }
+    }
+
+    /// Take `selection` as the choice to serve, and open it.
+    ///
+    /// The link holds one stream at a time, so the one that was running stops
+    /// and is dropped before the new one opens: a device serving both cannot be
+    /// opened twice, and a moment of silence is the price of the change.
+    ///
+    /// # Errors
+    ///
+    /// As [`open`](Self::open). The refused selection is kept, so a link left
+    /// in [`AudioState::Lost`] reports what was asked for, not what came before.
+    pub fn select(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
+        self.selection = selection;
+        self.open()
     }
 
     /// Stop and drop the stream, leaving the link [`AudioState::Closed`].

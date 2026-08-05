@@ -3,8 +3,8 @@
 //! exists.
 
 use motif::audio::{
-    AudioState, DeviceError, DeviceLink, DuplexStream, NullBackend, StreamConfig, StreamRequest,
-    StreamState,
+    AudioBackend, AudioState, ChannelSelection, DeviceError, DeviceLink, DeviceSelection,
+    DuplexStream, NullBackend, StreamConfig, StreamRequest, StreamState,
 };
 
 fn config() -> StreamConfig {
@@ -23,8 +23,21 @@ fn request() -> StreamRequest {
     }
 }
 
+fn selection() -> DeviceSelection {
+    NullBackend::rounding(config())
+        .defaults(48_000)
+        .expect("the null backend has a device in each direction")
+}
+
+fn one_input_channel() -> DeviceSelection {
+    DeviceSelection {
+        input_channels: ChannelSelection { first: 1, count: 1 },
+        ..selection()
+    }
+}
+
 fn opened() -> DeviceLink<NullBackend> {
-    let mut link = DeviceLink::new(NullBackend::rounding(config()), request());
+    let mut link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
     link.open().expect("null backend opens");
     link
 }
@@ -37,7 +50,7 @@ fn unplug(link: &DeviceLink<NullBackend>) {
 
 #[test]
 fn a_new_link_has_opened_nothing() {
-    let link = DeviceLink::new(NullBackend::rounding(config()), request());
+    let link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
 
     assert_eq!(link.state(), AudioState::Closed);
 }
@@ -93,7 +106,7 @@ fn an_open_link_reports_the_configuration_the_device_granted() {
 
 #[test]
 fn a_link_remembers_what_it_was_asked_for() {
-    let link = DeviceLink::new(NullBackend::rounding(config()), request());
+    let link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
 
     assert_eq!(link.request(), request());
 }
@@ -147,7 +160,7 @@ fn polling_a_healthy_link_leaves_it_alone() {
 
 #[test]
 fn polling_a_link_that_was_never_opened_is_harmless() {
-    let mut link = DeviceLink::new(NullBackend::rounding(config()), request());
+    let mut link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
 
     assert_eq!(link.poll(), AudioState::Closed);
 }
@@ -193,6 +206,7 @@ fn a_reopen_the_device_refuses_leaves_the_link_lost() {
             sample_rate: 44_100,
             block_size: 256,
         },
+        selection(),
     );
 
     assert_eq!(link.open().err(), Some(DeviceError::UnsupportedConfig));
@@ -214,6 +228,81 @@ fn opening_an_already_open_link_replaces_its_stream() {
         link.stream().map(DuplexStream::state),
         Some(StreamState::Stopped)
     );
+}
+
+#[test]
+fn a_link_remembers_the_selection_it_was_given() {
+    let link = DeviceLink::new(NullBackend::rounding(config()), request(), selection());
+
+    assert_eq!(link.selection(), &selection());
+}
+
+#[test]
+fn a_running_link_takes_a_different_selection_without_being_rebuilt() {
+    let mut link = opened();
+    link.start().expect("null backend starts");
+
+    link.select(one_input_channel())
+        .expect("one channel of two opens");
+
+    assert_eq!(link.state(), AudioState::Idle);
+    assert_eq!(link.selection(), &one_input_channel());
+}
+
+#[test]
+fn a_reselection_replaces_the_stream_that_was_running() {
+    let mut link = opened();
+    link.start().expect("null backend starts");
+
+    link.select(one_input_channel())
+        .expect("one channel of two opens");
+
+    assert_eq!(
+        link.stream().map(DuplexStream::state),
+        Some(StreamState::Stopped)
+    );
+}
+
+#[test]
+fn a_selection_the_device_refuses_leaves_the_link_lost() {
+    let mut link = opened();
+
+    let refused = link.select(DeviceSelection {
+        input_channels: ChannelSelection { first: 2, count: 2 },
+        ..selection()
+    });
+
+    assert_eq!(refused.err(), Some(DeviceError::UnsupportedConfig));
+    assert_eq!(
+        link.state(),
+        AudioState::Lost(DeviceError::UnsupportedConfig)
+    );
+}
+
+#[test]
+fn a_refused_selection_is_the_one_the_link_kept() {
+    let mut link = opened();
+    let refused = DeviceSelection {
+        input_channels: ChannelSelection { first: 2, count: 2 },
+        ..selection()
+    };
+
+    let _ = link.select(refused.clone());
+
+    assert_eq!(link.selection(), &refused);
+}
+
+#[test]
+fn reopening_uses_the_selection_the_link_was_last_given() {
+    let mut link = opened();
+    link.select(one_input_channel())
+        .expect("one channel of two opens");
+    link.close();
+
+    link.open().expect("the same selection opens again");
+
+    assert_eq!(link.selection(), &one_input_channel());
+    assert_eq!(link.state(), AudioState::Idle);
 }
 
 #[test]

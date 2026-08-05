@@ -6,9 +6,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 
 use super::{
-    AudioBackend, AudioDevice, AudioHost, DeviceError, DuplexStream, FaultReader, Headroom,
-    HeadroomReader, LevelReader, Levels, StreamConfig, StreamRequest, StreamState, XrunReader,
-    Xruns, fault_channel, headroom_meter, level_meter, passthrough, xrun_counter,
+    AudioBackend, AudioDevice, AudioHost, ChannelSelection, DeviceError, DeviceSelection,
+    DuplexStream, FaultReader, Headroom, HeadroomReader, LevelReader, Levels, StreamConfig,
+    StreamRequest, StreamState, XrunReader, Xruns, fault_channel, headroom_meter, level_meter,
+    opened_width, passthrough, xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -64,6 +65,53 @@ fn named_device(device: &cpal::Device, channels: Vec<u16>) -> Option<AudioDevice
     Some(AudioDevice {
         name: device.description().ok()?.name().to_owned(),
         channels,
+    })
+}
+
+fn offered_selection(offered: &[u16], preferred: u16) -> Option<ChannelSelection> {
+    let widest = *offered.last()?;
+    Some(ChannelSelection::all(preferred.min(widest).max(1)))
+}
+
+fn listed_default(
+    listed: Vec<AudioDevice>,
+    default: Option<&cpal::Device>,
+    preferred: Option<u16>,
+) -> Option<(String, ChannelSelection)> {
+    let named = default
+        .and_then(|device| device.description().ok())
+        .map(|description| description.name().to_owned());
+
+    let device = named
+        .and_then(|name| listed.iter().find(|device| device.name == name))
+        .or_else(|| listed.first())?;
+
+    let width = preferred.unwrap_or(*device.channels.last()?);
+    Some((
+        device.name.clone(),
+        offered_selection(&device.channels, width)?,
+    ))
+}
+
+fn default_width(config: Option<cpal::SupportedStreamConfig>) -> Option<u16> {
+    config.map(|config| config.channels())
+}
+
+fn host_named(name: &str) -> Option<cpal::Host> {
+    cpal::available_hosts()
+        .into_iter()
+        .find(|id| id.name() == name)
+        .and_then(|id| cpal::host_from_id(id).ok())
+}
+
+fn device_named(
+    mut devices: impl Iterator<Item = cpal::Device>,
+    name: &str,
+) -> Option<cpal::Device> {
+    devices.find(|device| {
+        device
+            .description()
+            .is_ok_and(|description| description.name() == name)
     })
 }
 
@@ -123,6 +171,47 @@ impl AudioBackend for CpalBackend {
             .collect()
     }
 
+    /// The default host's default devices across the width their own default
+    /// configuration uses, falling back to the first device listed.
+    ///
+    /// Named out of [`hosts`](Self::hosts) rather than off the default device,
+    /// which are not always the same name for one thing: ALSA's default device
+    /// describes itself as `Default Audio Device` while enumerating that PCM
+    /// gives whatever its hint says, so a name taken from the device is one
+    /// [`open`](Self::open) cannot find.
+    fn defaults(&self, sample_rate: u32) -> Option<DeviceSelection> {
+        let host = cpal::default_host();
+        let default_input = host.default_input_device();
+        let default_output = host.default_output_device();
+
+        let (input, input_channels) = listed_default(
+            input_devices(&host, sample_rate),
+            default_input.as_ref(),
+            default_width(
+                default_input
+                    .as_ref()
+                    .and_then(|device| device.default_input_config().ok()),
+            ),
+        )?;
+        let (output, output_channels) = listed_default(
+            output_devices(&host, sample_rate),
+            default_output.as_ref(),
+            default_width(
+                default_output
+                    .as_ref()
+                    .and_then(|device| device.default_output_config().ok()),
+            ),
+        )?;
+
+        Some(DeviceSelection {
+            host: host.id().name().to_owned(),
+            input,
+            input_channels,
+            output,
+            output_channels,
+        })
+    }
+
     /// The two callbacks are joined by a [`passthrough`] path with one block of
     /// slack, the least that keeps playback from outrunning capture.
     ///
@@ -133,27 +222,26 @@ impl AudioBackend for CpalBackend {
     ///
     /// Metering happens before the path folds the channels together, so a
     /// channel at full scale cannot hide in the mean of its frame.
-    fn open(&self, request: StreamRequest) -> Result<Self::Stream, DeviceError> {
+    fn open(
+        &self,
+        selection: &DeviceSelection,
+        request: StreamRequest,
+    ) -> Result<Self::Stream, DeviceError> {
         if request.block_size == 0 {
             return Err(DeviceError::UnsupportedConfig);
         }
 
-        let host = cpal::default_host();
-        let input = host
-            .default_input_device()
-            .ok_or(DeviceError::NoInputDevice)?;
-        let output = host
-            .default_output_device()
-            .ok_or(DeviceError::NoOutputDevice)?;
-
-        let input_channels = input
-            .default_input_config()
-            .map_err(|e| classify(&e))?
-            .channels();
-        let output_channels = output
-            .default_output_config()
-            .map_err(|e| classify(&e))?
-            .channels();
+        let host = host_named(&selection.host).ok_or(DeviceError::NoSuchHost)?;
+        let input = device_named(
+            host.input_devices().map_err(|e| classify(&e))?,
+            &selection.input,
+        )
+        .ok_or(DeviceError::NoInputDevice)?;
+        let output = device_named(
+            host.output_devices().map_err(|e| classify(&e))?,
+            &selection.output,
+        )
+        .ok_or(DeviceError::NoOutputDevice)?;
 
         let offered_input = channel_counts(
             input.supported_input_configs().map_err(|e| classify(&e))?,
@@ -166,9 +254,14 @@ impl AudioBackend for CpalBackend {
             request.sample_rate,
         );
 
-        if !offered_input.contains(&input_channels) || !offered_output.contains(&output_channels) {
-            return Err(DeviceError::UnsupportedConfig);
-        }
+        let natural_input = default_width(input.default_input_config().ok()).unwrap_or_default();
+        let natural_output = default_width(output.default_output_config().ok()).unwrap_or_default();
+
+        let input_channels = opened_width(&offered_input, selection.input_channels, natural_input)
+            .ok_or(DeviceError::UnsupportedConfig)?;
+        let output_channels =
+            opened_width(&offered_output, selection.output_channels, natural_output)
+                .ok_or(DeviceError::UnsupportedConfig)?;
 
         let input_config = cpal::StreamConfig {
             channels: input_channels,
@@ -188,6 +281,8 @@ impl AudioBackend for CpalBackend {
                 input_channels,
                 output_channels,
             },
+            selection.input_channels,
+            selection.output_channels,
             request.block_size as usize,
         );
         let (mut level_writer, levels) = level_meter();
