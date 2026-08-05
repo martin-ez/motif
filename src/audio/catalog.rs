@@ -22,7 +22,7 @@ use super::{AudioBackend, AudioDevice, AudioHost, DeviceSelection};
 pub struct DeviceCatalog {
     sample_rate: u32,
     hosts: Vec<AudioHost>,
-    stale: bool,
+    listed: bool,
 }
 
 impl DeviceCatalog {
@@ -35,40 +35,43 @@ impl DeviceCatalog {
         Self {
             sample_rate,
             hosts: Vec::new(),
-            stale: true,
+            listed: false,
         }
     }
 
     /// The listing as of the last [`refresh`](Self::refresh), which nothing
     /// promises is still true.
     ///
-    /// Empty before the first refresh, and [`is_stale`](Self::is_stale) is what
-    /// tells that apart from a machine with nothing on it.
+    /// Empty before the first refresh, and [`has_listed`](Self::has_listed) is
+    /// what tells that apart from a machine with nothing on it.
     pub fn hosts(&self) -> &[AudioHost] {
         &self.hosts
     }
 
-    /// Whether the listing predates any refresh, and so describes nothing that
-    /// was ever asked.
-    pub fn is_stale(&self) -> bool {
-        self.stale
+    /// Whether any refresh has finished, so an empty listing can be drawn as
+    /// not yet asked rather than as a machine with nothing on it.
+    ///
+    /// Never goes back to false. A listing that has aged is still a listing,
+    /// and when to pay for another is the caller's decision rather than a
+    /// flag's.
+    pub fn has_listed(&self) -> bool {
+        self.listed
     }
 
     /// Enumerate again, keeping whatever `held` names that the new listing
     /// lost.
     ///
-    /// `held` is the selection a stream is open on, and is the whole scope of
-    /// what a refresh may not take away: enumerating opens the PCM that stream
-    /// holds and takes `EBUSY`, so the device being heard is exactly the row
-    /// that disappears. A carried row is appended, keeping the channel counts
-    /// it was last listed with. Pass `None` where nothing is open, so that a
-    /// device which has genuinely gone can go.
+    /// `held` is the selection a stream is open on, and bounds what a refresh
+    /// may take away: a carried row is appended, keeping the channel counts it
+    /// was last listed with. Only a row an earlier refresh saw can be carried,
+    /// so refresh once before opening anything. Pass `None` where nothing is
+    /// open, so a device that has genuinely gone can go.
     ///
     /// Blocks and allocates; never reach it from the audio callback.
     pub fn refresh(&mut self, backend: &impl AudioBackend, held: Option<&DeviceSelection>) {
         let listed = backend.hosts(self.sample_rate);
         let previous = std::mem::replace(&mut self.hosts, listed);
-        self.stale = false;
+        self.listed = true;
 
         if let Some(held) = held {
             self.carry(&previous, held);
