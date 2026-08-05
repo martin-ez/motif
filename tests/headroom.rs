@@ -12,6 +12,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::hint::black_box;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -91,6 +92,15 @@ fn quiet_blocks(writer: &mut motif::audio::HeadroomWriter, frames: usize) {
         writer.measured(Duration::ZERO, BLOCK);
         covered += BLOCK;
     }
+}
+
+#[test]
+fn the_allocation_counter_counts_an_allocation() {
+    let before = allocations();
+    black_box(Vec::<f32>::with_capacity(4));
+    let after = allocations();
+
+    assert!(after > before, "the counter is not wired to the allocator");
 }
 
 #[test]

@@ -86,10 +86,22 @@ fn heard(buffer: &LoopBuffer) -> Vec<f32> {
 #[test]
 fn the_allocation_counter_counts_an_allocation() {
     let before = allocations();
-    black_box(vec![0.0_f32; 4]);
+    black_box(Vec::<f32>::with_capacity(4));
     let after = allocations();
 
     assert!(after > before, "the counter is not wired to the allocator");
+}
+
+#[test]
+fn the_allocation_counter_counts_a_zeroed_allocation() {
+    let before = allocations();
+    black_box(vec![0.0_f32; 4]);
+    let after = allocations();
+
+    assert!(
+        after > before,
+        "the counter is not wired to zeroed allocation"
+    );
 }
 
 #[test]
