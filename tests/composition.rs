@@ -1,10 +1,14 @@
-//! Composing the settings page and the monitor over one device, against a
-//! backend that counts the streams it has open.
+//! Composing the application a run is: the looper page and the settings page
+//! under one shell, over one device, against a backend that counts the streams
+//! it has open.
 //!
 //! Both halves reach the device through a link, and a run has one device: what
 //! these say is that composing them opens one stream and not two, that a choice
-//! made on the page still re-opens it, and that the status row the monitor
-//! draws is drawn from the stream the page changed.
+//! made on the page still re-opens it, and that each page is reached from the
+//! other without a control meant for one landing on the other.
+//!
+//! The pages are the real ones rather than stand-ins: a page contract that is
+//! enough for one screen and not for two is only visible against two.
 //!
 //! The backend counts rather than records, because two streams open at once is
 //! not visible in an order of calls — each one opens and starts exactly as a
@@ -16,18 +20,20 @@ use std::rc::Rc;
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
     DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, Passthrough, SharedLink,
-    StreamConfig, StreamRequest, StreamState, Xruns,
+    StreamConfig, StreamRequest, StreamState, Xruns, sample_clock,
 };
 use motif::device::{Button, DeviceProfile};
+use motif::looper::LooperPage;
 use motif::monitor::Monitor;
 use motif::settings::{AudioPage, AudioSetting};
-use motif::ui::{App, Cell as Glyph, ControlEvent, Frame, Shell};
+use motif::ui::{App, Cell as Glyph, ControlEvent, Frame, Scheme, Shell};
 
 const HOST: &str = "counted";
 const FIRST_INPUT: &str = "first input";
 const SECOND_INPUT: &str = "second input";
 const OUTPUT: &str = "output";
 const CHANNELS: u16 = 2;
+const IDLE: &str = "IDLE";
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -151,19 +157,22 @@ impl DuplexStream for CountingStream {
     }
 }
 
-/// A settings page and a monitor over one link, as a run composes them.
+/// The pages, the shell and the monitor over one link, as a run composes them.
 type Composed = Monitor<Shell, CountingBackend, fn() -> Passthrough>;
 
 fn composed(live: &Live) -> Composed {
+    let audio = DeviceProfile::TARGET.audio;
     let link = SharedLink::defaulting(
         CountingBackend(live.clone()),
         request(),
         Passthrough::new as fn() -> Passthrough,
     )
     .expect("the counting backend has a device in each direction");
-    let page = AudioPage::listing(link.clone());
+    let settings = AudioPage::listing(link.clone());
+    let (looper, _engine) = LooperPage::driving(audio, sample_clock(audio.sample_rate).1);
+    let shell = Shell::navigated_by([Box::new(looper), Box::new(settings)], Scheme::scenes());
 
-    Monitor::watching(Shell::new([Box::new(page)]), Some(link))
+    Monitor::watching(shell, Some(link))
 }
 
 fn pressed(button: Button) -> ControlEvent {
@@ -173,7 +182,16 @@ fn pressed(button: Button) -> ControlEvent {
     }
 }
 
+fn onto_the_settings(monitor: &mut Composed) {
+    monitor.control(pressed(Button::SecondScene));
+}
+
+fn onto_the_looper(monitor: &mut Composed) {
+    monitor.control(pressed(Button::FirstScene));
+}
+
 fn onto_the_second_input(monitor: &mut Composed) {
+    onto_the_settings(monitor);
     monitor.control(pressed(Button::Down));
     monitor.control(pressed(Button::Right));
 }
@@ -243,6 +261,65 @@ fn the_status_row_draws_what_the_page_is_showing() {
 
     assert!(status(&frame).starts_with("audio playing"));
     assert!(row(&frame, AudioSetting::Input as usize).ends_with(SECOND_INPUT));
+}
+
+#[test]
+fn a_composed_run_opens_on_the_looper() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    let frame = drawn(&mut monitor);
+
+    assert!(row(&frame, 0).starts_with(IDLE));
+}
+
+#[test]
+fn a_scene_reaches_the_settings_from_the_looper() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    onto_the_settings(&mut monitor);
+    let frame = drawn(&mut monitor);
+
+    assert!(row(&frame, AudioSetting::Input as usize).ends_with(FIRST_INPUT));
+}
+
+#[test]
+fn a_scene_reaches_the_looper_from_the_settings() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    onto_the_settings(&mut monitor);
+    onto_the_looper(&mut monitor);
+    let frame = drawn(&mut monitor);
+
+    assert!(row(&frame, 0).starts_with(IDLE));
+}
+
+#[test]
+fn a_control_the_looper_answers_does_not_reach_it_from_the_settings() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    onto_the_settings(&mut monitor);
+    monitor.control(pressed(Button::Record));
+    onto_the_looper(&mut monitor);
+    let frame = drawn(&mut monitor);
+
+    assert!(row(&frame, 0).starts_with(IDLE));
+}
+
+#[test]
+fn a_control_the_settings_answer_does_not_reach_them_from_the_looper() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    monitor.control(pressed(Button::Down));
+    monitor.control(pressed(Button::Right));
+    onto_the_settings(&mut monitor);
+    let frame = drawn(&mut monitor);
+
+    assert!(row(&frame, AudioSetting::Input as usize).ends_with(FIRST_INPUT));
 }
 
 #[test]

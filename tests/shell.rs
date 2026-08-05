@@ -19,6 +19,7 @@ use motif::ui::{
 };
 
 const MARKER: char = '*';
+const ELSEWHERE: char = '+';
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -98,8 +99,15 @@ impl Navigation for Navigating {
     }
 }
 
+fn beside(page: Marked) -> [Box<dyn Page>; Mode::ALL.len()] {
+    [
+        Box::new(page),
+        Box::new(Marked::new(ELSEWHERE, Button::Play)),
+    ]
+}
+
 fn shell_of(page: Marked) -> Shell {
-    Shell::new([Box::new(page)])
+    Shell::new(beside(page))
 }
 
 fn showing(glyph: char) -> (Shell, Taken) {
@@ -109,11 +117,20 @@ fn showing(glyph: char) -> (Shell, Taken) {
     (shell_of(page), taken)
 }
 
+fn showing_elsewhere(page: Marked) -> (Shell, Taken) {
+    let taken = page.taken();
+
+    (
+        Shell::new([Box::new(Marked::new(MARKER, Button::Play)), Box::new(page)]),
+        taken,
+    )
+}
+
 fn navigated(navigation: Navigating) -> (Shell, Taken) {
     let page = Marked::new(MARKER, Button::Play);
     let taken = page.taken();
 
-    (Shell::navigated_by([Box::new(page)], navigation), taken)
+    (Shell::navigated_by(beside(page), navigation), taken)
 }
 
 fn driven_by(shell: &mut Shell, events: impl IntoIterator<Item = ControlEvent>) -> Flow {
@@ -237,6 +254,44 @@ fn a_draw_does_not_end_the_run() {
     let (mut shell, _) = showing(MARKER);
 
     assert_eq!(shell.draw(Frame::blank().region()), Flow::Continue);
+}
+
+#[test]
+fn an_intent_moves_which_page_draws() {
+    let (mut shell, _) = showing(MARKER);
+
+    shell.apply(Intent::Show(Mode::ALL[1]));
+
+    assert_eq!(drawn(&mut shell).get(0, 0), Some(Cell::new(ELSEWHERE)));
+}
+
+#[test]
+fn an_intent_moves_which_page_a_control_reaches() {
+    let (mut shell, taken) = showing_elsewhere(Marked::new(ELSEWHERE, Button::Play));
+
+    shell.apply(Intent::Show(Mode::ALL[1]));
+    driven_by(&mut shell, [pressed(Button::Play)]);
+
+    assert_eq!(taken.events(), vec![pressed(Button::Play)]);
+}
+
+#[test]
+fn a_control_does_not_reach_a_page_that_is_not_showing() {
+    let (mut shell, taken) = showing(MARKER);
+
+    shell.apply(Intent::Show(Mode::ALL[1]));
+    driven_by(&mut shell, [pressed(Button::Play)]);
+
+    assert!(taken.events().is_empty());
+}
+
+#[test]
+fn the_legend_moves_with_the_page_that_is_showing() {
+    let (mut shell, _) = showing_elsewhere(Marked::new(ELSEWHERE, Button::Record));
+
+    shell.apply(Intent::Show(Mode::ALL[1]));
+
+    assert!(shell.legend().answers(Button::Record));
 }
 
 #[test]

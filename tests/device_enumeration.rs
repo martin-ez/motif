@@ -3,7 +3,8 @@
 //! no audio device exists.
 
 use motif::audio::{
-    AudioBackend, ChannelSelection, NullBackend, Passthrough, StreamConfig, StreamRequest,
+    AudioBackend, ChannelSelection, DeviceError, DeviceSelection, NullBackend, Passthrough,
+    StreamConfig, StreamRequest,
 };
 
 fn config() -> StreamConfig {
@@ -133,6 +134,48 @@ fn a_rate_no_device_is_listed_at_leaves_nothing_to_default_to() {
     let backend = NullBackend::rounding(config());
 
     assert_eq!(backend.defaults(44_100), None);
+}
+
+#[test]
+fn a_selection_of_nothing_names_no_host_and_no_device() {
+    let nothing = DeviceSelection::nothing();
+
+    assert!(nothing.host.is_empty());
+    assert!(nothing.input.name.is_empty());
+    assert!(nothing.output.name.is_empty());
+}
+
+#[test]
+fn a_selection_of_nothing_reaches_no_channel() {
+    let nothing = DeviceSelection::nothing();
+
+    assert_eq!(nothing.input_channels.reach(), 0);
+    assert_eq!(nothing.output_channels.reach(), 0);
+}
+
+#[test]
+fn a_selection_of_nothing_is_not_one_a_backend_offers() {
+    let backend = NullBackend::rounding(config());
+
+    let chosen = backend.defaults(48_000).expect("a listed device is chosen");
+
+    assert_ne!(chosen, DeviceSelection::nothing());
+}
+
+#[test]
+fn a_selection_of_nothing_does_not_open() {
+    let backend = NullBackend::rounding(config());
+
+    let opened = backend.open(
+        &DeviceSelection::nothing(),
+        StreamRequest {
+            sample_rate: 48_000,
+            block_size: 256,
+        },
+        Passthrough::new(),
+    );
+
+    assert_eq!(opened.err(), Some(DeviceError::NoSuchHost));
 }
 
 #[test]

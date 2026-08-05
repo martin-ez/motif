@@ -20,6 +20,11 @@ fn a_mode_is_its_own_place_in_the_order() {
 }
 
 #[test]
-fn the_instrument_has_one_screen_today() {
-    assert_eq!(Mode::ALL, [Mode::Looper]);
+fn the_instrument_opens_on_the_looper() {
+    assert_eq!(Mode::ALL[0], Mode::Looper);
+}
+
+#[test]
+fn the_instrument_has_a_looper_and_a_settings_screen() {
+    assert_eq!(Mode::ALL, [Mode::Looper, Mode::Settings]);
 }

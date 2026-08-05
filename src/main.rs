@@ -1,62 +1,28 @@
 //! Entry point for the `motif` binary.
 //!
 //! Composition only: it builds the one link to the audio device and the pages,
-//! hands the pages to the shell, wraps that in the monitor that holds the link
-//! open, takes the terminal over, runs the event loop, and reports why the run
-//! ended. The link is built here because a run has one, whatever comes to share
-//! it, and it opens before the terminal does so that a host enumerating onto
-//! stderr does it to an ordinary screen. The shell owns the pages and quitting,
-//! and is the only way out of the mode the terminal is left in.
+//! hands the pages and the scheme that moves between them to the shell, wraps
+//! that in the chrome and in the monitor that holds the link open, takes the
+//! terminal over, runs the event loop, and reports why the run ended. The link
+//! is built here because a run has one, whatever comes to share it, and it opens
+//! before the terminal does so that a host enumerating onto stderr does it to an
+//! ordinary screen. The shell owns the pages and quitting, and is the only way
+//! out of the mode the terminal is left in.
 //!
-//! What is left here is chrome the shell has no notion of. It takes the top row
-//! and the bottom one off the region it was handed and gives the shell the rest,
-//! so the pages beneath it cannot be drawn over and the chrome cannot land on a
-//! row a page is using.
+//! The settings page is built before the monitor, because listing the devices
+//! has to happen before a stream holds one of them.
 
 use std::process::ExitCode;
 
-use motif::audio::{Counting, CpalBackend, SharedLink, StreamRequest, sample_clock};
+use motif::audio::{
+    AudioBackend, Counting, CpalBackend, DeviceLink, DeviceSelection, SharedLink, StreamRequest,
+    sample_clock,
+};
 use motif::device::DeviceProfile;
 use motif::looper::LooperPage;
 use motif::monitor::Monitor;
-use motif::ui::{
-    App, ControlEvent, EventLoop, Flow, Legend, Region, RenderError, Shell, TerminalScreen,
-    columns_of,
-};
-
-const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
-const QUIT: &str = "shift + stop to quit";
-const CHROME_ROWS: usize = 1;
-
-struct Chrome {
-    shell: Shell,
-}
-
-fn write_right(region: &mut Region<'_>, text: &str) {
-    let column = region.columns().saturating_sub(columns_of(text));
-
-    region.write(column, 0, text);
-}
-
-impl App for Chrome {
-    fn control(&mut self, event: ControlEvent) -> Flow {
-        self.shell.control(event)
-    }
-
-    fn legend(&self) -> Legend {
-        self.shell.legend()
-    }
-
-    fn draw(&mut self, region: Region<'_>) -> Flow {
-        let (mut name, below) = region.split_top(CHROME_ROWS);
-        let (pages, mut quit) = below.split_bottom(CHROME_ROWS);
-
-        write_right(&mut name, NAME);
-        write_right(&mut quit, QUIT);
-
-        self.shell.draw(pages)
-    }
-}
+use motif::settings::AudioPage;
+use motif::ui::{Chrome, EventLoop, RenderError, Scheme, Shell, TerminalScreen};
 
 fn requested() -> StreamRequest {
     let audio = DeviceProfile::TARGET.audio;
@@ -71,12 +37,20 @@ fn play() -> Result<(), RenderError> {
     let audio = DeviceProfile::TARGET.audio;
     let (frames, elapsed) = sample_clock(audio.sample_rate);
     let (looper, engine) = LooperPage::driving(audio, elapsed);
-    let chrome = Chrome {
-        shell: Shell::new([Box::new(looper)]),
-    };
     let mut playing = Some(Counting::new(frames, engine));
-    let link = SharedLink::defaulting(CpalBackend::new(), requested(), move || playing.take());
-    let mut monitor = Monitor::watching(chrome, link);
+    let backend = CpalBackend::new();
+    let selection = backend
+        .defaults(audio.sample_rate)
+        .unwrap_or_else(DeviceSelection::nothing);
+    let link = SharedLink::new(DeviceLink::new(
+        backend,
+        requested(),
+        selection,
+        move || playing.take(),
+    ));
+    let settings = AudioPage::listing(link.clone());
+    let shell = Shell::navigated_by([Box::new(looper), Box::new(settings)], Scheme::scenes());
+    let mut monitor = Monitor::watching(Chrome::around(shell), Some(link));
 
     let mut terminal = TerminalScreen::open()?;
     let (controls, mut screen) = terminal.split();

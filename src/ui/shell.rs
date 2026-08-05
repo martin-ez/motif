@@ -20,9 +20,9 @@ use crate::ui::{App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page,
 /// use motif::device::Button;
 /// use motif::ui::{App, Cell, ControlEvent, Frame, Intent, Legend, Mode, Page, Region, Shell};
 ///
-/// struct Blank;
+/// struct Marked(char);
 ///
-/// impl Page for Blank {
+/// impl Page for Marked {
 ///     fn control(&mut self, _event: ControlEvent) {}
 ///
 ///     fn legend(&self) -> Legend {
@@ -30,18 +30,18 @@ use crate::ui::{App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page,
 ///     }
 ///
 ///     fn draw(&mut self, mut region: Region<'_>) {
-///         region.set(0, 0, Cell::new('m'));
+///         region.set(0, 0, Cell::new(self.0));
 ///     }
 /// }
 ///
-/// let mut shell = Shell::new([Box::new(Blank)]);
-/// shell.apply(Intent::Show(Mode::Looper));
+/// let mut shell = Shell::new([Box::new(Marked('m')), Box::new(Marked('s'))]);
+/// shell.apply(Intent::Show(Mode::Settings));
 ///
 /// let mut frame = Frame::blank();
 /// shell.draw(frame.region());
 ///
-/// assert_eq!(shell.showing(), Mode::Looper);
-/// assert_eq!(frame.get(0, 0), Some(Cell::new('m')));
+/// assert_eq!(shell.showing(), Mode::Settings);
+/// assert_eq!(frame.get(0, 0), Some(Cell::new('s')));
 /// ```
 pub struct Shell {
     pages: [Box<dyn Page>; Mode::ALL.len()],

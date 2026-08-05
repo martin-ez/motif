@@ -42,8 +42,4 @@ exclude_re = [
   # `<=` admits a playhead of exactly the loop's length, which leaves no run
   # before the boundary, so the block is filled from the start either way.
   'replace < with <= in LoopBuffer::play_into',
-  # The instrument has one screen, so every intent shows the mode already
-  # showing and applying one cannot be told from not. A second mode makes the
-  # two differ, and this line should go when one arrives.
-  'replace Shell::apply with \(\)',
 ]
