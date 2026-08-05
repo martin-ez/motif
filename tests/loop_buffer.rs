@@ -788,7 +788,7 @@ fn a_resweep_leaves_a_waveform_of_the_layers_that_remain() {
     buffer.record(&[0.125, 0.125]);
     buffer.undo();
 
-    while buffer.resummarise(buffer.len()) {}
+    buffer.resummarise(2);
 
     assert_eq!(buffer.waveform().buckets()[0].peak, 0.25);
     assert_eq!(buffer.waveform().buckets()[1].peak, 0.5);
@@ -878,7 +878,9 @@ fn a_second_undo_sends_the_resweep_back_to_the_start_of_the_loop() {
     buffer.resummarise(4);
 
     buffer.undo();
-    while buffer.resummarise(1) {}
+    for _ in 0..4 {
+        buffer.resummarise(1);
+    }
 
     assert_eq!(buffer.waveform().buckets()[0].peak, 0.25);
     assert_eq!(buffer.waveform().buckets()[3].peak, 1.0);
@@ -897,7 +899,9 @@ fn resweeping_does_not_allocate() {
     buffer.undo();
 
     let before = allocations();
-    while buffer.resummarise(block.len()) {}
+    for _ in 0..LoopWaveform::BUCKETS {
+        buffer.resummarise(block.len());
+    }
     let after = allocations();
 
     assert_eq!(after, before);
