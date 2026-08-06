@@ -2,7 +2,9 @@
 //! reports, and what it refuses to skip.
 
 use motif::fixtures::harness::{self, GroundTruth, Report, RunError, Target};
-use motif::fixtures::{AnnotationError, Chord, ChordLabel, Comparison, Note};
+use motif::fixtures::synth::{self, Fixture};
+use motif::fixtures::{AnnotationError, Axis, Chord, ChordLabel, Comparison, Drift, Note};
+use motif::fixtures::{Recipe, Texture};
 use std::error::Error;
 use std::fs;
 use std::io;
@@ -503,4 +505,198 @@ fn the_checked_in_set_scores_a_note_candidate_taken_from_its_own_annotations() {
 
     assert!(!report.rows().is_empty());
     assert_eq!(report.mean(), 1.0);
+}
+
+fn at(tempo: f64) -> Recipe {
+    Recipe {
+        tempo,
+        meter: 4,
+        bars: 4,
+        drift: Drift::Steady,
+        texture: Texture::Percussion {
+            sharpness: 1.0,
+            density: 1,
+            dropout: 0.0,
+            syncopation: 0.0,
+        },
+    }
+}
+
+fn two_tempi() -> Vec<Fixture> {
+    vec![
+        synth::rendered("slow", at(90.0)),
+        synth::rendered("brisk", at(120.0)),
+        synth::rendered("brisker", at(120.0)),
+    ]
+}
+
+fn only_the_briskest(fixture: &Fixture) -> Vec<Duration> {
+    if fixture.recipe().tempo > 90.0 {
+        Target::Beats.among(fixture.beats()).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn band_named<'a>(bands: &'a [harness::Band], level: &str) -> &'a harness::Band {
+    bands
+        .iter()
+        .find(|band| band.level().trim() == level)
+        .unwrap_or_else(|| panic!("a band for {level} among {bands:?}"))
+}
+
+#[test]
+fn an_exact_candidate_over_a_rendered_set_scores_one() {
+    let report = harness::measure_rendered(&two_tempi(), Target::Beats, |fixture| {
+        Target::Beats.among(fixture.beats()).collect()
+    });
+
+    assert_eq!(report.rows().len(), 3);
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn a_rendered_candidate_is_handed_the_audio_it_is_scored_on() {
+    let set = two_tempi();
+    let mut heard = Vec::new();
+
+    harness::measure_rendered(&set, Target::Beats, |fixture| {
+        heard.push(fixture.samples().len());
+        Vec::new()
+    });
+
+    assert_eq!(
+        heard,
+        set.iter()
+            .map(|fixture| fixture.samples().len())
+            .collect::<Vec<_>>()
+    );
+    assert!(heard.iter().all(|length| *length > 0), "{heard:?}");
+}
+
+#[test]
+fn a_rendered_row_carries_the_recipe_its_fixture_was_rendered_from() {
+    let set = two_tempi();
+
+    let report = harness::measure_rendered(&set, Target::Beats, |_| Vec::new());
+
+    for (row, fixture) in report.rows().iter().zip(&set) {
+        assert_eq!(row.recipe(), Some(fixture.recipe()), "{}", row.name());
+    }
+}
+
+#[test]
+fn a_row_read_off_disk_records_no_recipe() {
+    let directory = scratch("no-recipe");
+    write(&directory, "a", one_bar());
+
+    let report = measure_over(&directory, Target::Beats, |_| Vec::new());
+
+    assert_eq!(report.rows()[0].recipe(), None);
+}
+
+#[test]
+fn a_report_bands_its_aggregate_by_where_its_fixtures_sit_on_an_axis() {
+    let report = harness::measure_rendered(&two_tempi(), Target::Beats, only_the_briskest);
+    let bands = report.by(Axis::Tempo);
+
+    assert_eq!(bands.len(), 2);
+    assert_eq!(band_named(&bands, "120 BPM").mean(), 1.0);
+    assert_eq!(band_named(&bands, "90 BPM").mean(), 0.0);
+}
+
+#[test]
+fn a_band_counts_the_fixtures_it_covers() {
+    let report = harness::measure_rendered(&two_tempi(), Target::Beats, only_the_briskest);
+    let bands = report.by(Axis::Tempo);
+
+    assert_eq!(band_named(&bands, "120 BPM").fixtures(), 2);
+    assert_eq!(band_named(&bands, "90 BPM").fixtures(), 1);
+}
+
+#[test]
+fn a_band_shows_a_failure_the_aggregate_alone_averages_away() {
+    let report = harness::measure_rendered(&two_tempi(), Target::Beats, only_the_briskest);
+
+    assert!(
+        report.mean() > 0.0 && report.mean() < 1.0,
+        "{}",
+        report.mean()
+    );
+    assert_eq!(band_named(&report.by(Axis::Tempo), "90 BPM").mean(), 0.0);
+}
+
+#[test]
+fn bands_come_back_in_the_order_their_levels_run_in() {
+    let report = harness::measure_rendered(&two_tempi(), Target::Beats, only_the_briskest);
+    let levels: Vec<_> = report
+        .by(Axis::Tempo)
+        .iter()
+        .map(|band| band.level().to_owned())
+        .collect();
+
+    assert_eq!(levels, [" 90 BPM", "120 BPM"]);
+}
+
+#[test]
+fn a_row_recording_no_recipe_is_in_no_band() {
+    let directory = scratch("unbanded");
+    write(&directory, "a", one_bar());
+
+    let report = measure_over(&directory, Target::Beats, |_| Vec::new());
+
+    assert!(report.by(Axis::Tempo).is_empty());
+}
+
+#[test]
+fn an_axis_that_does_not_describe_a_fixture_leaves_it_out_of_every_band() {
+    let pitched = vec![synth::rendered(
+        "voiced",
+        Recipe {
+            texture: Texture::Chords,
+            ..at(150.0)
+        },
+    )];
+
+    let report = harness::measure_rendered(&pitched, Target::Beats, |_| Vec::new());
+
+    assert!(report.by(Axis::Syncopation).is_empty());
+    assert_eq!(report.by(Axis::Tempo).len(), 1);
+}
+
+#[test]
+fn a_band_names_its_level_its_mean_and_what_it_covers() {
+    let report = harness::measure_rendered(&two_tempi(), Target::Beats, only_the_briskest);
+    let shown = band_named(&report.by(Axis::Tempo), "120 BPM").to_string();
+
+    assert!(shown.contains("120 BPM"), "{shown}");
+    assert!(shown.contains("1.000"), "{shown}");
+    assert!(shown.contains('2'), "{shown}");
+}
+
+#[test]
+fn a_rendered_row_is_timed_against_a_deadline_taken_from_its_own_take() {
+    let set = two_tempi();
+
+    let report = harness::measure_rendered(&set, Target::Beats, |_| Vec::new());
+
+    for (row, fixture) in report.rows().iter().zip(&set) {
+        let span = fixture.beats()[fixture.beats().len() - 1].at;
+
+        assert_eq!(row.deadline(), harness::deadline(span), "{}", row.name());
+    }
+}
+
+#[test]
+fn a_target_picks_the_same_positions_from_beats_as_from_an_annotation() {
+    let fixture = synth::rendered("picked", at(120.0));
+    let annotation: motif::fixtures::Annotation =
+        fixture.annotation_text().parse().expect("it annotates");
+
+    for target in [Target::Beats, Target::Downbeats] {
+        assert_eq!(
+            target.among(fixture.beats()).collect::<Vec<_>>(),
+            target.positions(&annotation).collect::<Vec<_>>()
+        );
+    }
 }

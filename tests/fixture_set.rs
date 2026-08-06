@@ -3,7 +3,7 @@
 
 use motif::fixtures::harness::{self, Target};
 use motif::fixtures::synth::{self, Fixture, SAMPLE_RATE, Voice};
-use motif::fixtures::{Annotation, Beat, ChordLabel};
+use motif::fixtures::{Annotation, Beat, ChordLabel, Drift, Texture};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -762,6 +762,117 @@ fn a_note_is_rendered_at_the_pitch_it_annotates() {
     assert!(
         (sounded - hertz).abs() < hertz * 0.15,
         "a note annotated at {hertz:.1} Hz sounded at about {sounded:.1} Hz"
+    );
+}
+
+fn named_fields(fixture: &Fixture) -> Vec<String> {
+    fixture.name().split('-').map(str::to_owned).collect()
+}
+
+#[test]
+fn every_fixture_carries_the_tempo_and_meter_its_name_states() {
+    for fixture in synth::set() {
+        let fields = named_fields(&fixture);
+        let stated = |index: usize| fields[index].parse::<f64>().expect("a number");
+
+        assert_eq!(fixture.recipe().tempo, stated(1), "{}", fixture.name());
+        assert_eq!(
+            fixture.recipe().meter as f64,
+            stated(fields.len() - 2),
+            "{}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
+fn every_fixture_carries_the_bar_count_it_was_built_to() {
+    for fixture in synth::set() {
+        assert_eq!(fixture.recipe().bars, 4, "{}", fixture.name());
+        assert_eq!(
+            fixture.beats().len(),
+            fixture.recipe().bars * fixture.recipe().meter,
+            "{}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
+fn the_drift_a_fixture_is_named_for_is_the_drift_it_carries() {
+    for fixture in synth::set() {
+        let expected = match named_fields(&fixture)[0].as_str() {
+            "ramp" => "ramp",
+            "rubato" => "rubato",
+            _ => "steady",
+        };
+
+        assert_eq!(
+            fixture.recipe().drift.to_string(),
+            expected,
+            "{}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
+fn a_ramp_carries_the_tempo_it_reaches_as_well_as_the_one_it_leaves() {
+    let fixture = named("ramp-100-140-4-4");
+
+    assert_eq!(fixture.recipe().drift, Drift::Ramp { to: 140.0 });
+}
+
+#[test]
+fn only_the_syncopated_fixture_is_rendered_off_the_beat() {
+    let off_the_beat: Vec<_> = synth::set()
+        .iter()
+        .filter(|fixture| match fixture.recipe().texture {
+            Texture::Percussion { syncopation, .. } => syncopation > 0.0,
+            Texture::Chords | Texture::Line => false,
+        })
+        .map(|fixture| fixture.name().to_owned())
+        .collect();
+
+    assert_eq!(off_the_beat, ["syncopated-120-4-4"]);
+}
+
+#[test]
+fn every_percussive_fixture_sounds_one_sharp_onset_to_the_beat() {
+    for fixture in synth::set() {
+        let Texture::Percussion {
+            sharpness,
+            density,
+            dropout,
+            ..
+        } = fixture.recipe().texture
+        else {
+            continue;
+        };
+
+        assert_eq!(
+            (sharpness, density, dropout),
+            (1.0, 1, 0.0),
+            "{}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
+fn only_the_pitched_fixtures_carry_a_pitched_texture() {
+    let pitched: Vec<_> = synth::set()
+        .iter()
+        .filter(|fixture| !matches!(fixture.recipe().texture, Texture::Percussion { .. }))
+        .map(|fixture| (fixture.name().to_owned(), fixture.recipe().texture))
+        .collect();
+
+    assert_eq!(
+        pitched,
+        [
+            (HARMONY.to_owned(), Texture::Chords),
+            (LINE.to_owned(), Texture::Line)
+        ]
     );
 }
 

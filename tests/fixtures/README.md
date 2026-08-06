@@ -50,6 +50,32 @@ No figure has been recorded. Nothing in the repository analyses audio, so the
 only candidate the harness can be handed is one that reads the answers off these
 files, and what that times is the harness itself.
 
+## Ranking two approaches
+
+This set can say whether a candidate works. It cannot say which of two works
+better. Scored on downbeats a fixture is close to all-or-nothing — a phase error
+of one beat puts every downbeat hundreds of milliseconds out, far past the
+scoring window — so nine of them leave an aggregate with ten values, and two
+candidates closer than a ninth are indistinguishable. Resolution here is bought
+with bytes, and the set is already near its ceiling.
+
+So the set that ranks is not committed at all. `motif::fixtures::synth::drawn`
+renders one from a seed, in memory, as large as patience allows, and
+`harness::measure_rendered` scores a candidate over it — handing it the audio,
+not just the answers. Every drawn fixture carries the `Recipe` it came from:
+tempo, meter, drift, attack sharpness, onset density, how often a beat carries
+no onset, and how often one falls off the beat. `Report::by` bands the aggregate
+by any one of those, so a candidate that lost says where it lost.
+
+`synth::DEVELOPMENT` holds the seeds to draw from while an approach is being
+built. `synth::EVALUATION` is held back for the figure that ranks: a candidate
+tuned against the development seeds has already seen what they draw, so a number
+quoted from them is the one it was tuned to.
+
+The files here stay the regression sample that pins the generator. Rendering is
+deterministic, so the same recipe yields the same audio every time, and
+`tests/fixture_set.rs` fails the moment these files stop being what it produces.
+
 ## Regenerating
 
 ```sh

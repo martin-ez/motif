@@ -7,8 +7,14 @@
 //!
 //! Rendering is deterministic: the same call produces the same samples, so the
 //! files checked in beside this module can be checked against it.
+//!
+//! [`set`] is those committed files, which the repository's size bounds. [`drawn`]
+//! is a set rendered from a seed and never written down, which only patience
+//! bounds, and which carries the [`Recipe`] a report bands its aggregate by.
 
-use crate::fixtures::{Beat, Chord, ChordLabel, Note, PitchClass, Quality};
+use crate::fixtures::{
+    Axis, Beat, Chord, ChordLabel, Drift, Note, PitchClass, Quality, Recipe, Texture,
+};
 use std::time::Duration;
 
 /// The sample rate every synthetic fixture is rendered at.
@@ -59,10 +65,11 @@ pub struct Onset {
 /// assert_eq!(annotation.beats(), fixture.beats());
 /// # Ok::<(), motif::fixtures::AnnotationError>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Fixture {
-    name: &'static str,
-    description: &'static str,
+    name: String,
+    description: String,
+    recipe: Recipe,
     beats: Vec<Beat>,
     chords: Vec<Chord>,
     notes: Vec<Note>,
@@ -73,12 +80,21 @@ pub struct Fixture {
 impl Fixture {
     /// What the fixture is called, and what its two files are named after.
     pub fn name(&self) -> &str {
-        self.name
+        &self.name
     }
 
     /// What the fixture is for, in a phrase.
     pub fn description(&self) -> &str {
-        self.description
+        &self.description
+    }
+
+    /// The parameters it was rendered from.
+    ///
+    /// This is what makes a report diagnosable past its aggregate: a candidate
+    /// that scored badly scored badly somewhere, and a recipe is what names
+    /// where.
+    pub fn recipe(&self) -> &Recipe {
+        &self.recipe
     }
 
     /// The ground truth: every beat, in order, with the downbeats identified.
@@ -105,9 +121,9 @@ impl Fixture {
     ///
     /// Eight bits: quantisation noise lands around -42 dBFS against these
     /// near-full-scale clicks, far under what an onset envelope resolves. At
-    /// the 8 KB per second that leaves, the 576 KiB the set is held under is
-    /// about seventy seconds of audio, so rendering refuses a fixture over
-    /// twelve seconds long.
+    /// the 8 KB per second that leaves, the 576 KiB [`set`] is held under is
+    /// about seventy seconds of audio across the whole of it — a ceiling a
+    /// drawn fixture does not pay, since it is never written down.
     pub fn samples(&self) -> &[i8] {
         &self.samples
     }
@@ -181,61 +197,97 @@ impl Fixture {
 /// moves its aggregate by a thirty-sixth rather than a fourteenth.
 pub fn set() -> Vec<Fixture> {
     vec![
-        rendered(
+        built(
             "steady-90-4-4",
             "4/4 at 90 BPM",
-            steady(90.0, 4, 4),
-            on_every_beat,
+            clicks(90.0, 4, ON_THE_BEAT),
         ),
-        rendered(
+        built(
             "steady-120-4-4",
             "4/4 at 120 BPM",
-            steady(120.0, 4, 4),
-            on_every_beat,
+            clicks(120.0, 4, ON_THE_BEAT),
         ),
-        rendered(
+        built(
             "steady-150-4-4",
             "4/4 at 150 BPM",
-            steady(150.0, 4, 4),
-            on_every_beat,
+            clicks(150.0, 4, ON_THE_BEAT),
         ),
-        rendered(
+        built(
             "waltz-150-3-4",
             "3/4 at 150 BPM, so a bar is not four beats",
-            steady(150.0, 3, 4),
-            on_every_beat,
+            clicks(150.0, 3, ON_THE_BEAT),
         ),
-        rendered(
+        built(
             "ramp-100-140-4-4",
             "4/4 accelerating from 100 to 140 BPM",
-            ramp(100.0, 140.0, 4, 4),
-            on_every_beat,
+            Recipe {
+                drift: Drift::Ramp { to: 140.0 },
+                ..clicks(100.0, 4, ON_THE_BEAT)
+            },
         ),
-        rendered(
+        built(
             "rubato-110-4-4",
             "4/4 around 110 BPM, pushing and pulling against the pulse",
-            rubato(110.0, 4, 4),
-            on_every_beat,
+            Recipe {
+                drift: Drift::Rubato { pull: RUBATO_PULL },
+                ..clicks(110.0, 4, ON_THE_BEAT)
+            },
         ),
-        rendered(
+        built(
             "syncopated-120-4-4",
             "4/4 at 120 BPM with the sounds mostly between the beats",
-            steady(120.0, 4, 4),
-            off_the_beat,
+            clicks(120.0, 4, BETWEEN_THE_BEATS),
         ),
-        rendered(
+        built(
             "chords-150-4-4",
             "4/4 at 150 BPM voicing a chord to the bar",
-            steady(150.0, 4, 4),
-            one_chord_per_bar,
+            voiced(150.0, 4, Texture::Chords),
         ),
-        rendered(
+        built(
             "line-150-4-4",
             "4/4 at 150 BPM playing a monophonic line",
-            steady(150.0, 4, 4),
-            a_monophonic_line,
+            voiced(150.0, 4, Texture::Line),
         ),
     ]
+}
+
+const COMMITTED_BARS: usize = 4;
+const SHARP: f64 = 1.0;
+const ON_THE_BEAT: f64 = 0.0;
+const BETWEEN_THE_BEATS: f64 = 1.0;
+const ONE_TO_THE_BEAT: usize = 1;
+const NONE_UNSOUNDED: f64 = 0.0;
+
+fn clicks(tempo: f64, meter: usize, syncopation: f64) -> Recipe {
+    Recipe {
+        texture: Texture::Percussion {
+            sharpness: SHARP,
+            density: ONE_TO_THE_BEAT,
+            dropout: NONE_UNSOUNDED,
+            syncopation,
+        },
+        ..voiced(tempo, meter, Texture::Chords)
+    }
+}
+
+fn voiced(tempo: f64, meter: usize, texture: Texture) -> Recipe {
+    Recipe {
+        tempo,
+        meter,
+        bars: COMMITTED_BARS,
+        drift: Drift::Steady,
+        texture,
+    }
+}
+
+/// Render one fixture from `recipe`, called `name`.
+///
+/// Deterministic in both: the same pair yields the same beats, the same onsets
+/// and the same samples. That is what lets a set be drawn on demand rather than
+/// committed, since a candidate scored against it today is scored against the
+/// same audio tomorrow.
+pub fn rendered(name: &str, recipe: Recipe) -> Fixture {
+    built(name, &described(&recipe), recipe)
 }
 
 struct Content {
@@ -244,28 +296,142 @@ struct Content {
     onsets: Vec<Onset>,
 }
 
-fn rendered(
-    name: &'static str,
-    description: &'static str,
-    beats: Vec<Beat>,
-    compose: fn(&[Beat]) -> Content,
-) -> Fixture {
+fn built(name: &str, description: &str, recipe: Recipe) -> Fixture {
+    let beats = grid_of(&recipe);
+    let seed = seed_of(name);
     let Content {
         chords,
         notes,
         onsets,
-    } = compose(&beats);
-    let samples = render(&onsets, seed_of(name));
+    } = sounded(&recipe, &beats, &mut Noise::from(seed));
+    let samples = render(&onsets, seed, sharpness_of(&recipe.texture));
 
     Fixture {
-        name,
-        description,
+        name: name.to_owned(),
+        description: description.to_owned(),
+        recipe,
         beats,
         chords,
         notes,
         onsets,
         samples,
     }
+}
+
+fn described(recipe: &Recipe) -> String {
+    Axis::ALL
+        .iter()
+        .filter_map(|axis| {
+            axis.level(recipe)
+                .map(|level| format!("{} {}", axis.named(), level.trim()))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn grid_of(recipe: &Recipe) -> Vec<Beat> {
+    match recipe.drift {
+        Drift::Steady => steady(recipe.tempo, recipe.meter, recipe.bars),
+        Drift::Ramp { to } => ramp(recipe.tempo, to, recipe.meter, recipe.bars),
+        Drift::Rubato { pull } => rubato(recipe.tempo, pull, recipe.meter, recipe.bars),
+    }
+}
+
+fn sounded(recipe: &Recipe, beats: &[Beat], draw: &mut Noise) -> Content {
+    match recipe.texture {
+        Texture::Percussion {
+            density,
+            dropout,
+            syncopation,
+            ..
+        } => percussive(struck_over(beats, density, dropout, syncopation, draw)),
+        Texture::Chords => one_chord_per_bar(beats),
+        Texture::Line => a_monophonic_line(beats),
+    }
+}
+
+fn sharpness_of(texture: &Texture) -> f64 {
+    match texture {
+        Texture::Percussion { sharpness, .. } => *sharpness,
+        Texture::Chords | Texture::Line => SHARP,
+    }
+}
+
+/// The seeds a set is drawn from while an approach is being developed.
+pub const DEVELOPMENT: [u32; 3] = [1, 2, 3];
+
+/// The seed held back from those, for the figure that ranks two approaches.
+///
+/// A candidate tuned against the development seeds has already seen what they
+/// draw, and a figure quoted from them is the number it was tuned to. Drawing
+/// from this one before there is a result to report is what makes the
+/// comparison stop meaning anything.
+pub const EVALUATION: u32 = 4;
+
+/// Draw `count` fixtures from `seed` and render them.
+///
+/// Every fixture is percussive and runs the same number of bars, so a row that
+/// scored badly did so on its parameters rather than on its length. What varies
+/// is what [`Axis`] names, which is what a report can then band by.
+///
+/// ```
+/// use motif::fixtures::synth;
+///
+/// let set = synth::drawn(synth::DEVELOPMENT[0], 2);
+///
+/// assert_eq!(set.len(), 2);
+/// assert_eq!(set, synth::drawn(synth::DEVELOPMENT[0], 2));
+/// ```
+pub fn drawn(seed: u32, count: usize) -> Vec<Fixture> {
+    let set = format!("drawn-{seed:08x}");
+    let mut draw = Noise::from(seed_of(&set));
+
+    (0..count)
+        .map(|index| rendered(&format!("{set}-{index:03}"), drawn_from(&mut draw)))
+        .collect()
+}
+
+const DRAWN_BARS: usize = 8;
+const TEMPI: [f64; 5] = [80.0, 100.0, 120.0, 140.0, 160.0];
+const METERS: [usize; 3] = [3, 4, 5];
+const DRIFTS: [Kind; 3] = [Kind::Steady, Kind::Ramp, Kind::Rubato];
+const SHARPNESSES: [f64; 3] = [1.0, 0.7, 0.4];
+const DENSITIES: [usize; 2] = [1, 2];
+const DROPOUTS: [f64; 3] = [0.0, 0.15, 0.3];
+const SYNCOPATIONS: [f64; 3] = [0.0, 0.25, 0.5];
+const RAMP_REACH: f64 = 1.4;
+
+enum Kind {
+    Steady,
+    Ramp,
+    Rubato,
+}
+
+fn drawn_from(draw: &mut Noise) -> Recipe {
+    let tempo = *pick(&TEMPI, draw);
+
+    Recipe {
+        tempo,
+        meter: *pick(&METERS, draw),
+        bars: DRAWN_BARS,
+        drift: match pick(&DRIFTS, draw) {
+            Kind::Steady => Drift::Steady,
+            Kind::Ramp => Drift::Ramp {
+                to: tempo * RAMP_REACH,
+            },
+            Kind::Rubato => Drift::Rubato { pull: RUBATO_PULL },
+        },
+        texture: Texture::Percussion {
+            sharpness: *pick(&SHARPNESSES, draw),
+            density: *pick(&DENSITIES, draw),
+            dropout: *pick(&DROPOUTS, draw),
+            syncopation: *pick(&SYNCOPATIONS, draw),
+        },
+    }
+}
+
+fn pick<'a, T>(levels: &'a [T], draw: &mut Noise) -> &'a T {
+    &levels[(draw.unit() * levels.len() as f64) as usize]
 }
 
 fn percussive(onsets: Vec<Onset>) -> Content {
@@ -448,12 +614,12 @@ fn ramp(from: f64, to: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
 
 const RUBATO_PULL: f64 = 0.13;
 
-fn rubato(tempo: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
+fn rubato(tempo: f64, pull: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
     let period = 60.0 / tempo;
     let count = beats_per_bar * bars;
     let times = (0..count).map(|index| {
         let phase = std::f64::consts::TAU * index as f64 / count as f64;
-        index as f64 * period + RUBATO_PULL * phase.sin()
+        index as f64 * period + pull * phase.sin()
     });
 
     grid(times, beats_per_bar)
@@ -475,55 +641,50 @@ fn on_the_sample_grid(seconds: f64) -> Duration {
     Duration::from_nanos(frame * 1_000_000_000 / u64::from(SAMPLE_RATE))
 }
 
-fn on_every_beat(beats: &[Beat]) -> Content {
-    percussive(
-        beats
-            .iter()
-            .map(|beat| Onset {
-                at: beat.at,
-                voice: if beat.is_downbeat {
-                    Voice::Accent
-                } else {
-                    Voice::Tick
-                },
-            })
-            .collect(),
-    )
-}
-
-fn off_the_beat(beats: &[Beat]) -> Content {
-    let intervals: Vec<Duration> = beats
-        .windows(2)
-        .map(|pair| pair[1].at - pair[0].at)
-        .collect();
-    let mut onsets: Vec<Onset> = beats
-        .iter()
-        .filter(|beat| beat.is_downbeat)
-        .map(|beat| Onset {
-            at: beat.at,
-            voice: Voice::Accent,
-        })
-        .collect();
+fn struck_over(
+    beats: &[Beat],
+    density: usize,
+    dropout: f64,
+    syncopation: f64,
+    draw: &mut Noise,
+) -> Vec<Onset> {
+    let spans = lasting(beats);
+    let mut onsets = Vec::new();
 
     for (index, beat) in beats.iter().enumerate() {
-        if let Some(interval) = intervals.get(index).or_else(|| intervals.last()) {
+        if beat.is_downbeat {
             onsets.push(Onset {
-                at: halfway_past(beat.at, *interval),
+                at: beat.at,
+                voice: Voice::Accent,
+            });
+        }
+
+        let unsounded = draw.unit() < dropout;
+        let late = draw.unit() < syncopation;
+        if unsounded {
+            continue;
+        }
+
+        let step = spans[index].as_secs_f64() / density as f64;
+        let shift = if late { step / 2.0 } else { 0.0 };
+        for subdivision in 0..density {
+            let at = on_the_sample_grid(beat.at.as_secs_f64() + step * subdivision as f64 + shift);
+            if beat.is_downbeat && at == beat.at {
+                continue;
+            }
+            onsets.push(Onset {
+                at,
                 voice: Voice::Tick,
             });
         }
     }
-    onsets.sort_by_key(|onset| onset.at);
 
-    percussive(onsets)
-}
-
-fn halfway_past(beat: Duration, interval: Duration) -> Duration {
-    on_the_sample_grid(beat.as_secs_f64() + interval.as_secs_f64() / 2.0)
+    onsets
 }
 
 const TAIL: Duration = Duration::from_millis(300);
-const LONGEST: Duration = Duration::from_secs(12);
+const LONGEST: Duration = Duration::from_secs(40);
+const SOFTEST_RISE: f64 = 0.020;
 const SIGN_BIT: u8 = 0x80;
 const ACCENT_FREQUENCY: f64 = 60.0;
 const ACCENT_DECAY: f64 = 0.10;
@@ -540,7 +701,7 @@ const CONCERT_A: f64 = 440.0;
 const CONCERT_A_PITCH: f64 = 69.0;
 const SEMITONES: f64 = 12.0;
 
-fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
+fn render(onsets: &[Onset], seed: u32, sharpness: f64) -> Vec<i8> {
     let length = onsets
         .iter()
         .map(|onset| onset.at + sounding(onset))
@@ -548,7 +709,7 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
         .unwrap_or_default();
     assert!(
         length <= LONGEST,
-        "a fixture running {length:?} cannot belong to a set held under its size ceiling"
+        "a fixture running {length:?} is longer than rendering will build"
     );
     let mut signal = vec![0.0; frames(length)];
     let mut noise = Noise::from(seed);
@@ -560,12 +721,18 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
             let elapsed = offset as f64 / f64::from(SAMPLE_RATE);
             *frame += match onset.voice {
                 Voice::Accent => {
-                    ACCENT_LEVEL
-                        * (-elapsed / ACCENT_DECAY).exp()
-                        * (std::f64::consts::TAU * ACCENT_FREQUENCY * elapsed).sin()
-                        + TRANSIENT_LEVEL * (-elapsed / TRANSIENT_DECAY).exp() * noise.next()
+                    rising(elapsed, sharpness)
+                        * (ACCENT_LEVEL
+                            * (-elapsed / ACCENT_DECAY).exp()
+                            * (std::f64::consts::TAU * ACCENT_FREQUENCY * elapsed).sin()
+                            + TRANSIENT_LEVEL * (-elapsed / TRANSIENT_DECAY).exp() * noise.next())
                 }
-                Voice::Tick => TICK_LEVEL * (-elapsed / TICK_DECAY).exp() * noise.next(),
+                Voice::Tick => {
+                    rising(elapsed, sharpness)
+                        * TICK_LEVEL
+                        * (-elapsed / TICK_DECAY).exp()
+                        * noise.next()
+                }
                 Voice::Tone { pitch, until } => {
                     let held = (until.saturating_sub(onset.at)).as_secs_f64();
                     TONE_LEVEL
@@ -587,6 +754,15 @@ fn sounding(onset: &Onset) -> Duration {
         Voice::Tone { until, .. } => until.saturating_sub(onset.at) + RELEASE,
         Voice::Accent | Voice::Tick => TAIL,
     }
+}
+
+fn rising(elapsed: f64, sharpness: f64) -> f64 {
+    let rise = SOFTEST_RISE * (1.0 - sharpness);
+    if elapsed >= rise {
+        return 1.0;
+    }
+
+    elapsed / rise
 }
 
 fn held_for(elapsed: f64, held: f64) -> f64 {
@@ -615,12 +791,20 @@ fn frames(at: Duration) -> usize {
 struct Noise(u32);
 
 impl Noise {
-    fn next(&mut self) -> f64 {
+    fn step(&mut self) -> u32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 17;
         self.0 ^= self.0 << 5;
 
-        f64::from(self.0) / f64::from(u32::MAX) * 2.0 - 1.0
+        self.0
+    }
+
+    fn next(&mut self) -> f64 {
+        f64::from(self.step()) / f64::from(u32::MAX) * 2.0 - 1.0
+    }
+
+    fn unit(&mut self) -> f64 {
+        f64::from(self.step()) / (f64::from(u32::MAX) + 1.0)
     }
 }
 
