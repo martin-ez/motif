@@ -9,9 +9,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use motif::device::{Button, Encoder};
+use motif::device::{Button, Control, Encoder};
 use motif::ui::{
     App, Cell, ControlEvent, Intent, Legend, Mode, Navigation, Page, Region, Scheme, Shell, Turn,
+    navigating,
 };
 
 const MARKER: char = '*';
@@ -265,4 +266,75 @@ fn replacing_the_scheme_moves_which_gesture_the_page_sees() {
 
     assert_eq!(seen_by_one.events(), vec![pressed(Button::Play)]);
     assert!(seen_by_other.events().is_empty());
+}
+
+#[test]
+fn the_legend_of_a_scheme_answers_exactly_the_buttons_it_names() {
+    let scheme = Scheme::new([
+        (pressed(Button::Up), home()),
+        (pressed(Button::Play), home()),
+    ]);
+    let legend = navigating(&scheme);
+
+    for button in Button::ALL {
+        assert_eq!(
+            legend.answers(button),
+            scheme.intent(pressed(button)).is_some(),
+            "{button:?}"
+        );
+    }
+}
+
+#[test]
+fn the_legend_of_the_scenes_answers_exactly_the_buttons_they_name() {
+    let scheme = Scheme::scenes();
+    let legend = navigating(&scheme);
+
+    for button in Button::ALL {
+        assert_eq!(
+            legend.answers(button),
+            scheme.intent(pressed(button)).is_some(),
+            "{button:?}"
+        );
+    }
+}
+
+#[test]
+fn a_scheme_with_no_bindings_answers_nothing() {
+    let legend = navigating(&Scheme::new([]));
+
+    for control in Control::ALL {
+        assert!(!legend.answers(control), "{control:?}");
+    }
+}
+
+#[test]
+fn a_gesture_bound_only_shifted_still_answers_its_control() {
+    let legend = navigating(&Scheme::new([(shifted(Button::Record), home())]));
+
+    assert!(legend.answers(Button::Record));
+}
+
+#[test]
+fn a_bound_turn_answers_the_encoder_it_turns() {
+    let legend = navigating(&Scheme::new([(turned(Turn::Anticlockwise), home())]));
+
+    assert!(legend.answers(Encoder::Main));
+}
+
+#[test]
+fn a_scheme_that_leaves_the_encoder_alone_does_not_answer_it() {
+    let legend = navigating(&Scheme::new([(pressed(Button::Up), home())]));
+
+    assert!(!legend.answers(Encoder::Main));
+}
+
+#[test]
+fn changing_the_scheme_changes_the_legend_it_draws() {
+    let one = navigating(&Scheme::new([(pressed(Button::Up), home())]));
+    let other = navigating(&Scheme::new([(pressed(Button::Down), home())]));
+
+    assert_ne!(one, other);
+    assert!(one.answers(Button::Up) && !one.answers(Button::Down));
+    assert!(other.answers(Button::Down) && !other.answers(Button::Up));
 }

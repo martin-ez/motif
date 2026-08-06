@@ -12,7 +12,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use motif::device::Button;
+use motif::device::{Button, Control};
 use motif::ui::{
     App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Intent, Legend, Mode, Navigation,
     NullRenderer, Page, Region, Renderer, ScriptedClock, ScriptedControls, Shell,
@@ -194,6 +194,34 @@ fn the_shell_declares_the_stop_it_keeps() {
     let shell = shell_of(Marked::new(MARKER, Button::Play));
 
     assert!(shell.legend().answers(Button::Stop));
+}
+
+#[test]
+fn the_shell_declares_what_its_navigation_keeps() {
+    let (shell, _) = navigated(Navigating(vec![Button::Up]));
+
+    assert!(shell.legend().answers(Button::Up));
+}
+
+#[test]
+fn a_shell_with_no_navigation_declares_only_the_page_and_what_it_keeps() {
+    let shell = shell_of(Marked::new(MARKER, Button::Play));
+    let kept = [Button::Play, Button::Shift, Button::Stop];
+
+    for control in Control::ALL {
+        let expected = matches!(control, Control::Button(button) if kept.contains(&button));
+
+        assert_eq!(shell.legend().answers(control), expected, "{control:?}");
+    }
+}
+
+#[test]
+fn changing_the_navigation_changes_the_legend_the_shell_declares() {
+    let (one, _) = navigated(Navigating(vec![Button::Up]));
+    let (other, _) = navigated(Navigating(vec![Button::Down]));
+
+    assert!(one.legend().answers(Button::Up) && !one.legend().answers(Button::Down));
+    assert!(other.legend().answers(Button::Down) && !other.legend().answers(Button::Up));
 }
 
 #[test]

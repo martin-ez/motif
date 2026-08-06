@@ -110,3 +110,13 @@ fn a_shifted_turn_is_shifted() {
 
     assert!(event.is_shifted());
 }
+
+#[test]
+fn every_turn_is_listed_in_order() {
+    assert_eq!(Turn::ALL, [Turn::Clockwise, Turn::Anticlockwise]);
+}
+
+#[test]
+fn a_turn_sits_where_the_set_lists_it() {
+    assert_eq!(Turn::Anticlockwise as usize, 1);
+}

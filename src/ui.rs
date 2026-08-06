@@ -58,7 +58,7 @@ pub use legend::{Legend, Panel};
 pub use list::ListPage;
 pub use meter::LevelMeter;
 pub use mode::Mode;
-pub use navigation::{Intent, Navigation, Scheme};
+pub use navigation::{Intent, Navigation, Scheme, navigating};
 #[cfg(feature = "frame-pace")]
 pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
 pub use page::Page;

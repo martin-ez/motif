@@ -21,11 +21,18 @@
 use std::collections::VecDeque;
 use std::fmt::{self, Write};
 
+use crate::closed_set;
 use crate::device::{Button, Control, Encoder};
 
-/// Which way an encoder was turned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Turn {
+closed_set! {
+    /// Which way an encoder was turned.
+    enum Turn;
+    /// Every way an encoder turns.
+    ///
+    /// A closed set for the reason the panel's controls are one: anything
+    /// stepping through the gestures a scheme might bind has to reach every
+    /// turn, and a turn added to the panel cannot be left out of the array.
+    const ALL;
     /// Turned up, away from the player's left.
     Clockwise,
     /// Turned down, the other way.
