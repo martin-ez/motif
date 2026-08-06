@@ -13,8 +13,7 @@ use std::rc::Rc;
 
 use motif::device::{Button, DeviceProfile};
 use motif::ui::{
-    Cell, ControlEvent, Frame, Legend, Marks, Panel, RenderError, Renderer, ScriptedControls,
-    Viewport,
+    Cell, ControlEvent, Frame, Marks, Panel, RenderError, Renderer, ScriptedControls, Viewport,
 };
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
@@ -141,7 +140,7 @@ fn drawn(cells: &[(usize, usize, char)]) -> Frame {
 }
 
 fn picture() -> Panel {
-    Legend::blank().picture(&ScriptedControls::new([]), Marks::none())
+    Panel::showing(&ScriptedControls::new([]), Marks::none())
 }
 
 /// The panel with a control just fired. What a page answers is not drawn, so a
@@ -153,7 +152,7 @@ fn marked_picture() -> Panel {
         shifted: false,
     });
 
-    Legend::blank().picture(&ScriptedControls::new([]), marks)
+    Panel::showing(&ScriptedControls::new([]), marks)
 }
 
 fn row_of(panel: &Panel, row: usize) -> String {

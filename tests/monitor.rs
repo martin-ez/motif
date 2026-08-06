@@ -23,7 +23,7 @@ use motif::audio::{
 use motif::device::{Button, DeviceProfile};
 use motif::monitor::Monitor;
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, NullRenderer, Region, RunReport,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, NullRenderer, Region, RunReport,
     ScriptedClock, ScriptedControls,
 };
 
@@ -130,10 +130,6 @@ impl App for Counted {
         Flow::Continue
     }
 
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(Button::Record)
-    }
-
     fn draw(&mut self, mut region: Region<'_>) -> Flow {
         self.drawn += 1;
         region.set(0, 0, Cell::new('m'));
@@ -155,10 +151,6 @@ struct Filling;
 impl App for Filling {
     fn control(&mut self, _event: ControlEvent) -> Flow {
         Flow::Continue
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(Button::Record)
     }
 
     fn draw(&mut self, mut region: Region<'_>) -> Flow {
@@ -677,14 +669,6 @@ fn controls_reach_the_wrapped_application() {
     monitor.control(pressed(Button::Record));
 
     assert_eq!(taken.events(), [pressed(Button::Record)]);
-}
-
-#[test]
-fn the_legend_is_the_wrapped_applications() {
-    let monitor = playing();
-
-    assert!(monitor.legend().answers(Button::Record));
-    assert!(!monitor.legend().answers(Button::Play));
 }
 
 #[test]

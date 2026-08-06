@@ -1,10 +1,7 @@
 //! The application around the pages: which one is showing, and what never
 //! reaches it.
 
-use crate::device::Button;
-use crate::ui::{
-    App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page, Region, navigating,
-};
+use crate::ui::{App, ControlEvent, Flow, Intent, Mode, Navigation, Page, Region};
 
 /// The pages the instrument has, and the one it is showing.
 ///
@@ -15,21 +12,17 @@ use crate::ui::{
 /// A control a [`Navigation`] resolves into an [`Intent`] is applied here and
 /// not forwarded, so a page never sees what navigates.
 ///
-/// Shift + stop is kept whatever a scheme says, and the legend is the page's,
-/// [`navigating`]'s and that way out at once — so every live key is drawn live.
+/// Nothing is kept back beyond that: a run ends at the panel it is read from,
+/// which is a way out no page has to leave free.
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{App, Cell, ControlEvent, Frame, Intent, Legend, Mode, Page, Region, Shell};
+/// use motif::ui::{App, Cell, ControlEvent, Frame, Intent, Mode, Page, Region, Shell};
 ///
 /// struct Marked(char);
 ///
 /// impl Page for Marked {
 ///     fn control(&mut self, _event: ControlEvent) {}
-///
-///     fn legend(&self) -> Legend {
-///         Legend::blank().answering(Button::Play)
-///     }
 ///
 ///     fn draw(&mut self, mut region: Region<'_>) {
 ///         region.set(0, 0, Cell::new(self.0));
@@ -99,10 +92,6 @@ impl Shell {
         self.navigation.as_ref()?.intent(event)
     }
 
-    fn page(&self) -> &dyn Page {
-        self.pages[self.showing as usize].as_ref()
-    }
-
     fn page_mut(&mut self) -> &mut dyn Page {
         self.pages[self.showing as usize].as_mut()
     }
@@ -110,16 +99,6 @@ impl Shell {
 
 impl App for Shell {
     fn control(&mut self, event: ControlEvent) -> Flow {
-        if matches!(
-            event,
-            ControlEvent::Pressed {
-                button: Button::Stop,
-                shifted: true,
-            }
-        ) {
-            return Flow::Exit;
-        }
-
         if let Some(intent) = self.intent(event) {
             self.apply(intent);
 
@@ -129,19 +108,6 @@ impl App for Shell {
         self.page_mut().control(event);
 
         Flow::Continue
-    }
-
-    fn legend(&self) -> Legend {
-        let page = self
-            .page()
-            .legend()
-            .answering(Button::Shift)
-            .answering(Button::Stop);
-
-        match self.navigation.as_deref() {
-            Some(navigation) => page.also_answering(navigating(navigation)),
-            None => page,
-        }
     }
 
     fn draw(&mut self, region: Region<'_>) -> Flow {

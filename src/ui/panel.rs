@@ -1,9 +1,7 @@
-//! The panel as a screen without one draws it: which controls do something here.
+//! The panel as a screen without one draws it: which key reaches what.
 //!
-//! Two halves meet here and neither knows the other. A page declares which
-//! controls it answers; a backend says what to call the way each one is reached,
-//! in glyphs that belong to the panel — which is what keeps a key out of every
-//! page and a page out of every backend.
+//! A backend says what to call the way each control is reached, in glyphs that
+//! belong to the panel, which is what keeps a key out of every page.
 //!
 //! What it draws is a picture of the panel — the navigation cross, the scene
 //! buttons with the transport under them, the encoder beside — and no words at
@@ -173,6 +171,40 @@ impl Panel {
         }
     }
 
+    /// The picture of the panel, each key wearing the glyph `controls` reaches
+    /// it by and nothing else.
+    ///
+    /// Every key rests light and keeps a place of its own, so nothing moves
+    /// from page to page. A key `marks` holds is drawn heavy: the panel this
+    /// stands for has no lamp under any key, so the weight is spent on the one
+    /// thing a player cannot otherwise tell, which is whether a press arrived.
+    ///
+    /// The encoder is rounded rather than square so it does not read as a
+    /// button, and goes heavy down the side it was turned towards.
+    ///
+    /// ```
+    /// use motif::ui::{Marks, Panel, ScriptedControls};
+    ///
+    /// let picture = Panel::showing(&ScriptedControls::new([]), Marks::none());
+    ///
+    /// assert_eq!(picture.cells().len(), Panel::COLUMNS * Panel::ROWS);
+    /// ```
+    pub fn showing(controls: &impl Controls, marks: Marks) -> Self {
+        let mut panel = Self::blank();
+
+        draw_cross(&mut panel, controls, marks);
+        draw_grid(&mut panel, controls, marks);
+        draw_key(
+            &mut panel,
+            Seat::encoder(ENCODER_AT),
+            Control::Encoder(Encoder::Main),
+            controls,
+            marks,
+        );
+
+        panel
+    }
+
     /// The cell at `column` and `row`, or `None` if that is off the picture.
     pub fn get(&self, column: usize, row: usize) -> Option<Cell> {
         Self::position(column, row).map(|position| self.cells[position])
@@ -247,108 +279,6 @@ fn face(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, h
     }
 }
 
-/// Which controls a page answers, and so which keys are live on it.
-///
-/// A page answers a handful of controls and ignores the rest, and until it says
-/// which, the only way to find out is to press one and watch. A shell composes
-/// one declaration from the page it is showing, the gestures that navigate and
-/// the way out of the run, so what is live is stated in one place rather than
-/// spread over whoever happens to handle it.
-///
-/// ```
-/// use motif::device::{Button, Encoder};
-/// use motif::ui::Legend;
-///
-/// let legend = Legend::blank().answering(Button::Play);
-///
-/// assert!(legend.answers(Button::Play));
-/// assert!(!legend.answers(Encoder::Main));
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Legend {
-    answered: [bool; Control::ALL.len()],
-}
-
-impl Legend {
-    /// A legend for a page that answers nothing yet.
-    pub const fn blank() -> Self {
-        Self {
-            answered: [false; Control::ALL.len()],
-        }
-    }
-
-    /// The same legend, with `control` doing something on this page.
-    pub fn answering(mut self, control: impl Into<Control>) -> Self {
-        self.answered[control.into().position()] = true;
-        self
-    }
-
-    /// The same legend, also answering everything `other` answers.
-    ///
-    /// What puts two declarations together. A page declares what it answers and
-    /// nothing else, so a control the page never sees — the way out of the run,
-    /// a gesture that navigates — is declared by whoever keeps it and joined on
-    /// here.
-    ///
-    /// ```
-    /// use motif::device::{Button, Encoder};
-    /// use motif::ui::Legend;
-    ///
-    /// let legend = Legend::blank()
-    ///     .answering(Button::Play)
-    ///     .also_answering(Legend::blank().answering(Encoder::Main));
-    ///
-    /// assert!(legend.answers(Button::Play));
-    /// assert!(legend.answers(Encoder::Main));
-    /// ```
-    pub fn also_answering(mut self, other: Self) -> Self {
-        for (answered, also) in self.answered.iter_mut().zip(other.answered) {
-            *answered |= also;
-        }
-
-        self
-    }
-
-    /// Whether `control` does anything on this page.
-    pub fn answers(&self, control: impl Into<Control>) -> bool {
-        self.answered[control.into().position()]
-    }
-
-    /// The picture of the panel, each key wearing the glyph `controls` reaches
-    /// it by and nothing else.
-    ///
-    /// Every key rests light and keeps a place of its own, so nothing moves
-    /// from page to page. A key `marks` holds is drawn heavy: the panel this
-    /// stands for has no lamp under any key, so the weight is spent on the one
-    /// thing a player cannot otherwise tell, which is whether a press arrived.
-    ///
-    /// The encoder is rounded rather than square so it does not read as a
-    /// button, and goes heavy down the side it was turned towards.
-    ///
-    /// ```
-    /// use motif::ui::{Legend, Marks, Panel, ScriptedControls};
-    ///
-    /// let picture = Legend::blank().picture(&ScriptedControls::new([]), Marks::none());
-    ///
-    /// assert_eq!(picture.cells().len(), Panel::COLUMNS * Panel::ROWS);
-    /// ```
-    pub fn picture(&self, controls: &impl Controls, marks: Marks) -> Panel {
-        let mut panel = Panel::blank();
-
-        draw_cross(&mut panel, controls, marks);
-        draw_grid(&mut panel, controls, marks);
-        draw_key(
-            &mut panel,
-            Seat::encoder(ENCODER_AT),
-            Control::Encoder(Encoder::Main),
-            controls,
-            marks,
-        );
-
-        panel
-    }
-}
-
 fn draw_cross(panel: &mut Panel, controls: &impl Controls, marks: Marks) {
     draw_key(
         panel,
@@ -403,11 +333,5 @@ fn edges_of(control: Control, marks: Marks) -> &'static Edges {
             Some(Turn::Anticlockwise) => &ROUND_LEFT_HEAVY,
             None => &ROUND,
         },
-    }
-}
-
-impl Default for Legend {
-    fn default() -> Self {
-        Self::blank()
     }
 }

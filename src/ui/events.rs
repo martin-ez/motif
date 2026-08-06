@@ -17,7 +17,7 @@
 //! ```
 //! use motif::device::Button;
 //! use motif::ui::{
-//!     App, Cell, ControlEvent, EventLoop, Flow, Legend, NullRenderer, Region, ScriptedControls,
+//!     App, Cell, ControlEvent, EventLoop, Flow, NullRenderer, Region, ScriptedControls,
 //! };
 //!
 //! struct Splash;
@@ -28,10 +28,6 @@
 //!             ControlEvent::Pressed { button: Button::Stop, .. } => Flow::Exit,
 //!             _ => Flow::Continue,
 //!         }
-//!     }
-//!
-//!     fn legend(&self) -> Legend {
-//!         Legend::blank().answering(Button::Stop)
 //!     }
 //!
 //!     fn draw(&mut self, mut region: Region<'_>) -> Flow {
@@ -59,7 +55,7 @@ use crate::device::DeviceProfile;
 #[cfg(feature = "frame-pace")]
 use crate::ui::PaceWriter;
 use crate::ui::{
-    Clock, ControlEvent, Controls, Frame, Legend, Marks, Region, RenderError, Renderer, SystemClock,
+    Clock, ControlEvent, Controls, Frame, Marks, Panel, Region, RenderError, Renderer, SystemClock,
 };
 
 /// The most control events one frame will take.
@@ -99,13 +95,6 @@ pub trait App {
     ///
     /// Called once per event, for every event waiting when the frame began.
     fn control(&mut self, event: ControlEvent) -> Flow;
-
-    /// Which controls this application answers, and what each one does here.
-    ///
-    /// Required rather than defaulted, because a control answered without being
-    /// declared is exactly what the legend exists to stop: a page that says
-    /// nothing has decided to say nothing, instead of having forgotten to.
-    fn legend(&self) -> Legend;
 
     /// Put the application's state on `region`.
     ///
@@ -208,8 +197,8 @@ impl<K: Clock> EventLoop<K> {
     /// Run `app` until it asks to stop, drawing to `screen` and reading `controls`.
     ///
     /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws, renders,
-    /// hands the screen the panel the [`Legend`] makes, and waits out its budget.
-    /// The picture is made here, the only place holding both halves of it.
+    /// hands the screen a picture of the panel, and waits out its budget. That
+    /// picture is made here, where the controls and the marks are both in hand.
     ///
     /// An exit from [`App::control`] ends the run undrawn; one from [`App::draw`]
     /// renders that frame first. Neither waits out its budget.
@@ -235,7 +224,7 @@ impl<K: Clock> EventLoop<K> {
             self.frame = Frame::blank();
             let flow = app.draw(self.frame.region());
             screen.render(&self.frame)?;
-            screen.show_panel(&app.legend().picture(controls, self.marks))?;
+            screen.show_panel(&Panel::showing(controls, self.marks))?;
             self.marks.age();
             report.frames += 1;
 

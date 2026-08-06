@@ -15,9 +15,9 @@
 
 use std::time::Duration;
 
-use motif::device::{Button, DeviceProfile};
+use motif::device::DeviceProfile;
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, Legend, Pace, PaceReader, Region, RenderError,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, Pace, PaceReader, Region, RenderError,
     Renderer, ScriptedClock, ScriptedControls, pace_meter,
 };
 
@@ -214,10 +214,6 @@ impl Watching {
 impl App for Watching {
     fn control(&mut self, _event: ControlEvent) -> Flow {
         Flow::Continue
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(Button::Play)
     }
 
     fn draw(&mut self, mut region: Region<'_>) -> Flow {

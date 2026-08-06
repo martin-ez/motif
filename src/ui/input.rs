@@ -81,7 +81,7 @@ impl ControlEvent {
 /// What a panel names the way a control is reached by.
 ///
 /// A fixed-size value rather than a string, because it is asked for while a
-/// frame is being drawn and a legend that allocated would put an allocation per
+/// frame is being drawn and a hint that allocated would put an allocation per
 /// control into every frame. [`CAPACITY`](Self::CAPACITY) is three glyphs,
 /// which holds a key, or the pair of keys a terminal turns an encoder with
 /// written as `q/w`.
@@ -100,7 +100,7 @@ impl Hint {
     ///
     /// Clipped rather than refused, because a hint is drawn into an entry that
     /// is narrow anyway: a backend naming a control with more than this has a
-    /// legend that no longer fits, which is a layout to settle rather than a
+    /// name that no longer fits, which is a layout to settle rather than a
     /// frame to stop drawing.
     pub fn new(glyphs: impl IntoIterator<Item = char>) -> Self {
         let mut hint = Self {

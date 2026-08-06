@@ -220,7 +220,7 @@ fn next_press(bytes: &[u8]) -> Step {
 /// Scenes are `1`–`4`; transport `z`, `x`, `c` for play, stop and record;
 /// navigation the arrow keys; the encoder turns with `,` and `.`. Shift is an
 /// upper case letter or an arrow carrying modifier 2, resolved here rather than
-/// reported as a press; the same mapping names a control for the legend. Ctrl+C
+/// reported as a press; the same mapping names a control for the picture. Ctrl+C
 /// reaches no control and interrupts the panel instead.
 ///
 /// Reads are never waited on and a poll gives up after a bufferful of bytes

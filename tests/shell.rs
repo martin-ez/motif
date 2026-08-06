@@ -1,5 +1,5 @@
-//! The shell that holds a page per mode: which one gets the controls, which one
-//! draws, and what the shell keeps for itself.
+//! The shell that holds a page per mode: which one gets the controls, and which
+//! one draws.
 //!
 //! The pages here are the test's own, because which pages a shell holds is a
 //! composition question and not something the shell knows. Each draws a glyph of
@@ -12,9 +12,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use motif::device::{Button, Control};
+use motif::device::Button;
 use motif::ui::{
-    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Intent, Legend, Mode, Navigation,
+    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Intent, Mode, Navigation,
     NullRenderer, Page, Region, Renderer, ScriptedClock, ScriptedControls, Shell,
 };
 
@@ -47,15 +47,13 @@ impl Taken {
 
 struct Marked {
     glyph: char,
-    answers: Button,
     taken: Taken,
 }
 
 impl Marked {
-    fn new(glyph: char, answers: Button) -> Self {
+    fn new(glyph: char) -> Self {
         Self {
             glyph,
-            answers,
             taken: Taken::default(),
         }
     }
@@ -70,12 +68,22 @@ impl Page for Marked {
         self.taken.0.borrow_mut().push(event);
     }
 
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(self.answers)
-    }
-
     fn draw(&mut self, mut region: Region<'_>) {
         region.set(0, 0, Cell::new(self.glyph));
+    }
+}
+
+/// A panel that ends a run itself, the way the terminal's own interrupt does:
+/// a way out the shell neither declares nor can refuse.
+struct Interrupting;
+
+impl Controls for Interrupting {
+    fn poll(&mut self) -> Option<ControlEvent> {
+        None
+    }
+
+    fn interrupted(&self) -> bool {
+        true
     }
 }
 
@@ -100,10 +108,7 @@ impl Navigation for Navigating {
 }
 
 fn beside(page: Marked) -> [Box<dyn Page>; Mode::ALL.len()] {
-    [
-        Box::new(page),
-        Box::new(Marked::new(ELSEWHERE, Button::Play)),
-    ]
+    [Box::new(page), Box::new(Marked::new(ELSEWHERE))]
 }
 
 fn shell_of(page: Marked) -> Shell {
@@ -111,7 +116,7 @@ fn shell_of(page: Marked) -> Shell {
 }
 
 fn showing(glyph: char) -> (Shell, Taken) {
-    let page = Marked::new(glyph, Button::Play);
+    let page = Marked::new(glyph);
     let taken = page.taken();
 
     (shell_of(page), taken)
@@ -121,13 +126,13 @@ fn showing_elsewhere(page: Marked) -> (Shell, Taken) {
     let taken = page.taken();
 
     (
-        Shell::new([Box::new(Marked::new(MARKER, Button::Play)), Box::new(page)]),
+        Shell::new([Box::new(Marked::new(MARKER)), Box::new(page)]),
         taken,
     )
 }
 
 fn navigated(navigation: Navigating) -> (Shell, Taken) {
-    let page = Marked::new(MARKER, Button::Play);
+    let page = Marked::new(MARKER);
     let taken = page.taken();
 
     (Shell::navigated_by(beside(page), navigation), taken)
@@ -175,69 +180,12 @@ fn a_control_reaches_the_showing_page() {
 }
 
 #[test]
-fn the_shell_takes_its_legend_from_the_showing_page() {
-    let page = Marked::new(MARKER, Button::Record);
-    let shell = shell_of(page);
-
-    assert!(shell.legend().answers(Button::Record));
-}
-
-#[test]
-fn the_shell_declares_the_shift_it_keeps() {
-    let shell = shell_of(Marked::new(MARKER, Button::Play));
-
-    assert!(shell.legend().answers(Button::Shift));
-}
-
-#[test]
-fn the_shell_declares_the_stop_it_keeps() {
-    let shell = shell_of(Marked::new(MARKER, Button::Play));
-
-    assert!(shell.legend().answers(Button::Stop));
-}
-
-#[test]
-fn the_shell_declares_what_its_navigation_keeps() {
-    let (shell, _) = navigated(Navigating(vec![Button::Up]));
-
-    assert!(shell.legend().answers(Button::Up));
-}
-
-#[test]
-fn a_shell_with_no_navigation_declares_only_the_page_and_what_it_keeps() {
-    let shell = shell_of(Marked::new(MARKER, Button::Play));
-    let kept = [Button::Play, Button::Shift, Button::Stop];
-
-    for control in Control::ALL {
-        let expected = matches!(control, Control::Button(button) if kept.contains(&button));
-
-        assert_eq!(shell.legend().answers(control), expected, "{control:?}");
-    }
-}
-
-#[test]
-fn changing_the_navigation_changes_the_legend_the_shell_declares() {
-    let (one, _) = navigated(Navigating(vec![Button::Up]));
-    let (other, _) = navigated(Navigating(vec![Button::Down]));
-
-    assert!(one.legend().answers(Button::Up) && !one.legend().answers(Button::Down));
-    assert!(other.legend().answers(Button::Down) && !other.legend().answers(Button::Up));
-}
-
-#[test]
-fn shift_and_stop_ends_the_run() {
-    let (mut shell, _) = showing(MARKER);
-
-    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Exit);
-}
-
-#[test]
-fn the_control_the_shell_keeps_does_not_reach_the_page() {
+fn a_shifted_stop_reaches_the_page() {
     let (mut shell, taken) = showing(MARKER);
 
     driven_by(&mut shell, [shifted(Button::Stop)]);
 
-    assert!(taken.events().is_empty());
+    assert_eq!(taken.events(), vec![shifted(Button::Stop)]);
 }
 
 #[test]
@@ -250,13 +198,10 @@ fn stop_on_its_own_reaches_the_page() {
 }
 
 #[test]
-fn a_shifted_control_that_is_not_stop_keeps_the_run_going() {
+fn every_shifted_control_keeps_the_run_going() {
     let (mut shell, _) = showing(MARKER);
 
     for button in Button::ALL {
-        if matches!(button, Button::Stop) {
-            continue;
-        }
         assert_eq!(shell.control(shifted(button)), Flow::Continue);
     }
 }
@@ -295,7 +240,7 @@ fn an_intent_moves_which_page_draws() {
 
 #[test]
 fn an_intent_moves_which_page_a_control_reaches() {
-    let (mut shell, taken) = showing_elsewhere(Marked::new(ELSEWHERE, Button::Play));
+    let (mut shell, taken) = showing_elsewhere(Marked::new(ELSEWHERE));
 
     shell.apply(Intent::Show(Mode::ALL[1]));
     driven_by(&mut shell, [pressed(Button::Play)]);
@@ -311,15 +256,6 @@ fn a_control_does_not_reach_a_page_that_is_not_showing() {
     driven_by(&mut shell, [pressed(Button::Play)]);
 
     assert!(taken.events().is_empty());
-}
-
-#[test]
-fn the_legend_moves_with_the_page_that_is_showing() {
-    let (mut shell, _) = showing_elsewhere(Marked::new(ELSEWHERE, Button::Record));
-
-    shell.apply(Intent::Show(Mode::ALL[1]));
-
-    assert!(shell.legend().answers(Button::Record));
 }
 
 #[test]
@@ -368,10 +304,11 @@ fn a_shell_with_no_navigation_hands_every_control_to_the_page() {
 }
 
 #[test]
-fn the_way_out_is_not_a_gesture_a_scheme_can_take() {
-    let (mut shell, _) = navigated(Navigating::everything());
+fn a_scheme_that_takes_a_shifted_stop_keeps_it_from_the_page() {
+    let (mut shell, taken) = navigated(Navigating::everything());
 
-    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Exit);
+    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Continue);
+    assert!(taken.events().is_empty());
 }
 
 #[test]
@@ -390,13 +327,12 @@ fn a_shell_driven_by_controls_renders_the_page_that_drew() {
 }
 
 #[test]
-fn the_event_loop_runs_a_shell_until_it_is_asked_to_stop() {
+fn the_event_loop_runs_a_shell_until_the_panel_is_interrupted() {
     let (mut shell, _) = showing(MARKER);
-    let mut controls = ScriptedControls::new([shifted(Button::Stop)]);
     let mut screen = NullRenderer::new();
 
     let report = EventLoop::with_clock(ScriptedClock::new([]))
-        .run(&mut shell, &mut controls, &mut screen)
+        .run(&mut shell, &mut Interrupting, &mut screen)
         .expect("the null renderer takes every frame");
 
     assert_eq!(report.frames(), 0);

@@ -288,16 +288,6 @@ fn a_page_given_one_row_draws_the_selected_row_in_it() {
 }
 
 #[test]
-fn the_page_declares_the_controls_it_moves_by() {
-    let legend = ListPage::new(["one", "two"]).legend();
-
-    assert!(legend.answers(Button::Up));
-    assert!(legend.answers(Button::Down));
-    assert!(legend.answers(Encoder::Main));
-    assert!(!legend.answers(Button::Play));
-}
-
-#[test]
 fn a_list_shorter_than_the_viewport_never_scrolls() {
     let mut page = page_of(3);
     driven_by(&mut page, repeated(pressed(Button::Down), 9));
