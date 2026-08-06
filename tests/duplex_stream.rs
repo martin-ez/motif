@@ -3,7 +3,7 @@
 
 use motif::audio::{
     AudioBackend, ChannelSelection, DeviceError, DeviceId, DeviceSelection, DuplexStream, Levels,
-    NullBackend, Passthrough, StreamConfig, StreamRequest, StreamState,
+    NullBackend, Passthrough, Slack, StreamConfig, StreamRequest, StreamState,
 };
 
 fn config() -> StreamConfig {
@@ -95,6 +95,16 @@ fn a_stream_that_plays_no_samples_reports_silence() {
         .expect("null backend opens");
 
     assert_eq!(stream.played(), Levels::SILENT);
+}
+
+#[test]
+fn a_stream_between_no_two_clocks_holds_no_slack() {
+    let backend = NullBackend::rounding(config());
+    let stream = backend
+        .open(&selection(), request(), Passthrough::new())
+        .expect("null backend opens");
+
+    assert_eq!(stream.slack(), Slack::NONE);
 }
 
 #[test]

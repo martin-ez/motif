@@ -29,6 +29,7 @@ mod link;
 mod path;
 mod placement;
 mod ring;
+mod slack;
 mod xrun;
 
 pub use boundary::{BlockCapture, BlockPlayback, Priming, boundary};
@@ -48,6 +49,7 @@ pub use placement::{
     priority_latch,
 };
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
+pub use slack::{Slack, SlackReader, SlackTrim, Trim, slack_hold};
 pub use xrun::{OverrunCounter, UnderrunCounter, XrunReader, Xruns, xrun_counter};
 
 /// The sample rate and block size a stream is asked to run at.
@@ -374,6 +376,15 @@ pub trait DuplexStream {
     /// and starting one does not reset them.
     fn xruns(&self) -> Xruns;
 
+    /// How many frames the stream is holding between capture and playback, and
+    /// what holding them has cost.
+    ///
+    /// The input and output devices run on clocks nobody synchronises, so this
+    /// is what the path does about that: [`Slack::held`] is the give it has
+    /// left before the next hiccup is audible, and the two counts are the
+    /// frames spent keeping it there.
+    fn slack(&self) -> Slack;
+
     /// How much of its deadline the callback used, over the recent window.
     ///
     /// A stream with a callback in each direction reports the tighter of the
@@ -688,6 +699,12 @@ impl DuplexStream for NullStream {
     /// always [`Xruns::NONE`].
     fn xruns(&self) -> Xruns {
         Xruns::NONE
+    }
+
+    /// A stream with no device behind it has no ring between two clocks, so
+    /// this is always [`Slack::NONE`].
+    fn slack(&self) -> Slack {
+        Slack::NONE
     }
 
     /// A stream with no device behind it has no deadline to use up, so this is
