@@ -35,6 +35,7 @@ scripts/track.sh <command> [args] [--json]
   ready                       work that can be started right now
   refs [-F FILE]              issues a pull request body tracks (stdin default)
   blocked                     open work with open blockers, and what blocks it
+  plan [--all]                the epic chain in order, the current ones opened
   find <term>                 match issue titles, open and closed
   show <n>                    one issue in full, including claim state
   start <n>                   claim, then branch from main onto it
@@ -316,6 +317,26 @@ def has_cycle: ((cycle_nodes | length) > 0);
 def top_blockers:
   [.[] | select(is_blocked) | .blockers[]]
   | group_by(.) | map({num: .[0], n: length}) | sort_by(-.n, .num);
+
+# The plan is a chain, not a forest: epics come off each other in one order, so
+# peeling the ones nothing holds up, over and over, is the order to read them
+# in. Only edges between epics count -- an epic waiting on a loose bug is still
+# next. Whatever survives the peel is in a cycle, and goes last rather than
+# vanishing out of the list.
+def epic_order:
+  ([ .[] | select(.size == "l") | .num ]) as $enums
+  | ([ .[] | select(.size == "l")
+       | . + {ebl: [ .blockers[] | select(IN($enums[])) ]} ]) as $init
+  | ( reduce range(0; ($init | length)) as $_
+        ({rest: $init, out: []};
+          ([ .rest[] | select((.ebl | length) == 0) ] | sort_by(.num)) as $free
+          | ([ $free[] | .num ]) as $freed
+          | if ($free | length) == 0 then .
+            else { out: (.out + $free),
+                   rest: [ .rest[] | select((.ebl | length) > 0)
+                           | .ebl = (.ebl - $freed) ] }
+            end) )
+  | (.out + .rest);
 '
 
 # Claim ownership lives in HTML-comment markers on issue comments. They arrive on
@@ -461,6 +482,74 @@ cmd_blocked() {
   tb="$(printf '%s' "$shaped" | jq -r "$JQ_LIB"'
         top_blockers[0:5] | map("#\(.num) (\(.n))") | join("  ")')"
   [ -n "$tb" ] && printf 'top blockers: %s\n' "$tb"
+  return 0
+}
+
+cmd_plan() {
+  local all=0 shaped payload total nready
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      *)     die "usage: track.sh plan [--all]" ;;
+    esac
+  done
+
+  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape] | with_gates')"
+  total="$( printf '%s' "$shaped" | jq 'length')"
+  nready="$(printf '%s' "$shaped" | jq "$JQ_LIB"'[.[] | select(is_ready)] | length')"
+
+  payload="$(printf '%s' "$shaped" | jq "$JQ_LIB"'
+    . as $open
+    | epic_order
+    | map(. as $e
+        | { num: $e.num, title: $e.title, area: $e.area,
+            done: $e.subs.completed, of: $e.subs.total,
+            waits: $e.blockers,
+            current: ((($e.blockers | length) == 0) and ($e.gated_by == null)),
+            children:
+              ( [ $open[] | select((.parent != null) and (.parent.num == $e.num)) ]
+                | sort_by(.num)
+                | map(. as $c
+                      | { num: $c.num, size: $c.size, title: $c.title,
+                          stance: (if $c.wip then "claimed"
+                                   elif ($c | is_ready) then "ready"
+                                   else "waiting" end),
+                          waits: ((($c.blockers | map("#\(.)"))
+                                   + (if ($c.gated_by != null)
+                                         and (($c.blockers | index($c.gated_by)) == null)
+                                      then ["via #\($c.gated_by)"] else [] end))
+                                  | join(" ")) }) ) })')"
+
+  if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
+
+  printf 'plan (%s open, %s ready)\n' "$total" "$nready"
+  printf '%s' "$payload" | jq -r --argjson all "$all" --argjson m "$TITLE_MAX" '
+    .[]
+    | ([ "E", (.num | tostring),
+         (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
+         (.done | tostring), (.of | tostring),
+         (.waits | map("#\(.)") | join(" ")),
+         (if .current then "yes" else "no" end) ] | @tsv),
+      ( if (.current or ($all == 1))
+        then (.children[]
+              | [ "C", (.num | tostring), (.size // "-"), .stance,
+                  (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
+                  .waits ] | @tsv)
+        else empty end )' \
+  | awk -F'\t' -v all="$all" '
+      $1 == "E" {
+        open_here = ($7 == "yes" || all == 1);
+        mark = ($7 == "yes") ? "\342\226\270" : " ";
+        prog = ($5 + 0 > 0) ? sprintf("%s/%s done", $4, $5) : "";
+        waits = ($6 == "") ? "" : sprintf("  waits on %s", $6);
+        line = sprintf("%s #%-4s %-44s %-9s%s", mark, $2, $3, prog, waits);
+        sub(/[ \t]+$/, "", line);
+        printf "%s%s\n", (open_here ? "\n" : ""), line;
+      }
+      $1 == "C" {
+        w = ($6 == "") ? "" : sprintf("  <- %s", $6);
+        printf "     %-8s #%-4s %-1s  %s%s\n", $4, $2, ($3 == "" ? "-" : $3), $5, w;
+      }'
   return 0
 }
 
@@ -1149,7 +1238,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M out rc loc adv dt bn ob scratch ids
+  local t0 A B C D E F G H I J K L M N R out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1347,6 +1436,29 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "claim refuses size:l #$J (got $rc)"
 
+  # `plan` reads the chain rather than the forest: epics in the order they come
+  # off each other, the ones nothing blocks expanded, everything else a row.
+  N="$(st_num "$(AS_JSON=0 cmd_add -t "selftest epic behind $J" --area infra --kind chore --size l --blocked-by "$J" --selftest)")"
+  R="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of epic $N" --area infra --kind chore --size s --parent "$N" --selftest)")"
+  out="$(AS_JSON=1 cmd_plan)"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson j "$J" --argjson n "$N" '
+    (map(.num) | index($j)) as $a | (map(.num) | index($n)) as $b
+    | ($a != null) and ($b != null) and ($a < $b)' >/dev/null || rc=1
+  st_assert "$rc" "plan orders #$J before the epic it blocks, #$N"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson j "$J" \
+    'any(.num == $j and .current)' >/dev/null || rc=1
+  st_assert "$rc" "plan marks unblocked epic #$J as current"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$N" \
+    'any(.num == $n and (.current | not))' >/dev/null || rc=1
+  st_assert "$rc" "plan leaves epic #$N behind a blocker uncurrent"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$N" --argjson r "$R" '
+    any(.num == $n and (.children | any(.num == $r and .stance == "waiting")))' >/dev/null || rc=1
+  st_assert "$rc" "plan carries #$R under #$N as waiting on its gated epic"
+
   # A whitespace agent id would produce an unmatchable claim marker.
   rc=0; ( MOTIF_AGENT="bad id" cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "claim rejects a whitespace agent id (got $rc)"
@@ -1460,6 +1572,7 @@ case "$CMD" in
   ready)        cmd_ready "$@" ;;
   refs)         cmd_refs "$@" ;;
   blocked)      cmd_blocked "$@" ;;
+  plan)         cmd_plan "$@" ;;
   find)         cmd_find "$@" ;;
   show)         cmd_show "$@" ;;
   start)        cmd_start "$@" ;;
