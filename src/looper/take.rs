@@ -50,7 +50,7 @@ struct Crossing {
 ///
 /// ```
 /// use motif::device::DeviceProfile;
-/// use motif::looper::{LoopBuffer, take_handoff};
+/// use motif::looper::{LoopBuffer, TakeWriter, take_handoff};
 ///
 /// let profile = DeviceProfile::TARGET.audio;
 /// let (mut writer, mut reader) = take_handoff(profile);
@@ -58,7 +58,9 @@ struct Crossing {
 /// buffer.record(&[0.25, 0.5]);
 ///
 /// writer.begin(&buffer);
-/// while writer.advance(&buffer) {}
+/// for _ in 0..TakeWriter::CROSSING_BLOCKS {
+///     writer.advance(&buffer);
+/// }
 ///
 /// let take = reader.claim().expect("a finished take crossed");
 /// assert_eq!(take.samples().collect::<Vec<_>>(), [0.25, 0.5]);
@@ -99,11 +101,12 @@ impl TakeWriter {
     /// How many blocks a take is spread across as it crosses.
     ///
     /// A whole loop is megabytes, and copying it inside one callback is a spike
-    /// no deadline survives. A fixed count of blocks rather than a fixed chunk
-    /// of frames means a take crosses in the same wall-clock whatever its
-    /// length, and each block pays a fixed fraction of the mixing it already
-    /// does: about a third of a second at
-    /// [`DeviceProfile::TARGET`](crate::device::DeviceProfile::TARGET).
+    /// no deadline survives. Counting blocks rather than frames is what makes
+    /// every take cross in the same wall-clock, about a third of a second at
+    /// [`DeviceProfile::TARGET`](crate::device::DeviceProfile::TARGET), which
+    /// is what a deadline needs. The cost is a share that grows with the loop
+    /// rather than with the block: a sixty-fourth of the longest loop, against
+    /// the 256 frames a block of it mixes.
     pub const CROSSING_BLOCKS: usize = CROSSING_BLOCK_COUNT;
 
     /// Begin handing over the loop `buffer` holds, dropping whatever crossing

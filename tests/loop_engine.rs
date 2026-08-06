@@ -167,6 +167,16 @@ fn heard(engine: &mut Commanded<LoopEngine>, frames: usize) -> Vec<f32> {
     played(engine, &vec![0.0; frames])
 }
 
+/// Play on the odd block and stop on the even one, as a player flicking
+/// between the two does.
+fn flicked(block: usize) -> Transport {
+    if block.is_multiple_of(2) {
+        Transport::Stopped
+    } else {
+        Transport::Playing
+    }
+}
+
 /// Render blocks until a take crosses, and return the samples it crossed with.
 fn crossed(engine: &mut Commanded<LoopEngine>, takes: &mut TakeReader) -> Vec<f32> {
     for _ in 0..BLOCKS_ALLOWED {
@@ -941,4 +951,44 @@ fn handing_a_take_over_does_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "handing the take over allocated");
+}
+
+#[test]
+fn a_crossing_survives_the_player_flicking_between_play_and_stop() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25; 8]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    for block in 0..BLOCKS_ALLOWED {
+        press(&mut sender, Command::SetTransport(flicked(block)));
+        heard(&mut engine, 4);
+        if let Some(take) = takes.claim() {
+            assert_eq!(take.frames(), 8);
+            return;
+        }
+    }
+
+    panic!("no take crossed while the player flicked between play and stop");
+}
+
+#[test]
+fn an_overdub_the_stack_has_no_room_for_leaves_the_crossing_alone() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25; 8]);
+    for _ in 2..LoopBuffer::LAYERS {
+        press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+        heard(&mut engine, 4);
+        press(&mut sender, Command::SetTransport(Transport::Playing));
+        heard(&mut engine, 4);
+    }
+    takes.claim();
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    heard(&mut engine, 4);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+
+    assert_eq!(crossed(&mut engine, &mut takes), [0.25; 8]);
 }

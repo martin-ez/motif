@@ -101,6 +101,7 @@ impl LoopEngine {
     }
 
     fn move_to(&mut self, transport: Transport) {
+        let was_writing = self.writing_the_loop();
         if transport.plays_loop() && !self.transport.plays_loop() {
             self.playhead = 0;
         }
@@ -112,11 +113,17 @@ impl LoopEngine {
         }
 
         self.transport = transport;
-        self.hand_over_the_take();
+        if self.writing_the_loop() != was_writing {
+            self.hand_over_the_take();
+        }
+    }
+
+    const fn writing_the_loop(&self) -> bool {
+        self.transport.captures_input() && self.layer_open
     }
 
     fn hand_over_the_take(&mut self) {
-        if self.transport.captures_input() {
+        if self.writing_the_loop() {
             self.takes.abandon();
         } else {
             self.takes.begin(&self.buffer);
