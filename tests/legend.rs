@@ -10,13 +10,14 @@
 //! keys is the picture of the panel.
 
 use motif::device::{Button, Control, Encoder};
-use motif::ui::{ControlEvent, Controls, Hint, Legend, Marks, Panel};
+use motif::ui::{ControlEvent, Controls, Hint, Legend, Marks, Panel, Turn};
 
 const LIGHT: char = '─';
 const LIGHT_WALL: char = '│';
 const HEAVY: char = '━';
 const HEAVY_WALL: char = '┃';
-const SOLID: char = '█';
+const ROUND_TOP_LEFT: char = '╭';
+const ROUND_TOP_RIGHT: char = '╮';
 
 /// The glyph the panels below reach `control` by.
 fn glyph_of(control: impl Into<Control>) -> char {
@@ -70,9 +71,23 @@ fn drawn(legend: &Legend, panel: &impl Controls) -> Panel {
     legend.picture(panel, Marks::none())
 }
 
-fn drawn_firing(legend: &Legend, panel: &impl Controls, control: impl Into<Control>) -> Panel {
+fn drawn_pressing(legend: &Legend, panel: &impl Controls, button: Button) -> Panel {
     let mut marks = Marks::none();
-    marks.fired(control);
+    marks.fired(ControlEvent::Pressed {
+        button,
+        shifted: false,
+    });
+
+    legend.picture(panel, marks)
+}
+
+fn drawn_turning(legend: &Legend, panel: &impl Controls, turn: Turn) -> Panel {
+    let mut marks = Marks::none();
+    marks.fired(ControlEvent::Turned {
+        encoder: Encoder::Main,
+        turn,
+        shifted: false,
+    });
 
     legend.picture(panel, marks)
 }
@@ -213,8 +228,33 @@ fn nothing_but_the_glyph_is_written_on_a_key() {
 }
 
 #[test]
-fn a_control_the_page_answers_is_drawn_with_a_heavy_edge() {
+fn a_key_rests_light_whether_the_page_answers_it_or_not() {
     let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+
+    for button in [Button::Play, Button::Stop] {
+        let key = key_of(&panel, button);
+
+        assert_eq!(glyph_at(&panel, key.column, key.row - 1), LIGHT);
+        assert_eq!(glyph_at(&panel, key.column, key.row + 1), LIGHT);
+        assert_eq!(glyph_at(&panel, key.column - 2, key.row), LIGHT_WALL);
+        assert_eq!(glyph_at(&panel, key.column + 2, key.row), LIGHT_WALL);
+    }
+}
+
+#[test]
+fn a_control_the_page_does_not_answer_is_drawn_rather_than_dropped() {
+    let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
+    let key = key_of(&panel, Button::Stop);
+
+    assert_eq!(
+        glyph_at(&panel, key.column, key.row),
+        glyph_of(Button::Stop)
+    );
+}
+
+#[test]
+fn a_button_whose_event_was_delivered_is_drawn_heavy_all_round() {
+    let panel = drawn_pressing(&Legend::blank(), &Lettered, Button::Play);
     let key = key_of(&panel, Button::Play);
 
     assert_eq!(glyph_at(&panel, key.column, key.row - 1), HEAVY);
@@ -224,71 +264,30 @@ fn a_control_the_page_answers_is_drawn_with_a_heavy_edge() {
 }
 
 #[test]
-fn a_control_the_page_does_not_answer_is_drawn_light_rather_than_dropped() {
-    let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
-    let key = key_of(&panel, Button::Stop);
-
-    assert_eq!(
-        glyph_at(&panel, key.column, key.row),
-        glyph_of(Button::Stop)
-    );
-    assert_eq!(glyph_at(&panel, key.column, key.row - 1), LIGHT);
-    assert_eq!(glyph_at(&panel, key.column - 2, key.row), LIGHT_WALL);
-}
-
-#[test]
-fn a_control_whose_event_was_delivered_is_drawn_solid() {
-    let panel = drawn_firing(
-        &Legend::blank().answering(Button::Play),
-        &Lettered,
-        Button::Play,
-    );
-    let key = key_of(&panel, Button::Play);
-
-    assert_eq!(glyph_at(&panel, key.column, key.row - 1), SOLID);
-    assert_eq!(glyph_at(&panel, key.column, key.row + 1), SOLID);
-    assert_eq!(glyph_at(&panel, key.column - 2, key.row), SOLID);
-    assert_eq!(glyph_at(&panel, key.column + 2, key.row), SOLID);
-}
-
-#[test]
-fn a_control_the_page_ignores_is_drawn_solid_when_it_fires() {
-    let panel = drawn_firing(
+fn a_control_the_page_ignores_is_drawn_heavy_when_it_fires() {
+    let panel = drawn_pressing(
         &Legend::blank().answering(Button::Play),
         &Lettered,
         Button::Stop,
     );
     let key = key_of(&panel, Button::Stop);
-
-    assert_eq!(glyph_at(&panel, key.column, key.row - 1), SOLID);
-    assert_eq!(glyph_at(&panel, key.column - 2, key.row), SOLID);
-}
-
-#[test]
-fn an_encoder_that_fires_is_drawn_solid_rather_than_rounded() {
-    let panel = drawn_firing(&Legend::blank(), &Lettered, Encoder::Main);
-    let key = key_of(&panel, Encoder::Main);
-
-    assert_eq!(glyph_at(&panel, key.column, key.row - 1), SOLID);
-    assert_eq!(glyph_at(&panel, key.column - 3, key.row), SOLID);
-}
-
-#[test]
-fn a_control_that_did_not_fire_keeps_the_weight_it_rests_at() {
-    let panel = drawn_firing(
-        &Legend::blank().answering(Button::Play),
-        &Lettered,
-        Button::Stop,
-    );
-    let key = key_of(&panel, Button::Play);
 
     assert_eq!(glyph_at(&panel, key.column, key.row - 1), HEAVY);
     assert_eq!(glyph_at(&panel, key.column - 2, key.row), HEAVY_WALL);
 }
 
 #[test]
-fn a_key_drawn_solid_still_shows_the_glyph_that_reaches_it() {
-    let panel = drawn_firing(&Legend::blank(), &Lettered, Button::Stop);
+fn a_button_that_did_not_fire_stays_light_beside_one_that_did() {
+    let panel = drawn_pressing(&Legend::blank(), &Lettered, Button::Stop);
+    let key = key_of(&panel, Button::Play);
+
+    assert_eq!(glyph_at(&panel, key.column, key.row - 1), LIGHT);
+    assert_eq!(glyph_at(&panel, key.column - 2, key.row), LIGHT_WALL);
+}
+
+#[test]
+fn a_key_drawn_heavy_still_shows_the_glyph_that_reaches_it() {
+    let panel = drawn_pressing(&Legend::blank(), &Lettered, Button::Stop);
     let key = key_of(&panel, Button::Stop);
 
     assert_eq!(
@@ -298,10 +297,68 @@ fn a_key_drawn_solid_still_shows_the_glyph_that_reaches_it() {
 }
 
 #[test]
-fn no_key_is_drawn_solid_while_every_control_rests() {
+fn no_key_is_drawn_heavy_while_every_control_rests() {
     let panel = drawn(&Legend::blank().answering(Button::Play), &Lettered);
 
-    assert!(!text_of(&panel).contains(SOLID));
+    assert!(!text_of(&panel).contains(HEAVY));
+    assert!(!text_of(&panel).contains(HEAVY_WALL));
+}
+
+#[test]
+fn an_encoder_turned_clockwise_goes_heavy_down_its_right_side_only() {
+    let panel = drawn_turning(&Legend::blank(), &Lettered, Turn::Clockwise);
+    let key = key_of(&panel, Encoder::Main);
+
+    assert_eq!(glyph_at(&panel, key.column + 3, key.row), HEAVY_WALL);
+    assert_eq!(glyph_at(&panel, key.column - 3, key.row), LIGHT_WALL);
+}
+
+#[test]
+fn an_encoder_turned_anticlockwise_goes_heavy_down_its_left_side_only() {
+    let panel = drawn_turning(&Legend::blank(), &Lettered, Turn::Anticlockwise);
+    let key = key_of(&panel, Encoder::Main);
+
+    assert_eq!(glyph_at(&panel, key.column - 3, key.row), HEAVY_WALL);
+    assert_eq!(glyph_at(&panel, key.column + 3, key.row), LIGHT_WALL);
+}
+
+#[test]
+fn a_turned_encoder_keeps_the_light_top_and_bottom_it_rests_with() {
+    let panel = drawn_turning(&Legend::blank(), &Lettered, Turn::Clockwise);
+    let key = key_of(&panel, Encoder::Main);
+
+    assert_eq!(glyph_at(&panel, key.column, key.row - 1), LIGHT);
+    assert_eq!(glyph_at(&panel, key.column, key.row + 1), LIGHT);
+}
+
+#[test]
+fn an_encoder_at_rest_is_rounded_on_both_sides() {
+    let panel = drawn(&Legend::blank(), &Lettered);
+    let key = key_of(&panel, Encoder::Main);
+
+    assert_eq!(
+        glyph_at(&panel, key.column - 3, key.row - 1),
+        ROUND_TOP_LEFT
+    );
+    assert_eq!(
+        glyph_at(&panel, key.column + 3, key.row - 1),
+        ROUND_TOP_RIGHT
+    );
+}
+
+#[test]
+fn a_turned_encoder_rounds_the_corner_it_did_not_move_towards() {
+    let panel = drawn_turning(&Legend::blank(), &Lettered, Turn::Clockwise);
+    let key = key_of(&panel, Encoder::Main);
+
+    assert_eq!(
+        glyph_at(&panel, key.column - 3, key.row - 1),
+        ROUND_TOP_LEFT
+    );
+    assert_ne!(
+        glyph_at(&panel, key.column + 3, key.row - 1),
+        ROUND_TOP_RIGHT
+    );
 }
 
 #[test]
@@ -316,11 +373,11 @@ fn a_navigation_key_shows_its_arrow_on_a_page_that_ignores_it() {
 }
 
 #[test]
-fn a_panel_that_labels_its_own_keys_still_says_which_are_live() {
+fn a_panel_that_labels_its_own_keys_is_still_drawn_without_them() {
     let panel = drawn(&Legend::blank().answering(Button::Play), &Unlabelled);
     let text = text_of(&panel);
 
-    assert!(text.contains(HEAVY));
+    assert!(text.contains(LIGHT));
     for control in Control::ALL {
         assert!(
             !text.contains(glyph_of(control)),
@@ -395,12 +452,11 @@ fn the_encoder_is_drawn_as_a_knob_rather_than_a_key() {
 }
 
 #[test]
-fn a_knob_the_page_answers_is_drawn_doubled_rather_than_heavy() {
-    let panel = drawn(&Legend::blank().answering(Encoder::Main), &Lettered);
-    let knob = key_of(&panel, Encoder::Main);
+fn a_knob_the_page_answers_is_drawn_no_differently_at_rest() {
+    let answered = drawn(&Legend::blank().answering(Encoder::Main), &Lettered);
+    let ignored = drawn(&Legend::blank(), &Lettered);
 
-    assert_eq!(glyph_at(&panel, knob.column, knob.row - 1), '═');
-    assert_eq!(glyph_at(&panel, knob.column, knob.row + 1), '═');
+    assert_eq!(answered, ignored);
 }
 
 #[test]

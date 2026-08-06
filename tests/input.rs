@@ -4,7 +4,7 @@
 //! the model exists to have: the panel has encoders and buttons, so that is all
 //! an application can be handed.
 
-use motif::device::{Button, Control, Encoder};
+use motif::device::{Button, Encoder};
 use motif::ui::{ControlEvent, Controls, ScriptedControls, Turn};
 
 fn pressed(button: Button) -> ControlEvent {
@@ -82,30 +82,6 @@ fn a_turn_names_the_encoder_and_which_way_it_went() {
             shifted: false,
         }
     );
-}
-
-#[test]
-fn a_press_names_the_button_it_happened_to() {
-    assert_eq!(
-        pressed(Button::Play).control(),
-        Control::Button(Button::Play)
-    );
-}
-
-#[test]
-fn a_turn_names_the_encoder_it_happened_to() {
-    assert_eq!(
-        turned(Encoder::Main, Turn::Clockwise).control(),
-        Control::Encoder(Encoder::Main)
-    );
-}
-
-#[test]
-fn which_way_an_encoder_went_is_not_part_of_the_control_it_names() {
-    let clockwise = turned(Encoder::Main, Turn::Clockwise);
-    let back = turned(Encoder::Main, Turn::Anticlockwise);
-
-    assert_eq!(clockwise.control(), back.control());
 }
 
 #[test]

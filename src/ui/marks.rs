@@ -9,7 +9,8 @@
 //! budget, and a mark fading on a clock of its own would be a second clock to
 //! keep in step with it.
 
-use crate::device::Control;
+use crate::device::{Control, Encoder};
+use crate::ui::{ControlEvent, Turn};
 
 /// Which controls have just been handed an event, and how much longer each one
 /// shows it.
@@ -21,10 +22,10 @@ use crate::device::Control;
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::Marks;
+/// use motif::ui::{ControlEvent, Marks};
 ///
 /// let mut marks = Marks::none();
-/// marks.fired(Button::Play);
+/// marks.fired(ControlEvent::Pressed { button: Button::Play, shifted: false });
 ///
 /// assert!(marks.marked(Button::Play));
 /// assert!(!marks.marked(Button::Stop));
@@ -32,6 +33,7 @@ use crate::device::Control;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Marks {
     remaining: [u8; Control::ALL.len()],
+    turns: [Turn; Encoder::ALL.len()],
 }
 
 impl Marks {
@@ -46,21 +48,40 @@ impl Marks {
     pub const fn none() -> Self {
         Self {
             remaining: [0; Control::ALL.len()],
+            turns: [Turn::Clockwise; Encoder::ALL.len()],
         }
     }
 
-    /// `control` has just been handed an event: mark it.
+    /// `event` has just been handed to the application: mark the control it
+    /// reached.
     ///
     /// A control firing again before it settles starts the count over, so a key
     /// held against a panel that repeats stays marked for as long as the
-    /// repeats arrive and settles once they stop.
-    pub fn fired(&mut self, control: impl Into<Control>) {
-        self.remaining[control.into().position()] = Self::FRAMES;
+    /// repeats arrive and settles once they stop. An encoder turned back the
+    /// other way inside that window shows the new direction.
+    pub fn fired(&mut self, event: ControlEvent) {
+        let control = match event {
+            ControlEvent::Pressed { button, .. } => Control::Button(button),
+            ControlEvent::Turned { encoder, turn, .. } => {
+                self.turns[encoder as usize] = turn;
+                Control::Encoder(encoder)
+            }
+        };
+
+        self.remaining[control.position()] = Self::FRAMES;
     }
 
     /// Whether `control` is still showing its mark.
     pub fn marked(&self, control: impl Into<Control>) -> bool {
         self.remaining[control.into().position()] > 0
+    }
+
+    /// Which way `encoder` was turned, while it is still showing the mark.
+    ///
+    /// `None` once it has settled, so a caller drawing the side that moved has
+    /// one answer to ask for rather than a direction and a mark to combine.
+    pub fn turn(&self, encoder: Encoder) -> Option<Turn> {
+        self.marked(encoder).then(|| self.turns[encoder as usize])
     }
 
     /// A frame has been drawn: every mark is one frame closer to rest.

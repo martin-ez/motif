@@ -5,18 +5,19 @@
 
 use std::time::{Duration, Instant};
 
-use motif::device::{Button, DeviceProfile};
+use motif::device::{Button, DeviceProfile, Encoder};
 use motif::ui::{
     App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, Legend,
-    NullRenderer, Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls,
+    NullRenderer, Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls, Turn,
 };
 
 /// The edge of a key, which is drawn for every control whether the page answers
 /// it or not, so a picture of the panel can be told from anything else drawn.
 const KEY_EDGE: char = '┌';
 
-/// The edge of a key whose event has just been delivered.
-const SOLID: char = '█';
+/// The edge of a key whose event has just been delivered, drawn nowhere on a
+/// panel every control of which is at rest.
+const MARKED_EDGE: char = '┃';
 
 /// How many frames that mark lasts, written out rather than read from the crate
 /// so that a change to the decay fails a test instead of retuning the frames
@@ -179,12 +180,12 @@ impl Recording {
         }
     }
 
-    /// Whether anything on the panel shown on `frame` is drawn solid, counting
-    /// from zero at the first frame of the run.
+    /// Whether anything on the panel shown on `frame` is marked, counting from
+    /// zero at the first frame of the run.
     fn marked_on(&self, frame: usize) -> bool {
         let shown = self.panels.get(frame).expect("the run drew this frame");
 
-        picture_of(shown).contains(SOLID)
+        picture_of(shown).contains(MARKED_EDGE)
     }
 }
 
@@ -646,6 +647,21 @@ fn a_control_the_page_does_not_answer_marks_all_the_same() {
     let screen = recorded([pressed(Button::Record)], MARKED_FRAMES + 2);
 
     assert!(screen.marked_on(0));
+}
+
+#[test]
+fn an_encoder_turned_marks_the_panel_as_a_press_does() {
+    let screen = recorded(
+        [ControlEvent::Turned {
+            encoder: Encoder::Main,
+            turn: Turn::Clockwise,
+            shifted: false,
+        }],
+        MARKED_FRAMES + 2,
+    );
+
+    assert!(screen.marked_on(0));
+    assert!(!screen.marked_on(MARKED_FRAMES));
 }
 
 #[test]

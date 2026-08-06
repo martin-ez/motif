@@ -273,7 +273,7 @@ fn drain(app: &mut impl App, controls: &mut impl Controls, marks: &mut Marks) ->
             break;
         };
 
-        marks.fired(event.control());
+        marks.fired(event);
 
         if app.control(event).is_exit() {
             return Flow::Exit;

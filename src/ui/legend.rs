@@ -2,20 +2,20 @@
 //!
 //! Two halves meet here and neither knows the other. A page declares which
 //! controls it answers; a backend says what to call the way each one is reached,
-//! in glyphs that belong to the panel. The legend puts the two together, which
-//! is what keeps a key out of every page and a page out of every backend.
+//! in glyphs that belong to the panel — which is what keeps a key out of every
+//! page and a page out of every backend.
 //!
 //! What it draws is a picture of the panel — the navigation cross, the scene
 //! buttons with the transport under them, the encoder beside — and no words at
-//! all. Every key wears the glyph that reaches it, drawn with a heavy edge where
-//! the page answers it and a light one where it does not: a screen that has to
-//! explain its controls in prose can go on being unreadable.
+//! all. Every key wears the glyph that reaches it and goes heavy for the few
+//! frames after its event arrives, the panel having no lamp under any key to
+//! say so itself.
 //!
 //! The picture is a surface of its own, never part of a frame. The device's keys
 //! cost the screen no rows, so the terminal's picture of them may not either.
 
 use crate::device::{Button, Control, Encoder};
-use crate::ui::{Cell, Controls, Hint, Marks};
+use crate::ui::{Cell, Controls, Hint, Marks, Turn};
 
 /// Where on the picture a key is drawn, and how wide it is there.
 #[derive(Debug, Clone, Copy)]
@@ -43,14 +43,18 @@ impl Seat {
     }
 }
 
-/// The four corners and two sides a key is drawn with.
+/// The four corners and three sides a key is drawn with.
+///
+/// The two walls are separate because an encoder marks the side that moved, so
+/// a key can be heavy down one edge and light down the other.
 struct Edges {
     top_left: char,
     top_right: char,
     bottom_left: char,
     bottom_right: char,
     horizontal: char,
-    vertical: char,
+    left: char,
+    right: char,
 }
 
 const LIGHT: Edges = Edges {
@@ -59,7 +63,8 @@ const LIGHT: Edges = Edges {
     bottom_left: '└',
     bottom_right: '┘',
     horizontal: '─',
-    vertical: '│',
+    left: '│',
+    right: '│',
 };
 
 const HEAVY: Edges = Edges {
@@ -68,7 +73,8 @@ const HEAVY: Edges = Edges {
     bottom_left: '┗',
     bottom_right: '┛',
     horizontal: '━',
-    vertical: '┃',
+    left: '┃',
+    right: '┃',
 };
 
 const ROUND: Edges = Edges {
@@ -77,25 +83,28 @@ const ROUND: Edges = Edges {
     bottom_left: '╰',
     bottom_right: '╯',
     horizontal: '─',
-    vertical: '│',
+    left: '│',
+    right: '│',
 };
 
-const DOUBLED: Edges = Edges {
-    top_left: '╔',
-    top_right: '╗',
-    bottom_left: '╚',
-    bottom_right: '╝',
-    horizontal: '═',
-    vertical: '║',
+const ROUND_LEFT_HEAVY: Edges = Edges {
+    top_left: '┎',
+    top_right: '╮',
+    bottom_left: '┖',
+    bottom_right: '╯',
+    horizontal: '─',
+    left: '┃',
+    right: '│',
 };
 
-const SOLID: Edges = Edges {
-    top_left: '█',
-    top_right: '█',
-    bottom_left: '█',
-    bottom_right: '█',
-    horizontal: '█',
-    vertical: '█',
+const ROUND_RIGHT_HEAVY: Edges = Edges {
+    top_left: '╭',
+    top_right: '┒',
+    bottom_left: '╰',
+    bottom_right: '┚',
+    horizontal: '─',
+    left: '│',
+    right: '┃',
 };
 
 const KEY_WIDTH: usize = 5;
@@ -223,8 +232,8 @@ fn span(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, c
 }
 
 fn face(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, hint: Option<Hint>) {
-    panel.set(at, row, Cell::new(edges.vertical));
-    panel.set(at + width.saturating_sub(1), row, Cell::new(edges.vertical));
+    panel.set(at, row, Cell::new(edges.left));
+    panel.set(at + width.saturating_sub(1), row, Cell::new(edges.right));
 
     if let Some(hint) = hint {
         centred(
@@ -241,11 +250,10 @@ fn face(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, h
 /// Which controls a page answers, and so which keys are live on it.
 ///
 /// A page answers a handful of controls and ignores the rest, and until it says
-/// which, the only way to find out is to press one and watch. Declaring it is
-/// what the [`picture`](Self::picture) is drawn from, so a control a page does
-/// not answer is drawn light rather than left out — the panel then reads the
-/// same everywhere, and a key that does nothing here is a fact the player can
-/// see rather than a silence.
+/// which, the only way to find out is to press one and watch. A shell composes
+/// one declaration from the page it is showing, the gestures that navigate and
+/// the way out of the run, so what is live is stated in one place rather than
+/// spread over whoever happens to handle it.
 ///
 /// ```
 /// use motif::device::{Button, Encoder};
@@ -306,32 +314,30 @@ impl Legend {
         self.answered[control.into().position()]
     }
 
-    /// The picture of the panel this page makes, each key wearing the glyph
-    /// `controls` reaches it by and nothing else.
+    /// The picture of the panel, each key wearing the glyph `controls` reaches
+    /// it by and nothing else.
     ///
-    /// A key the page answers is drawn with a heavy edge and one it ignores
-    /// with a light one, and every key keeps a place of its own. The encoder is
-    /// rounded rather than square so it does not read as a button, and lights
-    /// by doubling its edge: there is no heavy rounded corner.
+    /// Every key rests light and keeps a place of its own, so nothing moves
+    /// from page to page. A key `marks` holds is drawn heavy: the panel this
+    /// stands for has no lamp under any key, so the weight is spent on the one
+    /// thing a player cannot otherwise tell, which is whether a press arrived.
     ///
-    /// A key `marks` holds is drawn solid, whatever weight it rests at — there
-    /// is no fourth family of corners, and the weight reads either side of it.
+    /// The encoder is rounded rather than square so it does not read as a
+    /// button, and goes heavy down the side it was turned towards.
     ///
     /// ```
-    /// use motif::device::Button;
     /// use motif::ui::{Legend, Marks, Panel, ScriptedControls};
     ///
-    /// let legend = Legend::blank().answering(Button::Play);
-    /// let picture = legend.picture(&ScriptedControls::new([]), Marks::none());
+    /// let picture = Legend::blank().picture(&ScriptedControls::new([]), Marks::none());
     ///
     /// assert_eq!(picture.cells().len(), Panel::COLUMNS * Panel::ROWS);
     /// ```
     pub fn picture(&self, controls: &impl Controls, marks: Marks) -> Panel {
         let mut panel = Panel::blank();
 
-        self.draw_cross(&mut panel, controls, marks);
-        self.draw_grid(&mut panel, controls, marks);
-        self.draw_key(
+        draw_cross(&mut panel, controls, marks);
+        draw_grid(&mut panel, controls, marks);
+        draw_key(
             &mut panel,
             Seat::encoder(ENCODER_AT),
             Control::Encoder(Encoder::Main),
@@ -341,61 +347,62 @@ impl Legend {
 
         panel
     }
+}
 
-    fn draw_cross(&self, panel: &mut Panel, controls: &impl Controls, marks: Marks) {
-        self.draw_key(
-            panel,
-            Seat::key(0, CROSS_MIDDLE_AT),
-            Button::Up,
-            controls,
-            marks,
-        );
+fn draw_cross(panel: &mut Panel, controls: &impl Controls, marks: Marks) {
+    draw_key(
+        panel,
+        Seat::key(0, CROSS_MIDDLE_AT),
+        Button::Up,
+        controls,
+        marks,
+    );
 
-        for (at, button) in [
-            (CROSS_LEFT_AT, Button::Left),
-            (CROSS_MIDDLE_AT, Button::Down),
-            (CROSS_RIGHT_AT, Button::Right),
-        ] {
-            self.draw_key(panel, Seat::key(KEY_ROWS, at), button, controls, marks);
-        }
-    }
-
-    fn draw_grid(&self, panel: &mut Panel, controls: &impl Controls, marks: Marks) {
-        for (place, control) in SCENES.into_iter().enumerate() {
-            let at = GRID_AT + place * KEY_WIDTH;
-            self.draw_key(panel, Seat::key(0, at), control, controls, marks);
-        }
-        for (place, control) in ACTIONS.into_iter().enumerate() {
-            let at = GRID_AT + place * KEY_WIDTH;
-            self.draw_key(panel, Seat::key(KEY_ROWS, at), control, controls, marks);
-        }
-    }
-
-    fn draw_key(
-        &self,
-        panel: &mut Panel,
-        seat: Seat,
-        control: impl Into<Control> + Copy,
-        controls: &impl Controls,
-        marks: Marks,
-    ) {
-        let control = control.into();
-        let edges = edges_of(control, self.answers(control), marks.marked(control));
-        let Seat { top, at, width } = seat;
-
-        span(panel, top, at, width, edges, false);
-        face(panel, top + 1, at, width, edges, controls.hint(control));
-        span(panel, top + 2, at, width, edges, true);
+    for (at, button) in [
+        (CROSS_LEFT_AT, Button::Left),
+        (CROSS_MIDDLE_AT, Button::Down),
+        (CROSS_RIGHT_AT, Button::Right),
+    ] {
+        draw_key(panel, Seat::key(KEY_ROWS, at), button, controls, marks);
     }
 }
 
-fn edges_of(control: Control, lit: bool, marked: bool) -> &'static Edges {
-    match (control, lit, marked) {
-        (_, _, true) => &SOLID,
-        (Control::Encoder(_), false, false) => &ROUND,
-        (Control::Encoder(_), true, false) => &DOUBLED,
-        (Control::Button(_), false, false) => &LIGHT,
-        (Control::Button(_), true, false) => &HEAVY,
+fn draw_grid(panel: &mut Panel, controls: &impl Controls, marks: Marks) {
+    for (place, control) in SCENES.into_iter().enumerate() {
+        let at = GRID_AT + place * KEY_WIDTH;
+        draw_key(panel, Seat::key(0, at), control, controls, marks);
+    }
+    for (place, control) in ACTIONS.into_iter().enumerate() {
+        let at = GRID_AT + place * KEY_WIDTH;
+        draw_key(panel, Seat::key(KEY_ROWS, at), control, controls, marks);
+    }
+}
+
+fn draw_key(
+    panel: &mut Panel,
+    seat: Seat,
+    control: impl Into<Control> + Copy,
+    controls: &impl Controls,
+    marks: Marks,
+) {
+    let control = control.into();
+    let edges = edges_of(control, marks);
+    let Seat { top, at, width } = seat;
+
+    span(panel, top, at, width, edges, false);
+    face(panel, top + 1, at, width, edges, controls.hint(control));
+    span(panel, top + 2, at, width, edges, true);
+}
+
+fn edges_of(control: Control, marks: Marks) -> &'static Edges {
+    match control {
+        Control::Button(_) if marks.marked(control) => &HEAVY,
+        Control::Button(_) => &LIGHT,
+        Control::Encoder(encoder) => match marks.turn(encoder) {
+            Some(Turn::Clockwise) => &ROUND_RIGHT_HEAVY,
+            Some(Turn::Anticlockwise) => &ROUND_LEFT_HEAVY,
+            None => &ROUND,
+        },
     }
 }
 

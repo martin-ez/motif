@@ -76,18 +76,6 @@ impl ControlEvent {
             Self::Turned { shifted, .. } | Self::Pressed { shifted, .. } => shifted,
         }
     }
-
-    /// The control on the panel this happened to.
-    ///
-    /// What a legend, a meter or anything else indexing by control asks for, so
-    /// that reaching one does not mean matching on the shape of the event and
-    /// gaining a case to forget when the panel grows a control.
-    pub const fn control(self) -> Control {
-        match self {
-            Self::Turned { encoder, .. } => Control::Encoder(encoder),
-            Self::Pressed { button, .. } => Control::Button(button),
-        }
-    }
 }
 
 /// What a panel names the way a control is reached by.
