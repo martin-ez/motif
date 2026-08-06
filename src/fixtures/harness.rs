@@ -1,12 +1,13 @@
 //! Running a candidate over the whole fixture set and reporting what it scored.
 //!
-//! [`Score`] measures one sequence against one annotation; this walks the set,
-//! applies it to every fixture, and aggregates. It exists so that an accuracy
-//! claim in a pull request is a number produced the same way as the number it
-//! is compared against — an analyser that loads and aggregates for itself will
-//! eventually disagree with another about what the figure means.
+//! [`Score`] and [`Agreement`] measure one candidate against one annotation;
+//! this walks the set, applies one of them to every fixture, and aggregates. It
+//! exists so that an accuracy claim in a pull request is a number produced the
+//! same way as the number it is compared against — an analyser that loads and
+//! aggregates for itself will eventually disagree with another about what the
+//! figure means.
 //!
-//! A candidate arrives as a sequence of timestamps, so nothing here knows about
+//! A candidate arrives as beats, chords or notes, so nothing here knows about
 //! analysers or audio.
 
 use std::ffi::OsStr;
@@ -16,9 +17,22 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::{Annotation, AnnotationError, Score};
+use super::{Agreement, Annotation, AnnotationError, Chord, Comparison, Note, Score};
 
 const ANNOTATION_EXTENSION: &str = "beats";
+
+/// A per-fixture figure the harness can aggregate and name.
+///
+/// One [`Report`] serves every scorer rather than one report type each, so that
+/// a figure quoted in a pull request is produced, aggregated and labelled the
+/// same way whatever was measured.
+pub trait Measured: Copy + fmt::Display {
+    /// What the figure is called, for the line that aggregates it.
+    const QUOTED: &'static str;
+
+    /// The single figure to quote for one fixture, from zero to one.
+    fn quoted(&self) -> f64;
+}
 
 /// Which of a fixture's annotated positions a run is measured against.
 ///
@@ -108,7 +122,7 @@ pub fn checked_in() -> PathBuf {
 ///     Target::Beats.positions(truth.annotation()).collect()
 /// })?;
 ///
-/// assert_eq!(report.mean_f1(), 1.0);
+/// assert_eq!(report.mean(), 1.0);
 /// # Ok::<(), harness::RunError>(())
 /// ```
 pub fn measure(
@@ -116,18 +130,78 @@ pub fn measure(
     target: Target,
     mut candidate: impl FnMut(&GroundTruth) -> Vec<Duration>,
 ) -> Result<Report, RunError> {
-    let set = load(directory)?;
+    measure_with(
+        directory,
+        |_| true,
+        |truth| {
+            let annotated: Vec<Duration> = target.positions(truth.annotation()).collect();
+
+            Score::of(&annotated, &candidate(truth))
+        },
+    )
+}
+
+/// Score `candidate`'s chords against every fixture in `directory` that
+/// annotates harmony, agreeing at `comparison`.
+///
+/// A fixture whose annotation carries no chords is not part of the run at all,
+/// rather than scoring zero: a rhythm fixture has no harmony to be wrong about,
+/// and counting it would put the figure below what any analyser could reach.
+///
+/// # Errors
+///
+/// Returns [`RunError`] as [`measure`] does, and [`RunError::Empty`] where no
+/// fixture in the set annotates harmony.
+pub fn measure_chords(
+    directory: &Path,
+    comparison: Comparison,
+    mut candidate: impl FnMut(&GroundTruth) -> Vec<Chord>,
+) -> Result<Report<Agreement>, RunError> {
+    measure_with(
+        directory,
+        |truth| !truth.annotation().chords().is_empty(),
+        |truth| Agreement::of(truth.annotation().chords(), &candidate(truth), comparison),
+    )
+}
+
+/// Score `candidate`'s notes against every fixture in `directory` that
+/// annotates a monophonic line.
+///
+/// A fixture whose annotation carries no notes is left out of the run, on the
+/// same grounds as in [`measure_chords`].
+///
+/// # Errors
+///
+/// Returns [`RunError`] as [`measure`] does, and [`RunError::Empty`] where no
+/// fixture in the set annotates a line.
+pub fn measure_notes(
+    directory: &Path,
+    mut candidate: impl FnMut(&GroundTruth) -> Vec<Note>,
+) -> Result<Report<Score>, RunError> {
+    measure_with(
+        directory,
+        |truth| !truth.annotation().notes().is_empty(),
+        |truth| Score::of_notes(truth.annotation().notes(), &candidate(truth)),
+    )
+}
+
+fn measure_with<S>(
+    directory: &Path,
+    annotates: impl Fn(&GroundTruth) -> bool,
+    mut score: impl FnMut(&GroundTruth) -> S,
+) -> Result<Report<S>, RunError> {
+    let set: Vec<GroundTruth> = load(directory)?.into_iter().filter(annotates).collect();
+    if set.is_empty() {
+        return Err(RunError::Empty {
+            path: directory.to_owned(),
+        });
+    }
 
     let rows = set
         .into_iter()
-        .map(|truth| {
-            let annotated: Vec<Duration> = target.positions(truth.annotation()).collect();
-            let detected = candidate(&truth);
-
-            Row {
-                name: truth.name,
-                score: Score::of(&annotated, &detected),
-            }
+        .map(|truth| Row {
+            score: score(&truth),
+            name: truth.name,
         })
         .collect();
 
@@ -165,12 +239,6 @@ fn load(directory: &Path) -> Result<Vec<GroundTruth>, RunError> {
         set.push(GroundTruth { name, annotation });
     }
 
-    if set.is_empty() {
-        return Err(RunError::Empty {
-            path: directory.to_owned(),
-        });
-    }
-
     set.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(set)
 }
@@ -191,32 +259,32 @@ fn fixture_name(path: &Path) -> Option<String> {
 ///
 /// Rows are ordered by fixture name, so two reports are diffable.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Report {
-    rows: Vec<Row>,
+pub struct Report<S = Score> {
+    rows: Vec<Row<S>>,
 }
 
-impl Report {
+impl<S: Measured> Report<S> {
     /// What the candidate scored on each fixture, ordered by name.
-    pub fn rows(&self) -> &[Row] {
+    pub fn rows(&self) -> &[Row<S>] {
         &self.rows
     }
 
-    /// The mean of the per-fixture F1 scores, from zero to one.
+    /// The mean of the per-fixture figures, from zero to one.
     ///
     /// Every fixture counts once, whatever its length. The alternative — pooling
     /// the counts across the set — weights the reported figure by how many beats
     /// a fixture happens to contain, which lets a long easy fixture hide a short
     /// hard one.
-    pub fn mean_f1(&self) -> f64 {
+    pub fn mean(&self) -> f64 {
         if self.rows.is_empty() {
             return 0.0;
         }
 
-        self.rows.iter().map(|row| row.score.f1()).sum::<f64>() / self.rows.len() as f64
+        self.rows.iter().map(|row| row.score.quoted()).sum::<f64>() / self.rows.len() as f64
     }
 }
 
-impl fmt::Display for Report {
+impl<S: Measured> fmt::Display for Report<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let width = self
             .rows
@@ -226,22 +294,14 @@ impl fmt::Display for Report {
             .unwrap_or_default();
 
         for Row { name, score } in &self.rows {
-            writeln!(
-                f,
-                "{name:<width$}  F1 {:.3}  precision {:.3}  recall {:.3}  hits {}/{}  detected {}",
-                score.f1(),
-                score.precision(),
-                score.recall(),
-                score.hits(),
-                score.annotated(),
-                score.detected(),
-            )?;
+            writeln!(f, "{name:<width$}  {score}")?;
         }
 
         write!(
             f,
-            "mean F1 {:.3} over {} fixtures",
-            self.mean_f1(),
+            "mean {} {:.3} over {} fixtures",
+            S::QUOTED,
+            self.mean(),
             self.rows.len()
         )
     }
@@ -249,19 +309,19 @@ impl fmt::Display for Report {
 
 /// What a candidate scored on one fixture.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Row {
+pub struct Row<S = Score> {
     name: String,
-    score: Score,
+    score: S,
 }
 
-impl Row {
+impl<S: Measured> Row<S> {
     /// The fixture this scored against.
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// What the candidate scored on it.
-    pub fn score(&self) -> Score {
+    pub fn score(&self) -> S {
         self.score
     }
 }
@@ -294,10 +354,12 @@ pub enum RunError {
         /// What was wrong with it, and where.
         error: AnnotationError,
     },
-    /// The directory held no fixtures.
+    /// The directory held nothing this run could score.
     ///
     /// A run over nothing reports an aggregate over nothing, so it is a failure
-    /// rather than a perfect or an empty score.
+    /// rather than a perfect or an empty score. Scoring harmony or a line, a
+    /// fixture annotating neither is not in the run, so a set where none does
+    /// fails here too.
     Empty {
         /// The directory it walked.
         path: PathBuf,
