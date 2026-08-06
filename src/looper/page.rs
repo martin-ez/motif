@@ -178,6 +178,12 @@ impl LooperPage {
         )
     }
 
+    fn retime_taps_to_the_clock(&mut self) {
+        if self.taps.grid().sample_rate() != self.elapsed.sample_rate() {
+            self.taps = TapTempo::new(self.elapsed.sample_rate());
+        }
+    }
+
     fn order_transport(&mut self) {
         if self.ordered_transport == self.transport {
             return;
@@ -275,6 +281,7 @@ impl Page for LooperPage {
             shifted: true,
         } = event
         {
+            self.retime_taps_to_the_clock();
             let _joined = self.taps.tap(self.elapsed.read());
             return;
         }

@@ -19,6 +19,7 @@ use motif::audio::{
 };
 use motif::device::{AudioProfile, Button, DeviceProfile};
 use motif::looper::LooperPage;
+use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Page};
 
 thread_local! {
@@ -67,6 +68,10 @@ const BLOCK: usize = 128;
 /// come from the clock it was made with.
 const SAMPLE_RATE: u32 = 44_100;
 
+/// Half a second of frames at [`SAMPLE_RATE`], which is 120 BPM there and
+/// 130.6 at the rate the target profile asks for.
+const HALF_A_ROUNDED_SECOND: usize = SAMPLE_RATE as usize / 2;
+
 /// How long the two-thread test spends looking for a count that went backwards.
 const SEARCH: Duration = Duration::from_millis(50);
 
@@ -78,6 +83,15 @@ fn granted() -> StreamConfig {
         block_size: AUDIO.block_size,
         input_channels: 2,
         output_channels: 2,
+    }
+}
+
+/// What a device that rounds grants against [`request`]: the same stream at a
+/// rate the request did not ask for.
+fn rounded() -> StreamConfig {
+    StreamConfig {
+        sample_rate: SAMPLE_RATE,
+        ..granted()
     }
 }
 
@@ -266,6 +280,50 @@ fn a_tap_is_stamped_with_the_frames_the_stream_has_played() {
     page.control(shifted(Button::Play));
 
     assert_eq!(page.grid().beats(), [BLOCK as u64]);
+}
+
+#[test]
+fn a_counting_path_states_the_granted_rate_to_the_clock() {
+    let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
+    let mut path = Counting::new(frames, Passthrough::new());
+
+    path.prepare(rounded());
+
+    assert_eq!(elapsed.sample_rate(), SAMPLE_RATE);
+}
+
+#[test]
+fn a_clock_reports_the_rate_the_stream_granted() {
+    let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
+
+    let _stream = NullBackend::rounding(rounded())
+        .open(
+            &selection(),
+            request(),
+            Counting::new(frames, Passthrough::new()),
+        )
+        .expect("null backend opens");
+
+    assert_eq!(elapsed.sample_rate(), SAMPLE_RATE);
+}
+
+#[test]
+fn a_tap_is_timed_at_the_rate_the_device_granted() {
+    let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
+    let (mut page, engine) = LooperPage::driving(AUDIO, elapsed);
+    let mut stream = NullBackend::rounding(rounded())
+        .open(&selection(), request(), Counting::new(frames, engine))
+        .expect("null backend opens");
+
+    for _ in 0..TapTempo::TAPS_TO_A_TEMPO {
+        page.control(shifted(Button::Play));
+        stream.block(
+            &[0.0; HALF_A_ROUNDED_SECOND],
+            &mut [0.0; HALF_A_ROUNDED_SECOND],
+        );
+    }
+
+    assert_eq!(page.grid().beats_per_minute(), Some(120.0));
 }
 
 #[test]

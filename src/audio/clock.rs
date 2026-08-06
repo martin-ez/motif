@@ -14,17 +14,17 @@
 //! that knows how many frames went by.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use super::{AudioPath, Command, StreamConfig};
 
 /// Build a sample clock counting at `sample_rate`, and split it into the end
 /// that counts and the end that reads.
 ///
-/// The rate is the stream's own, from
-/// [`StreamConfig`](crate::audio::StreamConfig) rather than from what was asked
-/// for, and it travels with the clock so that a reader turning frames into a
-/// duration cannot pair them with a rate the device never granted.
+/// `sample_rate` is what was asked for, the only rate there is in setup.
+/// [`Counting`] replaces it with the rate the granted
+/// [`StreamConfig`](crate::audio::StreamConfig) carries, so a reader turning
+/// frames into a duration cannot pair them with a rate no device settled on.
 ///
 /// The storage is allocated here and never again, so this belongs in setup,
 /// before the stream starts.
@@ -42,14 +42,16 @@ use super::{AudioPath, Command, StreamConfig};
 /// ```
 pub fn sample_clock(sample_rate: u32) -> (SampleClockWriter, SampleClockReader) {
     let counted = Arc::new(AtomicU64::new(0));
+    let counting_at = Arc::new(AtomicU32::new(sample_rate));
 
     (
         SampleClockWriter {
             counted: Arc::clone(&counted),
+            counting_at: Arc::clone(&counting_at),
         },
         SampleClockReader {
             counted,
-            sample_rate,
+            counting_at,
         },
     )
 }
@@ -61,9 +63,14 @@ pub fn sample_clock(sample_rate: u32) -> (SampleClockWriter, SampleClockReader) 
 /// same frames twice.
 pub struct SampleClockWriter {
     counted: Arc<AtomicU64>,
+    counting_at: Arc<AtomicU32>,
 }
 
 impl SampleClockWriter {
+    fn counts_at(&mut self, sample_rate: u32) {
+        self.counting_at.store(sample_rate, Ordering::Release);
+    }
+
     /// Count `frames` more, and report the count they reached.
     ///
     /// Call it once per block, with the frames that block covered. The count
@@ -114,9 +121,14 @@ impl<P: AudioPath> Counting<P> {
 }
 
 impl<P: AudioPath> AudioPath for Counting<P> {
-    /// Nothing of its own to prepare: the clock counts frames whatever rate
-    /// they arrive at, and the configuration goes on to the path it wraps.
+    /// States the granted rate to the clock, then prepares the path it wraps.
+    ///
+    /// This is the first moment the rate the device settled on exists, and it
+    /// arrives on the thread that opened the stream and before any block, so
+    /// publishing it here costs a reader nothing and reaches one before the
+    /// first frame it could time against.
     fn prepare(&mut self, config: StreamConfig) {
+        self.elapsed.counts_at(config.sample_rate);
         self.path.prepare(config);
     }
 
@@ -138,7 +150,7 @@ impl<P: AudioPath> AudioPath for Counting<P> {
 /// against it.
 pub struct SampleClockReader {
     counted: Arc<AtomicU64>,
-    sample_rate: u32,
+    counting_at: Arc<AtomicU32>,
 }
 
 impl SampleClockReader {
@@ -155,8 +167,10 @@ impl SampleClockReader {
     ///
     /// Anything timing against this clock takes its rate from here rather than
     /// from a profile, since the two differ whenever the device granted
-    /// something other than what was asked for.
-    pub const fn sample_rate(&self) -> u32 {
-        self.sample_rate
+    /// something other than what was asked for. It is read rather than kept:
+    /// the granted rate arrives when the stream opens, which is after anything
+    /// timing against the clock was built.
+    pub fn sample_rate(&self) -> u32 {
+        self.counting_at.load(Ordering::Acquire)
     }
 }

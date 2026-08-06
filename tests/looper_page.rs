@@ -6,7 +6,8 @@
 //! application is allowed to know about either end.
 
 use motif::audio::{
-    Command, CommandReceiver, CommandSender, SampleClockWriter, command_channel, sample_clock,
+    AudioPath, Command, CommandReceiver, CommandSender, Counting, Passthrough, SampleClockWriter,
+    StreamConfig, command_channel, sample_clock,
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{
@@ -24,6 +25,14 @@ const HALF_SECOND: usize = SECOND as usize / 2;
 /// The stack a loop with something on it is at least as deep as, so a position
 /// drawn for its playhead is not also asserting an empty stack.
 const A_TAKE: usize = 1;
+
+/// A rate no device profile in the crate uses, so a tempo read at it can only
+/// have come from the stream that stated it.
+const ROUNDED_SECOND: u32 = 44_100;
+
+/// Half a second of frames at [`ROUNDED_SECOND`], which is 120 BPM there and
+/// 130.6 at the rate the page was built with.
+const HALF_A_ROUNDED_SECOND: usize = ROUNDED_SECOND as usize / 2;
 
 /// Room for more commands than any test sends, so a refused send is a fact
 /// about the page rather than about the queue.
@@ -533,6 +542,29 @@ fn taps_are_read_at_the_rate_the_clock_counts_at() {
     }
 
     assert_eq!(page.grid().sample_rate(), half_rate);
+    assert!(screen_of(&mut page).contains("120.0 BPM"));
+}
+
+#[test]
+fn taps_are_read_at_the_rate_the_stream_stated_after_the_page_was_built() {
+    let (mut page, frames) = page_on_a_clock_at(SECOND);
+    let mut stream = Counting::new(frames, Passthrough::new());
+    stream.prepare(StreamConfig {
+        sample_rate: ROUNDED_SECOND,
+        block_size: DeviceProfile::TARGET.audio.block_size,
+        input_channels: 2,
+        output_channels: 2,
+    });
+
+    for _ in 0..TapTempo::TAPS_TO_A_TEMPO {
+        page.control(shifted(Button::Play));
+        stream.render(
+            &[0.0; HALF_A_ROUNDED_SECOND],
+            &mut [0.0; HALF_A_ROUNDED_SECOND],
+        );
+    }
+
+    assert_eq!(page.grid().sample_rate(), ROUNDED_SECOND);
     assert!(screen_of(&mut page).contains("120.0 BPM"));
 }
 
