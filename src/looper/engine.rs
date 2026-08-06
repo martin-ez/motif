@@ -27,8 +27,8 @@ const UNITY_GAIN: f32 = 1.0;
 /// output alone — a muted take is still recorded.
 ///
 /// A layer is recorded after the loop is played, so the input is heard once
-/// rather than twice. It appends from the layer's start rather than from the
-/// playhead, and one the stack has no room for takes nothing.
+/// rather than twice. It is written from the playhead it was punched in at and
+/// carries on round the boundary; one the stack has no room for takes nothing.
 ///
 /// ```
 /// use motif::audio::{AudioPath, Command, Commanded, SendError, command_channel};
@@ -93,14 +93,14 @@ impl LoopEngine {
     }
 
     fn move_to(&mut self, transport: Transport) {
+        if transport.plays_loop() && !self.transport.plays_loop() {
+            self.playhead = 0;
+        }
         if transport == Transport::Overdubbing && self.transport != Transport::Overdubbing {
             self.layer_open = self.buffer.depth() < LoopBuffer::LAYERS;
             if self.layer_open {
-                self.buffer.overdub();
+                self.buffer.overdub(self.playhead);
             }
-        }
-        if transport.plays_loop() && !self.transport.plays_loop() {
-            self.playhead = 0;
         }
 
         self.transport = transport;

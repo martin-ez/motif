@@ -271,7 +271,7 @@ fn a_take_takes_an_overdub_for_every_layer_over_it() {
 }
 
 #[test]
-fn an_overdub_opened_mid_loop_lands_at_the_top_of_the_loop() {
+fn an_overdub_opened_mid_loop_lands_at_the_playhead() {
     let (mut engine, mut sender, _position) = engine();
 
     press(&mut sender, Command::SetTransport(Transport::Recording));
@@ -283,7 +283,38 @@ fn an_overdub_opened_mid_loop_lands_at_the_top_of_the_loop() {
     press(&mut sender, Command::SetTransport(Transport::Stopped));
     press(&mut sender, Command::SetTransport(Transport::Playing));
 
-    assert_eq!(heard(&mut engine, 4), [0.375, 0.5, 0.75, 1.0]);
+    assert_eq!(heard(&mut engine, 4), [0.25, 0.5, 0.875, 1.0]);
+}
+
+#[test]
+fn an_overdub_held_across_the_loop_end_keeps_recording() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5, 0.75, 1.0]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.125, 0.125, 0.125]);
+    played(&mut engine, &[0.5, 0.5, 0.5, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 4), [0.75, 1.0, 1.25, 1.5]);
+}
+
+#[test]
+fn an_overdub_carries_a_block_that_straddles_the_loop_end() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5, 0.75]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    heard(&mut engine, 2);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.125]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(heard(&mut engine, 3), [0.375, 0.5, 0.875]);
 }
 
 #[test]
@@ -606,6 +637,24 @@ fn playing_the_loop_over_the_input_does_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "playing a block allocated");
+}
+
+#[test]
+fn an_overdub_across_the_loop_boundary_does_not_allocate() {
+    let (mut engine, mut sender, _position) = engine();
+    let captured = vec![0.25; 4];
+    let mut playing = vec![0.0; 4];
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    engine.render(&captured[..3], &mut playing[..3]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+
+    let before = allocations();
+    for _ in 0..LoopBuffer::LAYERS {
+        engine.render(&captured, &mut playing);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before, "an overdub over the boundary allocated");
 }
 
 #[test]
