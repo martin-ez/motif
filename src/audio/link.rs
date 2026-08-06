@@ -78,8 +78,9 @@ where
     /// through what `path` builds, and having opened nothing yet.
     ///
     /// A path is built rather than held, because opening a stream moves one to
-    /// where the callback can reach it and nothing brings it back: every stream
-    /// the link opens gets one of its own.
+    /// where the callback can reach it: every stream the link opens gets one of
+    /// its own, and [`Escrow`](super::Escrow) is what builds those out of a path
+    /// a run has only one of.
     ///
     /// Touches no device, so this cannot fail; the first
     /// [`open`](Self::open) is where a device gets a say.

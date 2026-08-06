@@ -55,13 +55,13 @@ pub trait AudioPath: Send + 'static {
     fn apply(&mut self, command: Command) -> bool;
 }
 
-/// A path a caller has one of, and silence once it has been handed over.
+/// A path that may not be there, and silence where it is not.
 ///
 /// A [`DeviceLink`](super::DeviceLink) builds a path per stream it opens, which
 /// a path holding one end of something cannot answer twice: a loop engine holds
 /// the receiving end of the command queue and the publishing end of the
-/// playhead, and there is one of each. `move || path.take()` is how such a path
-/// reaches the first stream, and `None` is what a stream opened after it plays.
+/// playhead, and there is one of each. [`Escrow`](super::Escrow) is what lends
+/// such a path from one stream to the next, and this is what it plays meanwhile.
 impl<P: AudioPath> AudioPath for Option<P> {
     fn prepare(&mut self, config: StreamConfig) {
         if let Some(path) = self {
