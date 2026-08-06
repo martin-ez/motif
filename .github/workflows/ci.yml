@@ -70,6 +70,10 @@ jobs:
       # comments, no test modules under src/, no TODO markers, no prose outside
       # the code beyond a folder README, no documentation of unbuilt features.
       - run: scripts/check-style.sh
+      # The body check has no Rust to be tested from tests/, so it carries its
+      # cases with it, and they run wherever the script can change.
+      - if: ${{ !cancelled() }}
+        run: scripts/check-pr-body.sh --selftest
 
   test:
     name: test (${{ matrix.os }})

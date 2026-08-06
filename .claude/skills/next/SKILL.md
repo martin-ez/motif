@@ -77,6 +77,11 @@ than quietly taking another route.
 
 Link the issue in the body on its own line — `Tracks #74`, never `Closes`.
 
+Write the body with each paragraph on a single line, however long, and check it
+with `scripts/check-pr-body.sh -F body.md` before you open anything. The body is
+the squashed commit message; wrapping it at 80 columns the way the rest of this
+repository is wrapped puts those breaks into `main`'s history for good.
+
 **Do not close the issue and do not merge.** Merging settles it: the `tracking`
 workflow runs `done` for every issue the body tracks, and `release` if the pull
 request is closed unmerged. Closing it by hand earlier has the tracker assert

@@ -191,6 +191,14 @@ not a fact about the change.
 closes the issue behind `track.sh`'s back, leaves `wip` set, and binds to only
 the first of several numbers.
 
+**4.7 A paragraph in the body is one line.** Do not wrap it at 72 or 80 columns
+the way every file in this repository is wrapped: a file is read in a diff, and
+a body is laid out by a renderer. GitHub keeps each newline as a break, so a
+wrapped body reaches `main`'s history in the squashed commit message as ragged
+short lines that nothing will re-flow, and gets wrapped again on top of that.
+One line per paragraph and one per bullet; two trailing spaces where the break
+itself is the point. `scripts/check-pr-body.sh` says so before CI does.
+
 ## Task tracking
 
 **GitHub Issues is the single source of truth.** Not a markdown TODO list, not a

@@ -1,6 +1,8 @@
 <!--
 Title: type(scope): summary — at most 50 characters, and clear on its own.
 Keep the body short. What changed and why; the code accounts for how.
+Do not wrap a paragraph. One line each, however long: this body becomes the
+squashed commit message, and GitHub keeps every break you put in it.
 -->
 
 <!-- One or two paragraphs of context: the problem this solves, and why now.
