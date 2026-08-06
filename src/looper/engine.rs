@@ -15,7 +15,7 @@
 use crate::audio::{AudioPath, Command, StreamConfig};
 use crate::device::AudioProfile;
 
-use super::{LoopBuffer, LoopPosition, PositionWriter, Transport, WaveformWriter};
+use super::{LoopBuffer, LoopPosition, PositionWriter, TakeWriter, Transport, WaveformWriter};
 
 const UNITY_GAIN: f32 = 1.0;
 
@@ -33,12 +33,13 @@ const UNITY_GAIN: f32 = 1.0;
 /// ```
 /// use motif::audio::{AudioPath, Command, Commanded, SendError, command_channel};
 /// use motif::device::DeviceProfile;
-/// use motif::looper::{LoopEngine, Transport, position_meter, waveform_meter};
+/// use motif::looper::{LoopEngine, Transport, position_meter, take_handoff, waveform_meter};
 ///
 /// let (mut player, commands) = command_channel(4);
 /// let (writer, position) = position_meter();
 /// let (shape, _drawn) = waveform_meter();
-/// let engine = LoopEngine::new(DeviceProfile::TARGET.audio, writer, shape);
+/// let (crossing, _takes) = take_handoff(DeviceProfile::TARGET.audio);
+/// let engine = LoopEngine::new(DeviceProfile::TARGET.audio, writer, shape, crossing);
 /// let mut engine = Commanded::new(commands, engine);
 ///
 /// player.send(Command::SetTransport(Transport::Recording))?;
@@ -56,6 +57,7 @@ pub struct LoopEngine {
     buffer: LoopBuffer,
     position: PositionWriter,
     waveform: WaveformWriter,
+    takes: TakeWriter,
     gained: Box<[f32]>,
     transport: Transport,
     playhead: usize,
@@ -66,16 +68,21 @@ pub struct LoopEngine {
 
 impl LoopEngine {
     /// An engine over the longest loop `profile` allows, idle and unmuted at
-    /// unity gain, publishing where the loop is to `position` and what is in
-    /// it to `waveform`. Its buffers are allocated here and never again, so
-    /// this belongs in setup, before the stream starts.
+    /// unity gain, publishing where the loop is to `position`, what is in it to
+    /// `waveform`, and each finished take to `takes`. Its buffers are allocated
+    /// here and never again, so this belongs in setup, before the stream starts.
     ///
     /// # Panics
     ///
     /// Panics on a profile with no loop to record or no block to record it in,
     /// either being a mistake in setup rather than a condition worth reporting
     /// from the real-time thread.
-    pub fn new(profile: AudioProfile, position: PositionWriter, waveform: WaveformWriter) -> Self {
+    pub fn new(
+        profile: AudioProfile,
+        position: PositionWriter,
+        waveform: WaveformWriter,
+        takes: TakeWriter,
+    ) -> Self {
         let block = profile.block_size as usize;
         assert!(block > 0, "an engine renders nothing block by block");
 
@@ -83,6 +90,7 @@ impl LoopEngine {
             buffer: LoopBuffer::for_profile(profile),
             position,
             waveform,
+            takes,
             gained: vec![0.0; block].into_boxed_slice(),
             transport: Transport::default(),
             playhead: 0,
@@ -93,6 +101,7 @@ impl LoopEngine {
     }
 
     fn move_to(&mut self, transport: Transport) {
+        let was_writing = self.writing_the_loop();
         if transport.plays_loop() && !self.transport.plays_loop() {
             self.playhead = 0;
         }
@@ -104,6 +113,21 @@ impl LoopEngine {
         }
 
         self.transport = transport;
+        if self.writing_the_loop() != was_writing {
+            self.hand_over_the_take();
+        }
+    }
+
+    const fn writing_the_loop(&self) -> bool {
+        self.transport.captures_input() && self.layer_open
+    }
+
+    fn hand_over_the_take(&mut self) {
+        if self.writing_the_loop() {
+            self.takes.abandon();
+        } else {
+            self.takes.begin(&self.buffer);
+        }
     }
 
     fn mix_block(&mut self, captured: &[f32], playing: &mut [f32]) {
@@ -123,6 +147,7 @@ impl LoopEngine {
             }
         }
         self.buffer.resummarise(frames);
+        self.takes.advance(&self.buffer);
 
         for (played, level) in playing.iter_mut().zip(gained) {
             *played += level;
@@ -184,12 +209,14 @@ impl AudioPath for LoopEngine {
             Command::Undo => {
                 if self.buffer.undo() {
                     self.layer_open = false;
+                    self.hand_over_the_take();
                 }
             }
             Command::Clear => {
                 self.buffer.clear();
                 self.layer_open = true;
                 self.playhead = 0;
+                self.hand_over_the_take();
             }
         }
 

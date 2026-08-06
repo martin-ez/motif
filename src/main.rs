@@ -36,7 +36,7 @@ fn requested() -> StreamRequest {
 fn play() -> Result<(), RenderError> {
     let audio = DeviceProfile::TARGET.audio;
     let (frames, elapsed) = sample_clock(audio.sample_rate);
-    let (looper, engine) = LooperPage::driving(audio, elapsed);
+    let (looper, engine, _takes) = LooperPage::driving(audio, elapsed);
     let playing = Escrow::holding(Counting::new(frames, engine));
     let backend = CpalBackend::new();
     let selection = backend

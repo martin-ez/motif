@@ -29,7 +29,9 @@ fn pressed(button: Button) -> ControlEvent {
 }
 
 fn looper() -> (LooperPage, Commanded<LoopEngine>) {
-    LooperPage::driving(AUDIO, sample_clock(AUDIO.sample_rate).1)
+    let (page, engine, _takes) = LooperPage::driving(AUDIO, sample_clock(AUDIO.sample_rate).1);
+
+    (page, engine)
 }
 
 fn rendering(engine: &mut Commanded<LoopEngine>, frames: usize) {

@@ -1,14 +1,14 @@
 //! What the player is doing with the loop, and where the loop is kept.
 //!
 //! [`Transport`] is the state a player drives, [`LoopBuffer`] holds the samples
-//! it governs, and [`LoopEngine`] owns the two of them on the audio thread.
+//! it governs, [`LoopEngine`] owns both of them on the audio thread, and
+//! [`take_handoff`] is how a finished take reaches the thread that analyses it.
 //!
-//! [`LoopBuffer`] is sized from the device profile and allocated before the
-//! stream starts, so the longest loop is a constraint the machine states rather
-//! than an accident of free memory — a buffer that grew to meet a long take
-//! would have to allocate on the thread that may not. Layers are a fixed stack
-//! of [`LoopBuffer::LAYERS`] for the same reason, and are summed as the loop is
-//! read rather than as it is recorded: a running mix would leave
+//! [`LoopBuffer`] is sized from the device profile and allocated in setup, so
+//! the longest loop is a constraint the machine states rather than an accident
+//! of free memory: one grown to meet a long take would allocate on the thread
+//! that may not. Layers are a fixed stack of [`LoopBuffer::LAYERS`] for the
+//! same reason, and are summed as the loop is read: a running mix would leave
 //! [`LoopBuffer::undo`] subtracting a layer a float sum cannot restore exactly.
 //!
 //! One sample per frame, as the ring across the audio boundary carries them: a
@@ -21,12 +21,14 @@ use crate::device::AudioProfile;
 mod engine;
 mod page;
 mod position;
+mod take;
 mod transport;
 mod waveform;
 
 pub use engine::LoopEngine;
 pub use page::LooperPage;
 pub use position::{LoopPosition, PositionReader, PositionWriter, position_meter};
+pub use take::{FinishedTake, TakeReader, TakeWriter, take_handoff};
 pub use transport::Transport;
 pub use waveform::{Extremes, LoopWaveform, WaveformReader, WaveformWriter, waveform_meter};
 
