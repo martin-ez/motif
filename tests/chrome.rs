@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use motif::device::Button;
-use motif::ui::{App, Cell, Chrome, ControlEvent, Flow, Frame, Legend, Region};
+use motif::ui::{App, Cell, Chrome, ControlEvent, Flow, Frame, Region};
 
 const MARKER: char = '*';
 
@@ -62,10 +62,6 @@ impl App for Filling {
         self.taken.0.borrow_mut().push(event);
 
         self.flow
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(Button::Record)
     }
 
     fn draw(&mut self, mut region: Region<'_>) -> Flow {
@@ -163,13 +159,6 @@ fn a_control_reaches_the_application() {
     chrome.control(pressed(Button::Play));
 
     assert_eq!(taken.events(), vec![pressed(Button::Play)]);
-}
-
-#[test]
-fn the_legend_is_the_applications() {
-    let (chrome, _) = around(Filling::new());
-
-    assert!(chrome.legend().answers(Button::Record));
 }
 
 #[test]

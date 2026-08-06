@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use motif::device::{Button, DeviceProfile, Encoder};
 use motif::ui::{
-    App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, Legend,
-    NullRenderer, Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls, Turn,
+    App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, NullRenderer,
+    Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls, Turn,
 };
 
 /// The edge of a key, which is drawn for every control whether the page answers
@@ -71,10 +71,6 @@ impl App for Page {
             ControlEvent::Pressed { button, .. } if self.quits_on == Some(button) => Flow::Exit,
             _ => Flow::Continue,
         }
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(Button::Play)
     }
 
     fn draw(&mut self, mut region: Region<'_>) -> Flow {
@@ -523,10 +519,6 @@ struct Filling;
 impl App for Filling {
     fn control(&mut self, _event: ControlEvent) -> Flow {
         Flow::Continue
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(Button::Play)
     }
 
     fn draw(&mut self, mut region: Region<'_>) -> Flow {

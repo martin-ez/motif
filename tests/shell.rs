@@ -12,9 +12,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use motif::device::{Button, Control};
+use motif::device::Button;
 use motif::ui::{
-    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Intent, Legend, Mode, Navigation,
+    App, Cell, ControlEvent, Controls, EventLoop, Flow, Frame, Intent, Mode, Navigation,
     NullRenderer, Page, Region, Renderer, ScriptedClock, ScriptedControls, Shell,
 };
 
@@ -47,15 +47,13 @@ impl Taken {
 
 struct Marked {
     glyph: char,
-    answers: Button,
     taken: Taken,
 }
 
 impl Marked {
-    fn new(glyph: char, answers: Button) -> Self {
+    fn new(glyph: char) -> Self {
         Self {
             glyph,
-            answers,
             taken: Taken::default(),
         }
     }
@@ -68,10 +66,6 @@ impl Marked {
 impl Page for Marked {
     fn control(&mut self, event: ControlEvent) {
         self.taken.0.borrow_mut().push(event);
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank().answering(self.answers)
     }
 
     fn draw(&mut self, mut region: Region<'_>) {
@@ -114,10 +108,7 @@ impl Navigation for Navigating {
 }
 
 fn beside(page: Marked) -> [Box<dyn Page>; Mode::ALL.len()] {
-    [
-        Box::new(page),
-        Box::new(Marked::new(ELSEWHERE, Button::Play)),
-    ]
+    [Box::new(page), Box::new(Marked::new(ELSEWHERE))]
 }
 
 fn shell_of(page: Marked) -> Shell {
@@ -125,7 +116,7 @@ fn shell_of(page: Marked) -> Shell {
 }
 
 fn showing(glyph: char) -> (Shell, Taken) {
-    let page = Marked::new(glyph, Button::Play);
+    let page = Marked::new(glyph);
     let taken = page.taken();
 
     (shell_of(page), taken)
@@ -135,13 +126,13 @@ fn showing_elsewhere(page: Marked) -> (Shell, Taken) {
     let taken = page.taken();
 
     (
-        Shell::new([Box::new(Marked::new(MARKER, Button::Play)), Box::new(page)]),
+        Shell::new([Box::new(Marked::new(MARKER)), Box::new(page)]),
         taken,
     )
 }
 
 fn navigated(navigation: Navigating) -> (Shell, Taken) {
-    let page = Marked::new(MARKER, Button::Play);
+    let page = Marked::new(MARKER);
     let taken = page.taken();
 
     (Shell::navigated_by(beside(page), navigation), taken)
@@ -186,41 +177,6 @@ fn a_control_reaches_the_showing_page() {
     driven_by(&mut shell, [pressed(Button::Play)]);
 
     assert_eq!(taken.events(), vec![pressed(Button::Play)]);
-}
-
-#[test]
-fn the_shell_takes_its_legend_from_the_showing_page() {
-    let page = Marked::new(MARKER, Button::Record);
-    let shell = shell_of(page);
-
-    assert!(shell.legend().answers(Button::Record));
-}
-
-#[test]
-fn the_shell_declares_what_its_navigation_keeps() {
-    let (shell, _) = navigated(Navigating(vec![Button::Up]));
-
-    assert!(shell.legend().answers(Button::Up));
-}
-
-#[test]
-fn a_shell_with_no_navigation_declares_only_the_page() {
-    let shell = shell_of(Marked::new(MARKER, Button::Play));
-
-    for control in Control::ALL {
-        let expected = matches!(control, Control::Button(Button::Play));
-
-        assert_eq!(shell.legend().answers(control), expected, "{control:?}");
-    }
-}
-
-#[test]
-fn changing_the_navigation_changes_the_legend_the_shell_declares() {
-    let (one, _) = navigated(Navigating(vec![Button::Up]));
-    let (other, _) = navigated(Navigating(vec![Button::Down]));
-
-    assert!(one.legend().answers(Button::Up) && !one.legend().answers(Button::Down));
-    assert!(other.legend().answers(Button::Down) && !other.legend().answers(Button::Up));
 }
 
 #[test]
@@ -284,7 +240,7 @@ fn an_intent_moves_which_page_draws() {
 
 #[test]
 fn an_intent_moves_which_page_a_control_reaches() {
-    let (mut shell, taken) = showing_elsewhere(Marked::new(ELSEWHERE, Button::Play));
+    let (mut shell, taken) = showing_elsewhere(Marked::new(ELSEWHERE));
 
     shell.apply(Intent::Show(Mode::ALL[1]));
     driven_by(&mut shell, [pressed(Button::Play)]);
@@ -300,15 +256,6 @@ fn a_control_does_not_reach_a_page_that_is_not_showing() {
     driven_by(&mut shell, [pressed(Button::Play)]);
 
     assert!(taken.events().is_empty());
-}
-
-#[test]
-fn the_legend_moves_with_the_page_that_is_showing() {
-    let (mut shell, _) = showing_elsewhere(Marked::new(ELSEWHERE, Button::Record));
-
-    shell.apply(Intent::Show(Mode::ALL[1]));
-
-    assert!(shell.legend().answers(Button::Record));
 }
 
 #[test]

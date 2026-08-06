@@ -21,7 +21,7 @@ use crate::looper::{
     take_handoff, waveform_meter,
 };
 use crate::seq::{BeatGrid, TapTempo};
-use crate::ui::{ControlEvent, Legend, Page, Region, Turn};
+use crate::ui::{ControlEvent, Page, Region, Turn};
 
 const QUEUED_COMMANDS: usize = 8;
 const STATE_ROW: usize = 0;
@@ -383,16 +383,6 @@ impl Page for LooperPage {
             };
             self.order_transport();
         }
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank()
-            .answering(Button::Play)
-            .answering(Button::Stop)
-            .answering(Button::Record)
-            .answering(Button::Down)
-            .answering(Button::Shift)
-            .answering(Encoder::Main)
     }
 
     /// Every control is ordered again here where the queue was full when it was

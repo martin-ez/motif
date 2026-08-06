@@ -17,7 +17,7 @@
 use crate::audio::{
     AudioBackend, AudioPath, AudioState, DeviceError, DeviceLink, DuplexStream, Levels, SharedLink,
 };
-use crate::ui::{App, ControlEvent, Flow, Legend, LevelMeter, Region};
+use crate::ui::{App, ControlEvent, Flow, LevelMeter, Region};
 
 const LABEL: &str = "audio ";
 const STATUS_ROWS: usize = 1;
@@ -40,17 +40,13 @@ const METERS_COLUMNS: usize =
 /// };
 /// use motif::device::Button;
 /// use motif::monitor::Monitor;
-/// use motif::ui::{App, ControlEvent, Flow, Legend, Region};
+/// use motif::ui::{App, ControlEvent, Flow, Region};
 ///
 /// struct Quiet;
 ///
 /// impl App for Quiet {
 ///     fn control(&mut self, _event: ControlEvent) -> Flow {
 ///         Flow::Continue
-///     }
-///
-///     fn legend(&self) -> Legend {
-///         Legend::blank().answering(Button::Play)
 ///     }
 ///
 ///     fn draw(&mut self, _region: Region<'_>) -> Flow {
@@ -182,10 +178,6 @@ impl<A: App, B: AudioBackend, F> Monitor<A, B, F> {
 impl<A: App, B: AudioBackend, F> App for Monitor<A, B, F> {
     fn control(&mut self, event: ControlEvent) -> Flow {
         self.app.control(event)
-    }
-
-    fn legend(&self) -> Legend {
-        self.app.legend()
     }
 
     /// The bottom row is taken for the state and the two levels before the

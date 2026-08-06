@@ -620,28 +620,6 @@ fn play_without_shift_still_plays_rather_than_tapping() {
 }
 
 #[test]
-fn the_page_declares_the_transport_buttons_it_answers() {
-    let legend = page().legend();
-
-    assert!(legend.answers(Button::Play));
-    assert!(legend.answers(Button::Stop));
-    assert!(legend.answers(Button::Record));
-}
-
-#[test]
-fn the_page_declares_nothing_for_a_control_it_leaves_alone() {
-    let legend = page().legend();
-
-    assert!(!legend.answers(Button::Up));
-    assert!(!legend.answers(Button::FirstScene));
-}
-
-#[test]
-fn the_page_declares_the_encoder_the_gain_moves_by() {
-    assert!(page().legend().answers(Encoder::Main));
-}
-
-#[test]
 fn a_new_page_is_at_unity_and_unmuted() {
     let page = page();
 
@@ -1073,14 +1051,4 @@ fn a_loop_that_was_emptied_is_not_emptied_again_every_frame() {
     drawn(&mut page);
 
     assert_eq!(ordered(&mut orders), []);
-}
-
-#[test]
-fn the_page_declares_the_button_that_empties_the_loop() {
-    assert!(page().legend().answers(Button::Down));
-}
-
-#[test]
-fn the_page_declares_the_shift_its_gestures_are_held_with() {
-    assert!(page().legend().answers(Button::Shift));
 }

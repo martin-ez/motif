@@ -16,7 +16,7 @@ use motif::audio::{
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::settings::{AudioPage, AudioSetting};
-use motif::ui::{ControlEvent, Controls, Frame, Legend, Page, ScriptedControls, Turn};
+use motif::ui::{ControlEvent, Controls, Frame, Page, ScriptedControls, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const RATE: u32 = 48_000;
@@ -383,18 +383,6 @@ fn only_the_selected_setting_is_marked() {
 
     assert_eq!(marked.len(), 1);
     assert!(marked[0].starts_with("> input"), "{}", marked[0]);
-}
-
-#[test]
-fn the_page_declares_the_controls_it_moves_by() {
-    let legend: Legend = page().legend();
-
-    assert!(legend.answers(Button::Up));
-    assert!(legend.answers(Button::Down));
-    assert!(legend.answers(Button::Left));
-    assert!(legend.answers(Button::Right));
-    assert!(legend.answers(Encoder::Main));
-    assert!(!legend.answers(Button::Play));
 }
 
 #[test]

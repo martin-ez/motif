@@ -1,6 +1,6 @@
 //! The row above the application: what instrument it is.
 
-use crate::ui::{App, ControlEvent, Flow, Legend, Region, columns_of};
+use crate::ui::{App, ControlEvent, Flow, Region, columns_of};
 
 const NAME: &str = concat!("motif ", env!("CARGO_PKG_VERSION"));
 const CHROME_ROWS: usize = 1;
@@ -21,17 +21,13 @@ fn write_right(region: &mut Region<'_>, text: &str) {
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{App, Cell, Chrome, ControlEvent, Flow, Frame, Legend, Region};
+/// use motif::ui::{App, Cell, Chrome, ControlEvent, Flow, Frame, Region};
 ///
 /// struct Blank;
 ///
 /// impl App for Blank {
 ///     fn control(&mut self, _event: ControlEvent) -> Flow {
 ///         Flow::Continue
-///     }
-///
-///     fn legend(&self) -> Legend {
-///         Legend::blank().answering(Button::Play)
 ///     }
 ///
 ///     fn draw(&mut self, mut region: Region<'_>) -> Flow {
@@ -62,10 +58,6 @@ impl<A: App> Chrome<A> {
 impl<A: App> App for Chrome<A> {
     fn control(&mut self, event: ControlEvent) -> Flow {
         self.app.control(event)
-    }
-
-    fn legend(&self) -> Legend {
-        self.app.legend()
     }
 
     fn draw(&mut self, region: Region<'_>) -> Flow {

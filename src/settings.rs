@@ -19,7 +19,7 @@ use crate::audio::{
 };
 use crate::closed_set;
 use crate::device::{Button, Encoder};
-use crate::ui::{Cell, ControlEvent, Legend, Page, Region, Turn};
+use crate::ui::{Cell, ControlEvent, Page, Region, Turn};
 
 closed_set! {
     /// One thing about the audio path a player chooses.
@@ -381,15 +381,6 @@ where
             } => self.adjust(false),
             _ => {}
         }
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank()
-            .answering(Button::Up)
-            .answering(Button::Down)
-            .answering(Button::Left)
-            .answering(Button::Right)
-            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, mut region: Region<'_>) {

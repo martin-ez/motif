@@ -1,9 +1,7 @@
 //! The application around the pages: which one is showing, and what never
 //! reaches it.
 
-use crate::ui::{
-    App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page, Region, navigating,
-};
+use crate::ui::{App, ControlEvent, Flow, Intent, Mode, Navigation, Page, Region};
 
 /// The pages the instrument has, and the one it is showing.
 ///
@@ -19,16 +17,12 @@ use crate::ui::{
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{App, Cell, ControlEvent, Frame, Intent, Legend, Mode, Page, Region, Shell};
+/// use motif::ui::{App, Cell, ControlEvent, Frame, Intent, Mode, Page, Region, Shell};
 ///
 /// struct Marked(char);
 ///
 /// impl Page for Marked {
 ///     fn control(&mut self, _event: ControlEvent) {}
-///
-///     fn legend(&self) -> Legend {
-///         Legend::blank().answering(Button::Play)
-///     }
 ///
 ///     fn draw(&mut self, mut region: Region<'_>) {
 ///         region.set(0, 0, Cell::new(self.0));
@@ -98,10 +92,6 @@ impl Shell {
         self.navigation.as_ref()?.intent(event)
     }
 
-    fn page(&self) -> &dyn Page {
-        self.pages[self.showing as usize].as_ref()
-    }
-
     fn page_mut(&mut self) -> &mut dyn Page {
         self.pages[self.showing as usize].as_mut()
     }
@@ -118,15 +108,6 @@ impl App for Shell {
         self.page_mut().control(event);
 
         Flow::Continue
-    }
-
-    fn legend(&self) -> Legend {
-        let page = self.page().legend();
-
-        match self.navigation.as_deref() {
-            Some(navigation) => page.also_answering(navigating(navigation)),
-            None => page,
-        }
     }
 
     fn draw(&mut self, region: Region<'_>) -> Flow {

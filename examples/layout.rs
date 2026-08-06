@@ -22,11 +22,11 @@
 use std::io::{self, IsTerminal, Write};
 
 use motif::audio::Levels;
-use motif::device::{Button, DeviceProfile, Encoder};
+use motif::device::DeviceProfile;
 use motif::looper::{LoopBuffer, Transport};
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, Marks, Panel, Region,
-    RenderError, TerminalScreen,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Marks, Panel, Region, RenderError,
+    TerminalScreen,
 };
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
@@ -174,22 +174,13 @@ impl Layout {
     }
 
     fn panel(&self) -> Panel {
-        self.legend()
-            .picture(&KeyReader::new(io::empty()), Marks::none())
+        Panel::showing(&KeyReader::new(io::empty()), Marks::none())
     }
 }
 
 impl App for Layout {
     fn control(&mut self, _: ControlEvent) -> Flow {
         Flow::Exit
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank()
-            .answering(Button::Play)
-            .answering(Button::Stop)
-            .answering(Button::Record)
-            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, mut region: Region<'_>) -> Flow {

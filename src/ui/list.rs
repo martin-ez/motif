@@ -13,7 +13,7 @@
 //! stays open.
 
 use crate::device::{Button, Encoder};
-use crate::ui::{Cell, ControlEvent, Legend, Page, Region, Turn};
+use crate::ui::{Cell, ControlEvent, Page, Region, Turn};
 
 const MARKER: char = '>';
 const MARKER_COLUMN: usize = 0;
@@ -117,13 +117,6 @@ impl Page for ListPage {
             } => self.towards_the_start(),
             _ => {}
         }
-    }
-
-    fn legend(&self) -> Legend {
-        Legend::blank()
-            .answering(Button::Up)
-            .answering(Button::Down)
-            .answering(Encoder::Main)
     }
 
     fn draw(&mut self, mut region: Region<'_>) {

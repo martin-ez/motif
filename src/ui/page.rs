@@ -1,6 +1,6 @@
 //! One screen of the application, as the shell showing it sees it.
 
-use crate::ui::{ControlEvent, Legend, Region};
+use crate::ui::{ControlEvent, Region};
 
 /// A screen a [`Shell`](crate::ui::Shell) can show.
 ///
@@ -14,16 +14,12 @@ use crate::ui::{ControlEvent, Legend, Region};
 ///
 /// ```
 /// use motif::device::Button;
-/// use motif::ui::{Cell, ControlEvent, Legend, Page, Region};
+/// use motif::ui::{Cell, ControlEvent, Page, Region};
 ///
 /// struct Blank;
 ///
 /// impl Page for Blank {
 ///     fn control(&mut self, _event: ControlEvent) {}
-///
-///     fn legend(&self) -> Legend {
-///         Legend::blank().answering(Button::Play)
-///     }
 ///
 ///     fn draw(&mut self, mut region: Region<'_>) {
 ///         region.set(0, 0, Cell::new('m'));
@@ -35,15 +31,6 @@ pub trait Page {
     ///
     /// Called once per event, for every event the shell did not keep.
     fn control(&mut self, event: ControlEvent);
-
-    /// Which controls this page answers, and what each one does here.
-    ///
-    /// Required rather than defaulted, for the reason [`App::legend`] is: a
-    /// page that says nothing has decided to say nothing, instead of having
-    /// forgotten to.
-    ///
-    /// [`App::legend`]: crate::ui::App::legend
-    fn legend(&self) -> Legend;
 
     /// Put the page's state on `region`.
     ///
