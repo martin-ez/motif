@@ -15,7 +15,33 @@
 //! cost the screen no rows, so the terminal's picture of them may not either.
 
 use crate::device::{Button, Control, Encoder};
-use crate::ui::{Cell, Controls, Hint};
+use crate::ui::{Cell, Controls, Hint, Marks};
+
+/// Where on the picture a key is drawn, and how wide it is there.
+#[derive(Debug, Clone, Copy)]
+struct Seat {
+    top: usize,
+    at: usize,
+    width: usize,
+}
+
+impl Seat {
+    const fn key(top: usize, at: usize) -> Self {
+        Self {
+            top,
+            at,
+            width: KEY_WIDTH,
+        }
+    }
+
+    const fn encoder(at: usize) -> Self {
+        Self {
+            top: 0,
+            at,
+            width: ENCODER_WIDTH,
+        }
+    }
+}
 
 /// The four corners and two sides a key is drawn with.
 struct Edges {
@@ -61,6 +87,15 @@ const DOUBLED: Edges = Edges {
     bottom_right: '╝',
     horizontal: '═',
     vertical: '║',
+};
+
+const SOLID: Edges = Edges {
+    top_left: '█',
+    top_right: '█',
+    bottom_left: '█',
+    bottom_right: '█',
+    horizontal: '█',
+    vertical: '█',
 };
 
 const KEY_WIDTH: usize = 5;
@@ -274,72 +309,79 @@ impl Legend {
     /// The picture of the panel this page makes, each key wearing the glyph
     /// `controls` reaches it by and nothing else.
     ///
-    /// A key the page answers is drawn with a heavy edge and one it ignores with
-    /// a light one, so both are in the picture. Every key keeps a place of its
-    /// own, so nothing moves from page to page and only the weight changes.
+    /// A key the page answers is drawn with a heavy edge and one it ignores
+    /// with a light one, and every key keeps a place of its own. The encoder is
+    /// rounded rather than square so it does not read as a button, and lights
+    /// by doubling its edge: there is no heavy rounded corner.
     ///
-    /// The encoder is rounded, never square, so it does not read as a button,
-    /// and lights by doubling its edge — there is no heavy rounded corner.
+    /// A key `marks` holds is drawn solid, whatever weight it rests at — there
+    /// is no fourth family of corners, and the weight reads either side of it.
     ///
     /// ```
     /// use motif::device::Button;
-    /// use motif::ui::{Legend, Panel, ScriptedControls};
+    /// use motif::ui::{Legend, Marks, Panel, ScriptedControls};
     ///
-    /// let picture = Legend::blank().answering(Button::Play).picture(&ScriptedControls::new([]));
+    /// let legend = Legend::blank().answering(Button::Play);
+    /// let picture = legend.picture(&ScriptedControls::new([]), Marks::none());
     ///
     /// assert_eq!(picture.cells().len(), Panel::COLUMNS * Panel::ROWS);
     /// ```
-    pub fn picture(&self, controls: &impl Controls) -> Panel {
+    pub fn picture(&self, controls: &impl Controls, marks: Marks) -> Panel {
         let mut panel = Panel::blank();
 
-        self.draw_cross(&mut panel, controls);
-        self.draw_grid(&mut panel, controls);
+        self.draw_cross(&mut panel, controls, marks);
+        self.draw_grid(&mut panel, controls, marks);
         self.draw_key(
             &mut panel,
-            0,
-            ENCODER_AT,
-            ENCODER_WIDTH,
+            Seat::encoder(ENCODER_AT),
             Control::Encoder(Encoder::Main),
             controls,
+            marks,
         );
 
         panel
     }
 
-    fn draw_cross(&self, panel: &mut Panel, controls: &impl Controls) {
-        self.draw_key(panel, 0, CROSS_MIDDLE_AT, KEY_WIDTH, Button::Up, controls);
+    fn draw_cross(&self, panel: &mut Panel, controls: &impl Controls, marks: Marks) {
+        self.draw_key(
+            panel,
+            Seat::key(0, CROSS_MIDDLE_AT),
+            Button::Up,
+            controls,
+            marks,
+        );
 
         for (at, button) in [
             (CROSS_LEFT_AT, Button::Left),
             (CROSS_MIDDLE_AT, Button::Down),
             (CROSS_RIGHT_AT, Button::Right),
         ] {
-            self.draw_key(panel, KEY_ROWS, at, KEY_WIDTH, button, controls);
+            self.draw_key(panel, Seat::key(KEY_ROWS, at), button, controls, marks);
         }
     }
 
-    fn draw_grid(&self, panel: &mut Panel, controls: &impl Controls) {
+    fn draw_grid(&self, panel: &mut Panel, controls: &impl Controls, marks: Marks) {
         for (place, control) in SCENES.into_iter().enumerate() {
             let at = GRID_AT + place * KEY_WIDTH;
-            self.draw_key(panel, 0, at, KEY_WIDTH, control, controls);
+            self.draw_key(panel, Seat::key(0, at), control, controls, marks);
         }
         for (place, control) in ACTIONS.into_iter().enumerate() {
             let at = GRID_AT + place * KEY_WIDTH;
-            self.draw_key(panel, KEY_ROWS, at, KEY_WIDTH, control, controls);
+            self.draw_key(panel, Seat::key(KEY_ROWS, at), control, controls, marks);
         }
     }
 
     fn draw_key(
         &self,
         panel: &mut Panel,
-        top: usize,
-        at: usize,
-        width: usize,
+        seat: Seat,
         control: impl Into<Control> + Copy,
         controls: &impl Controls,
+        marks: Marks,
     ) {
         let control = control.into();
-        let edges = edges_of(control, self.answers(control));
+        let edges = edges_of(control, self.answers(control), marks.marked(control));
+        let Seat { top, at, width } = seat;
 
         span(panel, top, at, width, edges, false);
         face(panel, top + 1, at, width, edges, controls.hint(control));
@@ -347,12 +389,13 @@ impl Legend {
     }
 }
 
-fn edges_of(control: Control, lit: bool) -> &'static Edges {
-    match (control, lit) {
-        (Control::Encoder(_), false) => &ROUND,
-        (Control::Encoder(_), true) => &DOUBLED,
-        (Control::Button(_), false) => &LIGHT,
-        (Control::Button(_), true) => &HEAVY,
+fn edges_of(control: Control, lit: bool, marked: bool) -> &'static Edges {
+    match (control, lit, marked) {
+        (_, _, true) => &SOLID,
+        (Control::Encoder(_), false, false) => &ROUND,
+        (Control::Encoder(_), true, false) => &DOUBLED,
+        (Control::Button(_), false, false) => &LIGHT,
+        (Control::Button(_), true, false) => &HEAVY,
     }
 }
 

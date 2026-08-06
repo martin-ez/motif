@@ -12,7 +12,9 @@ use std::io::{self, Write};
 use std::rc::Rc;
 
 use motif::device::{Button, DeviceProfile};
-use motif::ui::{Cell, Frame, Legend, Panel, RenderError, Renderer, ScriptedControls, Viewport};
+use motif::ui::{
+    Cell, Frame, Legend, Marks, Panel, RenderError, Renderer, ScriptedControls, Viewport,
+};
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
 
@@ -140,7 +142,7 @@ fn drawn(cells: &[(usize, usize, char)]) -> Frame {
 fn picture() -> Panel {
     Legend::blank()
         .answering(Button::Play)
-        .picture(&ScriptedControls::new([]))
+        .picture(&ScriptedControls::new([]), Marks::none())
 }
 
 fn row_of(panel: &Panel, row: usize) -> String {
@@ -475,7 +477,7 @@ fn a_panel_that_changed_is_drawn_again() {
     let already_written = viewport.sink().len();
 
     viewport
-        .show_panel(&Legend::blank().picture(&ScriptedControls::new([])))
+        .show_panel(&Legend::blank().picture(&ScriptedControls::new([]), Marks::none()))
         .expect("a vec accepts every write");
 
     assert!(viewport.sink().len() > already_written);
@@ -522,7 +524,7 @@ fn a_panel_a_screen_refused_is_drawn_again() {
         .render(&Frame::blank())
         .expect("the screen is accepting writes");
     viewport
-        .show_panel(&Legend::blank().picture(&ScriptedControls::new([])))
+        .show_panel(&Legend::blank().picture(&ScriptedControls::new([]), Marks::none()))
         .expect("the screen is accepting writes");
 
     screen.refuse(true);
@@ -554,7 +556,8 @@ fn the_panel_a_screen_last_took_is_drawn_again_after_one_it_refused() {
         .expect("the screen is accepting writes");
 
     screen.refuse(true);
-    let failed = viewport.show_panel(&Legend::blank().picture(&ScriptedControls::new([])));
+    let failed =
+        viewport.show_panel(&Legend::blank().picture(&ScriptedControls::new([]), Marks::none()));
 
     screen.refuse(false);
     let already_written = screen.len();
