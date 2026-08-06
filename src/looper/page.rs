@@ -17,8 +17,8 @@
 use crate::audio::{Command, CommandSender, Commanded, SampleClockReader, command_channel};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
 use crate::looper::{
-    LoopBuffer, LoopEngine, PositionReader, Transport, WaveformReader, position_meter,
-    waveform_meter,
+    LoopBuffer, LoopEngine, PositionReader, TakeReader, Transport, WaveformReader, position_meter,
+    take_handoff, waveform_meter,
 };
 use crate::seq::{BeatGrid, TapTempo};
 use crate::ui::{ControlEvent, Legend, Page, Region, Turn};
@@ -159,27 +159,32 @@ impl LooperPage {
         }
     }
 
-    /// A page and the engine it drives, wired to each other.
+    /// A page, the engine it drives, and the finished takes it hands over.
     ///
     /// The page holds the reading end of the playhead and of the loop's shape,
     /// and the sending end of the command queue; the engine holds the other end
     /// of each and the loop itself, sized from `profile`. Taps are timed by
-    /// `elapsed`.
+    /// `elapsed`, and the third end is where a finished take crosses to
+    /// whatever analyses it.
     ///
-    /// Both ends are allocated here and never again, so this belongs in setup,
-    /// before the stream starts. The engine is what a stream plays, so it goes
-    /// to whatever opens one.
+    /// All of it is allocated here and never again, so this belongs in setup.
+    /// The engine is what a stream plays, so it goes to whatever opens one.
     pub fn driving(
         profile: AudioProfile,
         elapsed: SampleClockReader,
-    ) -> (Self, Commanded<LoopEngine>) {
+    ) -> (Self, Commanded<LoopEngine>, TakeReader) {
         let (commands, orders) = command_channel(QUEUED_COMMANDS);
         let (publishing, playhead) = position_meter();
         let (drawing, shape) = waveform_meter();
+        let (crossing, takes) = take_handoff(profile);
 
         (
             Self::new(playhead, shape, elapsed, commands),
-            Commanded::new(orders, LoopEngine::new(profile, publishing, drawing)),
+            Commanded::new(
+                orders,
+                LoopEngine::new(profile, publishing, drawing, crossing),
+            ),
+            takes,
         )
     }
 

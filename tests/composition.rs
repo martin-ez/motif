@@ -181,7 +181,7 @@ fn composed(live: &Live) -> Composed {
     )
     .expect("the counting backend has a device in each direction");
     let settings = AudioPage::listing(link.clone());
-    let (looper, _engine) = LooperPage::driving(audio, sample_clock(audio.sample_rate).1);
+    let (looper, _engine, _takes) = LooperPage::driving(audio, sample_clock(audio.sample_rate).1);
     let shell = Shell::navigated_by([Box::new(looper), Box::new(settings)], Scheme::scenes());
 
     Monitor::watching(shell, Some(link))

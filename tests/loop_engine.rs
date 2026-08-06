@@ -19,8 +19,8 @@ use std::hint::black_box;
 use motif::audio::{AudioPath, Command, CommandSender, Commanded, command_channel};
 use motif::device::AudioProfile;
 use motif::looper::{
-    LoopBuffer, LoopEngine, PositionReader, Transport, WaveformReader, position_meter,
-    waveform_meter,
+    LoopBuffer, LoopEngine, PositionReader, TakeReader, TakeWriter, Transport, WaveformReader,
+    position_meter, take_handoff, waveform_meter,
 };
 
 thread_local! {
@@ -66,12 +66,24 @@ fn allocations() -> usize {
     ALLOCATIONS.with(Cell::get)
 }
 
+/// More blocks than any crossing in these tests can need, so a take that never
+/// crosses fails rather than hanging.
+///
+/// Pinned here rather than read off `TakeWriter::CROSSING_BLOCKS`, which a
+/// mutant is free to make enormous.
+const BLOCKS_ALLOWED: usize = 16;
+
 fn eight_frame_profile() -> AudioProfile {
     AudioProfile {
         sample_rate: 8,
         block_size: 4,
         max_loop_seconds: 1,
     }
+}
+
+/// The publishing end of a handoff whose takes no test reads.
+fn crossing() -> TakeWriter {
+    take_handoff(eight_frame_profile()).0
 }
 
 /// An engine over an eight-frame loop, with the two ends a player reaches it
@@ -83,7 +95,12 @@ fn engine() -> (Commanded<LoopEngine>, CommandSender, PositionReader) {
     (
         Commanded::new(
             receiver,
-            LoopEngine::new(eight_frame_profile(), writer, waveform_meter().0),
+            LoopEngine::new(
+                eight_frame_profile(),
+                writer,
+                waveform_meter().0,
+                crossing(),
+            ),
         ),
         sender,
         reader,
@@ -98,10 +115,35 @@ fn engine_drawing() -> (Commanded<LoopEngine>, CommandSender, WaveformReader) {
     (
         Commanded::new(
             receiver,
-            LoopEngine::new(eight_frame_profile(), position_meter().0, drawing),
+            LoopEngine::new(
+                eight_frame_profile(),
+                position_meter().0,
+                drawing,
+                crossing(),
+            ),
         ),
         sender,
         shape,
+    )
+}
+
+/// An engine over an eight-frame loop, with the end its takes are read from.
+fn engine_handing_takes() -> (Commanded<LoopEngine>, CommandSender, TakeReader) {
+    let (sender, receiver) = command_channel(8);
+    let (crossing, takes) = take_handoff(eight_frame_profile());
+
+    (
+        Commanded::new(
+            receiver,
+            LoopEngine::new(
+                eight_frame_profile(),
+                position_meter().0,
+                waveform_meter().0,
+                crossing,
+            ),
+        ),
+        sender,
+        takes,
     )
 }
 
@@ -123,6 +165,18 @@ fn played(engine: &mut Commanded<LoopEngine>, captured: &[f32]) -> Vec<f32> {
 /// Render one block of silence `frames` long and return what the engine played.
 fn heard(engine: &mut Commanded<LoopEngine>, frames: usize) -> Vec<f32> {
     played(engine, &vec![0.0; frames])
+}
+
+/// Render blocks until a take crosses, and return the samples it crossed with.
+fn crossed(engine: &mut Commanded<LoopEngine>, takes: &mut TakeReader) -> Vec<f32> {
+    for _ in 0..BLOCKS_ALLOWED {
+        heard(engine, 4);
+        if let Some(take) = takes.claim() {
+            return take.samples().collect();
+        }
+    }
+
+    panic!("no take crossed");
 }
 
 #[test]
@@ -158,13 +212,19 @@ fn a_profile_with_no_block_is_refused_at_setup() {
         },
         writer,
         waveform_meter().0,
+        crossing(),
     );
 }
 
 #[test]
 fn an_engine_answers_every_command_there_is() {
     let (writer, _position) = position_meter();
-    let mut engine = LoopEngine::new(eight_frame_profile(), writer, waveform_meter().0);
+    let mut engine = LoopEngine::new(
+        eight_frame_profile(),
+        writer,
+        waveform_meter().0,
+        crossing(),
+    );
 
     assert!(engine.apply(Command::SetTransport(Transport::Recording)));
     assert!(engine.apply(Command::SetGain(0.5)));
@@ -781,4 +841,104 @@ fn healing_the_shape_after_an_undo_does_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "healing the shape allocated");
+}
+
+#[test]
+fn a_take_crosses_once_the_player_stops_recording() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    assert_eq!(crossed(&mut engine, &mut takes), [0.25, 0.5]);
+}
+
+#[test]
+fn a_take_crosses_with_the_layers_the_player_laid_over_it() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.0]);
+
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(crossed(&mut engine, &mut takes), [0.375, 0.5]);
+}
+
+#[test]
+fn nothing_crosses_while_the_player_is_still_recording() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+
+    for _ in 0..BLOCKS_ALLOWED {
+        heard(&mut engine, 4);
+    }
+
+    assert!(takes.claim().is_none());
+}
+
+#[test]
+fn punching_back_in_abandons_the_take_that_was_crossing() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+    heard(&mut engine, 4);
+
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    for _ in 0..BLOCKS_ALLOWED {
+        heard(&mut engine, 4);
+    }
+
+    assert!(takes.claim().is_none());
+}
+
+#[test]
+fn emptying_the_loop_hands_over_no_take() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    press(&mut sender, Command::Clear);
+    for _ in 0..BLOCKS_ALLOWED {
+        heard(&mut engine, 4);
+    }
+
+    assert!(takes.claim().is_none());
+}
+
+#[test]
+fn undoing_a_layer_hands_the_loop_that_is_left_over() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+    played(&mut engine, &[0.125, 0.0]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+    crossed(&mut engine, &mut takes);
+
+    press(&mut sender, Command::Undo);
+
+    assert_eq!(crossed(&mut engine, &mut takes), [0.25, 0.5]);
+}
+
+#[test]
+fn handing_a_take_over_does_not_allocate() {
+    let (mut engine, mut sender, _takes) = engine_handing_takes();
+    let captured = vec![0.25; 4];
+    let mut playing = vec![0.0; 4];
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    engine.render(&captured, &mut playing);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    let before = allocations();
+    for _ in 0..BLOCKS_ALLOWED {
+        engine.render(&captured, &mut playing);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before, "handing the take over allocated");
 }
