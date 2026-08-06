@@ -10,8 +10,9 @@
 //! Every fixture is timed as well as scored, against a [`deadline`] taken as a
 //! share of the take, so each fixture sets its own.
 //!
-//! A candidate arrives as beats, chords or notes, so nothing here knows about
-//! analysers or audio.
+//! A candidate answers in beats, chords or notes, so nothing here knows what
+//! produced them. Off disk it is asked about an annotation alone; over a set
+//! rendered in memory it is handed the fixture, audio and all.
 
 use std::ffi::OsStr;
 use std::fmt;

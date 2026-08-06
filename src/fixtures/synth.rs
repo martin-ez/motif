@@ -241,12 +241,12 @@ pub fn set() -> Vec<Fixture> {
         built(
             "chords-150-4-4",
             "4/4 at 150 BPM voicing a chord to the bar",
-            voiced(150.0, 4, Texture::Chords),
+            committed(150.0, 4, Texture::Chords),
         ),
         built(
             "line-150-4-4",
             "4/4 at 150 BPM playing a monophonic line",
-            voiced(150.0, 4, Texture::Line),
+            committed(150.0, 4, Texture::Line),
         ),
     ]
 }
@@ -259,18 +259,19 @@ const ONE_TO_THE_BEAT: usize = 1;
 const NONE_UNSOUNDED: f64 = 0.0;
 
 fn clicks(tempo: f64, meter: usize, syncopation: f64) -> Recipe {
-    Recipe {
-        texture: Texture::Percussion {
+    committed(
+        tempo,
+        meter,
+        Texture::Percussion {
             sharpness: SHARP,
             density: ONE_TO_THE_BEAT,
             dropout: NONE_UNSOUNDED,
             syncopation,
         },
-        ..voiced(tempo, meter, Texture::Chords)
-    }
+    )
 }
 
-fn voiced(tempo: f64, meter: usize, texture: Texture) -> Recipe {
+fn committed(tempo: f64, meter: usize, texture: Texture) -> Recipe {
     Recipe {
         tempo,
         meter,
