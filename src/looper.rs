@@ -14,6 +14,8 @@
 //! One sample per frame, as the ring across the audio boundary carries them: a
 //! channel layout belongs to a device, not to this side of the callback.
 
+use std::ops::Range;
+
 use crate::device::AudioProfile;
 
 mod engine;
@@ -34,6 +36,7 @@ const LAYER_COUNT: usize = 8;
 pub struct LoopBuffer {
     layers: Box<[f32]>,
     written: [usize; LAYER_COUNT],
+    cursor: [usize; LAYER_COUNT],
     depth: usize,
     open: Option<usize>,
     waveform: LoopWaveform,
@@ -83,6 +86,7 @@ impl LoopBuffer {
         Self {
             layers: vec![0.0; capacity.saturating_mul(Self::LAYERS)].into_boxed_slice(),
             written: [0; LAYER_COUNT],
+            cursor: [0; LAYER_COUNT],
             depth: 0,
             open: Some(0),
             waveform: LoopWaveform::EMPTY,
@@ -90,66 +94,94 @@ impl LoopBuffer {
         }
     }
 
-    /// Append as much of `captured` as there is room for in the open layer, and
-    /// report how many frames that was.
+    /// Record `captured` into the open layer, and report how many frames that
+    /// was. It never grows the buffer, and never panics.
     ///
     /// Frames land in the open layer and nowhere else: an empty buffer has the
     /// take open, [`overdub`](Self::overdub) opens each later layer, and
     /// [`undo`](Self::undo) leaves none open.
     ///
-    /// A result below the length of `captured` means the layer is full and the
-    /// rest were dropped. It never grows to fit them, and never panics.
+    /// A result short of `captured` means the take filled the buffer and the
+    /// rest were dropped. A layer carries on from where the last block left it,
+    /// round the boundary and over its own first pass, so it takes every frame.
     pub fn record(&mut self, captured: &[f32]) -> usize {
-        let Some(open) = self.open else {
-            return 0;
-        };
+        match self.open {
+            None => 0,
+            Some(0) => self.append(captured),
+            Some(open) => self.lay_round(open, captured),
+        }
+    }
 
+    fn append(&mut self, captured: &[f32]) -> usize {
         let taken = captured.len().min(self.vacant());
-        let from = self.written[open];
-        let at = open * self.capacity() + from;
-        self.layers[at..at + taken].copy_from_slice(&captured[..taken]);
-        self.written[open] += taken;
-        self.depth = self.depth.max(open + 1);
+        let from = self.cursor[0];
+        self.layers[from..from + taken].copy_from_slice(&captured[..taken]);
+        self.written[0] += taken;
+        self.cursor[0] += taken;
+        self.depth = self.depth.max(1);
         self.summarise(from, taken);
 
         taken
+    }
+
+    fn lay_round(&mut self, open: usize, captured: &[f32]) -> usize {
+        let (len, capacity) = (self.len(), self.capacity());
+        let mut laid = 0;
+        while laid < captured.len() {
+            let from = self.cursor[open];
+            let run = (len - from).min(captured.len() - laid);
+            let at = open * capacity + from;
+            self.layers[at..at + run].copy_from_slice(&captured[laid..laid + run]);
+            self.cursor[open] = (from + run) % len;
+            self.written[open] = (self.written[open] + run).min(len);
+            self.summarise(from, run);
+            laid += run;
+        }
+
+        laid
     }
 
     fn summarise(&mut self, from: usize, taken: usize) {
         let Self {
             layers,
             written,
+            cursor,
             depth,
             waveform,
             ..
         } = self;
         let capacity = layers.len() / LAYER_COUNT;
-        let (written, depth) = (*written, *depth);
+        let (written, cursor, depth) = (*written, *cursor, *depth);
+        let len = written[0];
 
         waveform.take(
             from,
             (0..taken).map(|offset| {
+                let frame = from + offset;
                 layers
                     .chunks_exact(capacity)
-                    .zip(written)
+                    .zip(cursor.into_iter().zip(written))
                     .take(depth)
-                    .map(|(layer, recorded)| {
-                        layer[..recorded]
-                            .get(from + offset)
-                            .copied()
-                            .unwrap_or_default()
+                    .filter(|&(_, (cursor, recorded))| {
+                        spans(cursor, recorded, len)
+                            .iter()
+                            .any(|span| span.contains(&frame))
                     })
+                    .map(|(layer, _)| layer[frame])
                     .sum::<f32>()
             }),
         );
     }
 
-    /// Open a layer over the loop, and report whether there was one to open.
+    /// Open a layer over the loop at frame `at`, and report whether there was
+    /// one to open.
     ///
-    /// Refused when the stack is [`LAYERS`](Self::LAYERS) deep, or when there
-    /// is no loop yet to lie over: a layer bounded by a loop of no frames would
-    /// take nothing, ever. Either way the open layer stays open, so a caller
-    /// that ignores the answer keeps recording where it was.
+    /// `at` is where the player punched in, so what arrives next is heard where
+    /// it was played; a position at or past the end wraps into the loop. Refused
+    /// when the stack is [`LAYERS`](Self::LAYERS) deep, or when there is no loop
+    /// yet to lie over: a layer bounded by a loop of no frames would take
+    /// nothing, ever. Either way the open layer stays open, so a caller that
+    /// ignores the answer keeps recording where it was.
     ///
     /// ```
     /// use motif::device::DeviceProfile;
@@ -158,20 +190,21 @@ impl LoopBuffer {
     /// let mut captured = LoopBuffer::for_profile(DeviceProfile::TARGET.audio);
     /// captured.record(&[0.25, 0.5]);
     ///
-    /// captured.overdub();
-    /// captured.record(&[0.125, 0.125]);
+    /// captured.overdub(1);
+    /// captured.record(&[0.125]);
     ///
     /// let mut heard = [0.0; 2];
     /// captured.mix_into(&mut heard, 0);
     ///
-    /// assert_eq!(heard, [0.375, 0.625]);
+    /// assert_eq!(heard, [0.25, 0.625]);
     /// ```
-    pub fn overdub(&mut self) -> bool {
+    pub fn overdub(&mut self, at: usize) -> bool {
         if self.depth == Self::LAYERS || self.is_empty() {
             return false;
         }
 
         self.written[self.depth] = 0;
+        self.cursor[self.depth] = at % self.len();
         self.open = Some(self.depth);
         self.depth += 1;
 
@@ -195,6 +228,7 @@ impl LoopBuffer {
 
         self.depth -= 1;
         self.written[self.depth] = 0;
+        self.cursor[self.depth] = 0;
         self.open = None;
         self.stale = Some(0);
 
@@ -228,6 +262,7 @@ impl LoopBuffer {
     /// buffer takes a new loop straight away.
     pub fn clear(&mut self) {
         self.written = [0; LAYER_COUNT];
+        self.cursor = [0; LAYER_COUNT];
         self.depth = 0;
         self.open = Some(0);
         self.waveform = LoopWaveform::EMPTY;
@@ -262,8 +297,10 @@ impl LoopBuffer {
         }
 
         let block = &mut block[..wanted];
-        for layer in self.recorded_layers() {
-            mix(block, layer, from);
+        for (layer, spans) in self.recorded_layers() {
+            for span in &spans {
+                mix(block, layer, from, span);
+            }
         }
 
         wanted
@@ -302,22 +339,26 @@ impl LoopBuffer {
         let to_the_boundary = (self.len() - playhead).min(block.len());
         let (before, after) = block.split_at_mut(to_the_boundary);
 
-        for layer in self.recorded_layers() {
-            mix(before, layer, playhead);
-            for repeat in after.chunks_mut(self.len()) {
-                mix(repeat, layer, 0);
+        for (layer, spans) in self.recorded_layers() {
+            for span in &spans {
+                mix(before, layer, playhead, span);
+                for repeat in after.chunks_mut(self.len()) {
+                    mix(repeat, layer, 0, span);
+                }
             }
         }
 
         (playhead + block.len()) % self.len()
     }
 
-    fn recorded_layers(&self) -> impl Iterator<Item = &[f32]> {
+    fn recorded_layers(&self) -> impl Iterator<Item = (&[f32], [Range<usize>; 2])> {
+        let len = self.len();
+
         self.layers
             .chunks_exact(self.capacity())
-            .zip(self.written)
+            .zip(self.cursor.into_iter().zip(self.written))
             .take(self.depth)
-            .map(|(layer, recorded)| &layer[..recorded])
+            .map(move |(layer, (cursor, recorded))| (layer, spans(cursor, recorded, len)))
     }
 
     /// How many frames long the loop is.
@@ -335,11 +376,13 @@ impl LoopBuffer {
         self.depth
     }
 
-    /// How many frames the next [`record`](Self::record) can take.
+    /// How much of the open layer is still to be covered.
     ///
-    /// The room left in the open layer: the rest of the buffer under the take,
-    /// the rest of the loop under an overdub, and nothing while no layer is
-    /// open. For the length of the loop, use [`len`](Self::len).
+    /// The rest of the buffer under the take, which is what the next
+    /// [`record`](Self::record) can take before it starts dropping frames; the
+    /// part of the loop an overdub has yet to reach, which bounds nothing,
+    /// because a layer laps rather than filling; and nothing at all while no
+    /// layer is open. For the length of the loop, use [`len`](Self::len).
     pub fn vacant(&self) -> usize {
         let Some(open) = self.open else {
             return 0;
@@ -359,8 +402,22 @@ impl LoopBuffer {
     }
 }
 
-fn mix(block: &mut [f32], layer: &[f32], from: usize) {
-    for (mixed, sample) in block.iter_mut().zip(layer.get(from..).unwrap_or_default()) {
+fn spans(cursor: usize, recorded: usize, len: usize) -> [Range<usize>; 2] {
+    let before_the_cursor = cursor.min(recorded);
+    let past_the_boundary = recorded - before_the_cursor;
+
+    [
+        cursor - before_the_cursor..cursor,
+        len - past_the_boundary..len,
+    ]
+}
+
+fn mix(block: &mut [f32], layer: &[f32], at: usize, span: &Range<usize>) {
+    let reach = at + block.len();
+    let from = span.start.clamp(at, reach);
+    let to = span.end.clamp(from, reach);
+
+    for (mixed, sample) in block[from - at..to - at].iter_mut().zip(&layer[from..to]) {
         *mixed += sample;
     }
 }

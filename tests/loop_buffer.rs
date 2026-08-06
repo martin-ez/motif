@@ -255,7 +255,7 @@ fn an_overdub_opens_a_layer_over_the_take() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25]);
 
-    assert!(buffer.overdub());
+    assert!(buffer.overdub(0));
     assert_eq!(buffer.depth(), 2);
 }
 
@@ -264,7 +264,7 @@ fn an_overdub_is_heard_on_top_of_the_take() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
 
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
 
     assert_eq!(heard(&buffer), [0.375, 0.625]);
@@ -275,7 +275,7 @@ fn an_overdub_shorter_than_the_loop_leaves_the_rest_of_the_take() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75]);
 
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
 
     assert_eq!(heard(&buffer), [0.375, 0.5, 0.75]);
@@ -286,7 +286,7 @@ fn an_overdub_has_room_for_the_loop_it_lies_over() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
 
-    buffer.overdub();
+    buffer.overdub(0);
 
     assert_eq!(buffer.vacant(), 2);
 }
@@ -296,11 +296,103 @@ fn an_overdub_cannot_lengthen_the_loop() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
 
-    buffer.overdub();
+    buffer.overdub(0);
+    buffer.record(&[0.125, 0.125, 0.125, 0.125]);
+
+    assert_eq!(buffer.len(), 2);
+}
+
+#[test]
+fn an_overdub_takes_every_frame_it_is_given() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+
+    buffer.overdub(0);
     let recorded = buffer.record(&[0.125, 0.125, 0.125, 0.125]);
 
-    assert_eq!(recorded, 2);
-    assert_eq!(buffer.len(), 2);
+    assert_eq!(recorded, 4);
+}
+
+#[test]
+fn an_overdub_lands_at_the_position_it_was_opened_at() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+
+    buffer.overdub(2);
+    buffer.record(&[0.125]);
+
+    assert_eq!(heard(&buffer), [0.25, 0.5, 0.875, 1.0]);
+}
+
+#[test]
+fn an_overdub_opened_past_the_end_of_the_loop_wraps_into_it() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+
+    buffer.overdub(5);
+    buffer.record(&[0.125]);
+
+    assert_eq!(heard(&buffer), [0.25, 0.625, 0.75, 1.0]);
+}
+
+#[test]
+fn an_overdub_carries_on_past_the_end_of_the_loop() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+
+    buffer.overdub(2);
+    buffer.record(&[0.125, 0.125, 0.5, 0.5]);
+
+    assert_eq!(heard(&buffer), [0.75, 1.0, 0.875, 1.125]);
+}
+
+#[test]
+fn an_overdub_that_laps_the_loop_overwrites_what_it_laid_down() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+
+    buffer.overdub(0);
+    buffer.record(&[0.125, 0.125, 0.5]);
+
+    assert_eq!(heard(&buffer), [0.75, 0.625]);
+}
+
+#[test]
+fn an_overdub_that_has_been_round_the_loop_has_no_room_left() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub(0);
+
+    buffer.record(&[0.125, 0.125]);
+
+    assert_eq!(buffer.vacant(), 0);
+}
+
+#[test]
+fn an_overdub_with_no_room_left_keeps_taking_frames() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5]);
+    buffer.overdub(0);
+    buffer.record(&[0.125, 0.125]);
+
+    let recorded = buffer.record(&[0.5]);
+
+    assert_eq!(recorded, 1);
+    assert_eq!(heard(&buffer), [0.75, 0.625]);
+}
+
+#[test]
+fn a_layer_reopened_at_a_position_leaves_the_rest_of_the_loop_alone() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+    buffer.overdub(0);
+    buffer.record(&[1.0, 1.0, 1.0, 1.0]);
+    buffer.undo();
+
+    buffer.overdub(2);
+    buffer.record(&[0.125]);
+
+    assert_eq!(heard(&buffer), [0.25, 0.5, 0.875, 1.0]);
 }
 
 #[test]
@@ -309,10 +401,10 @@ fn layers_stop_at_the_stated_bound() {
     buffer.record(&[0.25]);
 
     for _ in 1..LoopBuffer::LAYERS {
-        assert!(buffer.overdub());
+        assert!(buffer.overdub(0));
     }
 
-    assert!(!buffer.overdub());
+    assert!(!buffer.overdub(0));
     assert_eq!(buffer.depth(), LoopBuffer::LAYERS);
 }
 
@@ -320,7 +412,7 @@ fn layers_stop_at_the_stated_bound() {
 fn undo_takes_away_the_most_recent_overdub() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
 
     assert!(buffer.undo());
@@ -332,9 +424,9 @@ fn undo_takes_away_the_most_recent_overdub() {
 fn undo_leaves_the_layers_underneath_playing() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.5]);
 
     buffer.undo();
@@ -356,14 +448,14 @@ fn undo_keeps_the_take() {
 fn an_overdub_over_an_empty_buffer_is_refused() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
 
-    assert!(!buffer.overdub());
+    assert!(!buffer.overdub(0));
     assert_eq!(buffer.depth(), 0);
 }
 
 #[test]
 fn an_empty_buffer_that_refused_an_overdub_still_takes_a_take() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
-    buffer.overdub();
+    buffer.overdub(0);
 
     let recorded = buffer.record(&[0.25, 0.5]);
 
@@ -375,7 +467,7 @@ fn an_empty_buffer_that_refused_an_overdub_still_takes_a_take() {
 fn recording_after_an_undo_takes_nothing_until_a_layer_is_opened() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
     buffer.undo();
 
@@ -391,11 +483,11 @@ fn a_refused_overdub_leaves_the_top_layer_open() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
     for _ in 1..LoopBuffer::LAYERS {
-        buffer.overdub();
+        buffer.overdub(0);
     }
     buffer.record(&[0.125]);
 
-    buffer.overdub();
+    buffer.overdub(0);
     let recorded = buffer.record(&[0.125]);
 
     assert_eq!(recorded, 1);
@@ -407,23 +499,23 @@ fn undo_makes_room_for_another_layer() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25]);
     for _ in 1..LoopBuffer::LAYERS {
-        buffer.overdub();
+        buffer.overdub(0);
     }
 
     buffer.undo();
 
-    assert!(buffer.overdub());
+    assert!(buffer.overdub(0));
 }
 
 #[test]
 fn a_layer_opened_after_an_undo_starts_empty() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[1.0, 1.0]);
     buffer.undo();
 
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
 
     assert_eq!(heard(&buffer), [0.375, 0.5]);
@@ -434,7 +526,7 @@ fn clear_returns_the_buffer_to_idle() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     let capacity = buffer.capacity();
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
 
     buffer.clear();
@@ -450,7 +542,7 @@ fn clear_returns_the_buffer_to_idle() {
 fn a_cleared_buffer_takes_a_new_recording() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
     buffer.clear();
 
@@ -496,7 +588,7 @@ fn mixing_adds_to_what_the_block_already_holds() {
 fn mixing_reads_on_past_a_layer_that_ended_early() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
     let mut block = [0.0; 2];
 
@@ -510,7 +602,7 @@ fn mixing_reads_on_past_a_layer_that_ended_early() {
 fn the_loop_can_be_read_from_a_position_inside_it() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
     let mut block = [0.0; 2];
 
@@ -636,7 +728,7 @@ fn playing_adds_to_what_the_block_already_holds() {
 fn a_layer_shorter_than_the_loop_keeps_its_place_across_the_wrap() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
     let mut block = [0.0; 5];
 
@@ -672,7 +764,7 @@ fn playing_a_stack_of_layers_across_the_wrap_does_not_allocate() {
     let mut played = vec![0.0; profile.block_size as usize];
     buffer.record(&block[..block.len() - 1]);
     for _ in 1..LoopBuffer::LAYERS {
-        buffer.overdub();
+        buffer.overdub(0);
         buffer.record(&block);
     }
 
@@ -680,6 +772,24 @@ fn playing_a_stack_of_layers_across_the_wrap_does_not_allocate() {
     let mut playhead = 0;
     for _ in 0..LoopBuffer::LAYERS {
         playhead = buffer.play_into(&mut played, playhead);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
+
+#[test]
+fn an_overdub_across_the_loop_boundary_does_not_allocate() {
+    let profile = DeviceProfile::TARGET.audio;
+    let mut buffer = LoopBuffer::for_profile(profile);
+    let block = vec![0.5; profile.block_size as usize];
+    buffer.record(&block[..block.len() - 1]);
+    let past_the_middle = buffer.len() - 1;
+    buffer.overdub(past_the_middle);
+
+    let before = allocations();
+    for _ in 0..LoopBuffer::LAYERS {
+        buffer.record(&block);
     }
     let after = allocations();
 
@@ -696,7 +806,7 @@ fn layering_and_mixing_do_not_allocate() {
 
     let before = allocations();
     for _ in 1..LoopBuffer::LAYERS {
-        buffer.overdub();
+        buffer.overdub(0);
         buffer.record(&block);
         buffer.mix_into(&mut mixed, 0);
     }
@@ -746,7 +856,7 @@ fn the_waveform_of_a_stack_of_layers_is_their_sum() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
 
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
 
     assert_eq!(buffer.waveform().buckets()[0].peak, 0.375);
@@ -758,11 +868,23 @@ fn an_overdub_repaints_only_as_far_as_it_has_reached() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
 
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125]);
 
     assert_eq!(buffer.waveform().buckets()[0].peak, 0.375);
     assert_eq!(buffer.waveform().buckets()[1].peak, 0.5);
+}
+
+#[test]
+fn an_overdub_repaints_the_summary_where_it_was_played() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+
+    buffer.overdub(2);
+    buffer.record(&[0.125]);
+
+    assert_eq!(buffer.waveform().buckets()[1].peak, 0.5);
+    assert_eq!(buffer.waveform().buckets()[2].peak, 0.875);
 }
 
 #[test]
@@ -784,7 +906,7 @@ fn a_take_longer_than_the_buckets_still_spans_the_loop() {
 fn a_resweep_leaves_a_waveform_of_the_layers_that_remain() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
     buffer.undo();
 
@@ -798,7 +920,7 @@ fn a_resweep_leaves_a_waveform_of_the_layers_that_remain() {
 fn an_undone_layer_stays_in_the_waveform_until_the_resweep_reaches_it() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75, 1.0]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125, 0.125, 0.125]);
     buffer.undo();
 
@@ -812,7 +934,7 @@ fn an_undone_layer_stays_in_the_waveform_until_the_resweep_reaches_it() {
 fn a_resweep_covers_no_more_than_the_frames_it_is_given() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75, 1.0]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125, 0.125, 0.125]);
     buffer.undo();
 
@@ -825,7 +947,7 @@ fn a_resweep_covers_no_more_than_the_frames_it_is_given() {
 fn a_resweep_of_the_whole_loop_reports_nothing_left_to_cover() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
     buffer.undo();
 
@@ -836,7 +958,7 @@ fn a_resweep_of_the_whole_loop_reports_nothing_left_to_cover() {
 fn a_loop_with_nothing_undone_has_nothing_to_resweep() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
 
     assert!(!buffer.resummarise(2));
@@ -856,7 +978,7 @@ fn a_refused_undo_leaves_nothing_to_resweep() {
 fn clearing_leaves_nothing_to_resweep() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125]);
     buffer.undo();
 
@@ -870,9 +992,9 @@ fn clearing_leaves_nothing_to_resweep() {
 fn a_second_undo_sends_the_resweep_back_to_the_start_of_the_loop() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5, 0.75, 1.0]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.125, 0.125, 0.125, 0.125]);
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&[0.5, 0.5, 0.5, 0.5]);
     buffer.undo();
     buffer.resummarise(4);
@@ -894,7 +1016,7 @@ fn resweeping_does_not_allocate() {
     for _ in 0..LoopWaveform::BUCKETS {
         buffer.record(&block);
     }
-    buffer.overdub();
+    buffer.overdub(0);
     buffer.record(&block);
     buffer.undo();
 
