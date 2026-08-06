@@ -25,8 +25,8 @@ use motif::audio::Levels;
 use motif::device::{Button, DeviceProfile, Encoder};
 use motif::looper::{LoopBuffer, Transport};
 use motif::ui::{
-    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, Panel, Region, RenderError,
-    TerminalScreen,
+    App, Cell, ControlEvent, EventLoop, Flow, Frame, KeyReader, Legend, Marks, Panel, Region,
+    RenderError, TerminalScreen,
 };
 
 const SCREEN: motif::device::ScreenProfile = DeviceProfile::TARGET.screen;
@@ -174,7 +174,8 @@ impl Layout {
     }
 
     fn panel(&self) -> Panel {
-        self.legend().picture(&KeyReader::new(io::empty()))
+        self.legend()
+            .picture(&KeyReader::new(io::empty()), Marks::none())
     }
 }
 

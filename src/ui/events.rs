@@ -10,6 +10,10 @@
 //! touched to produce a control, which is what keeps a terminal one backend
 //! among others.
 //!
+//! A control is marked as it is handed over and the mark aged once the frame is
+//! shown, so the panel says an event arrived whether or not the application did
+//! anything with it.
+//!
 //! ```
 //! use motif::device::Button;
 //! use motif::ui::{
@@ -55,7 +59,7 @@ use crate::device::DeviceProfile;
 #[cfg(feature = "frame-pace")]
 use crate::ui::PaceWriter;
 use crate::ui::{
-    Clock, ControlEvent, Controls, Frame, Legend, Region, RenderError, Renderer, SystemClock,
+    Clock, ControlEvent, Controls, Frame, Legend, Marks, Region, RenderError, Renderer, SystemClock,
 };
 
 /// The most control events one frame will take.
@@ -150,6 +154,7 @@ pub struct EventLoop<K: Clock = SystemClock> {
     clock: K,
     budget: Duration,
     frame: Frame,
+    marks: Marks,
     #[cfg(feature = "frame-pace")]
     pace: Option<PaceWriter>,
 }
@@ -174,6 +179,7 @@ impl<K: Clock> EventLoop<K> {
             clock,
             budget: DeviceProfile::TARGET.screen.frame_budget(),
             frame: Frame::blank(),
+            marks: Marks::none(),
             #[cfg(feature = "frame-pace")]
             pace: None,
         }
@@ -222,14 +228,15 @@ impl<K: Clock> EventLoop<K> {
         loop {
             let started = self.clock.now();
 
-            if drain(app, controls).is_exit() || controls.interrupted() {
+            if drain(app, controls, &mut self.marks).is_exit() || controls.interrupted() {
                 return Ok(report);
             }
 
             self.frame = Frame::blank();
             let flow = app.draw(self.frame.region());
             screen.render(&self.frame)?;
-            screen.show_panel(&app.legend().picture(controls))?;
+            screen.show_panel(&app.legend().picture(controls, self.marks))?;
+            self.marks.age();
             report.frames += 1;
 
             let spent = self.clock.now().duration_since(started);
@@ -260,11 +267,13 @@ impl<K: Clock> EventLoop<K> {
     fn measured(&mut self, _spent: Duration, _overruns: u64) {}
 }
 
-fn drain(app: &mut impl App, controls: &mut impl Controls) -> Flow {
+fn drain(app: &mut impl App, controls: &mut impl Controls, marks: &mut Marks) -> Flow {
     for _ in 0..EVENTS_PER_FRAME {
         let Some(event) = controls.poll() else {
             break;
         };
+
+        marks.fired(event);
 
         if app.control(event).is_exit() {
             return Flow::Exit;
