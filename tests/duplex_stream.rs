@@ -84,7 +84,17 @@ fn a_stream_that_moves_no_samples_reports_silence() {
         .open(&selection(), request(), Passthrough::new())
         .expect("null backend opens");
 
-    assert_eq!(stream.levels(), Levels::SILENT);
+    assert_eq!(stream.captured(), Levels::SILENT);
+}
+
+#[test]
+fn a_stream_that_plays_no_samples_reports_silence() {
+    let backend = NullBackend::rounding(config());
+    let stream = backend
+        .open(&selection(), request(), Passthrough::new())
+        .expect("null backend opens");
+
+    assert_eq!(stream.played(), Levels::SILENT);
 }
 
 #[test]

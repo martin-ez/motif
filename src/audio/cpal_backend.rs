@@ -311,6 +311,7 @@ impl AudioBackend for CpalBackend {
             path,
         );
         let priming = capture.priming();
+        let played = playback.metering();
         let holding = playback.slack();
         let (mut level_writer, levels) = level_meter(input_channels, selection.input_channels);
         let (mut overruns, mut underruns, xruns) = xrun_counter();
@@ -379,6 +380,7 @@ impl AudioBackend for CpalBackend {
             input: input_stream,
             output: output_stream,
             levels,
+            played,
             xruns,
             holding,
             capture_load,
@@ -398,6 +400,7 @@ pub struct CpalStream {
     input: cpal::Stream,
     output: cpal::Stream,
     levels: LevelReader,
+    played: LevelReader,
     xruns: XrunReader,
     holding: SlackReader,
     capture_load: HeadroomReader,
@@ -428,8 +431,15 @@ impl DuplexStream for CpalStream {
     /// Measured on the samples the input device delivered, across the channels
     /// the selection names and no others — the ones the path goes on to
     /// capture.
-    fn levels(&self) -> Levels {
+    fn captured(&self) -> Levels {
         self.levels.read()
+    }
+
+    /// Measured at the boundary, on the frames the path wrote and before they
+    /// are spread across the output channels: the level a player set rather
+    /// than the one the converter saw.
+    fn played(&self) -> Levels {
+        self.played.read()
     }
 
     /// Counted against the boundary rather than reported by the device,

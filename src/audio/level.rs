@@ -193,11 +193,25 @@ impl LevelWriter {
         self.published.store(levels.packed(), Ordering::Release);
         levels
     }
+
+    /// Publish that there was nothing to measure.
+    ///
+    /// A producer with no block to hand over still has a level, and it is
+    /// [`Levels::SILENT`] rather than whatever it published last: a meter left
+    /// showing the block before is a meter that reports a signal nobody is
+    /// making.
+    pub fn silence(&mut self) {
+        self.published
+            .store(Levels::SILENT.packed(), Ordering::Release);
+    }
 }
 
 /// The reading end of a meter, held by whichever thread displays it.
 ///
-/// This is the end the application thread holds.
+/// This is the end the application thread holds. It clones, so a meter built
+/// inside something that is on its way to a callback can still be read from:
+/// what a clone shares is the one reading, not a second meter.
+#[derive(Clone)]
 pub struct LevelReader {
     published: Arc<AtomicU64>,
 }

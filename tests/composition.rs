@@ -132,7 +132,11 @@ impl DuplexStream for CountingStream {
         StreamState::Running
     }
 
-    fn levels(&self) -> Levels {
+    fn captured(&self) -> Levels {
+        Levels::SILENT
+    }
+
+    fn played(&self) -> Levels {
         Levels::SILENT
     }
 

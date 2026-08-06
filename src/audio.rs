@@ -360,7 +360,15 @@ pub trait DuplexStream {
     /// Measured in the callback and published without a lock, so this reads
     /// whatever the last block to arrive measured, and reads it again until the
     /// next one does. A stopped stream keeps reporting the block it stopped on.
-    fn levels(&self) -> Levels;
+    fn captured(&self) -> Levels;
+
+    /// How loud the most recent block the path played was.
+    ///
+    /// Read as [`captured`](Self::captured) is, and measured where the path has
+    /// finished writing and before the frames reach the device's channels: this
+    /// is the instrument rather than the converter, so everything a player set
+    /// — the gain, the mute, whether a take is running at all — is in it.
+    fn played(&self) -> Levels;
 
     /// How many callbacks have lost frames in each direction.
     ///
@@ -677,7 +685,13 @@ impl DuplexStream for NullStream {
 
     /// A stream with no device behind it meters nothing, so this is always
     /// [`Levels::SILENT`].
-    fn levels(&self) -> Levels {
+    fn captured(&self) -> Levels {
+        Levels::SILENT
+    }
+
+    /// A stream with no device behind it plays nothing, so this is always
+    /// [`Levels::SILENT`] too.
+    fn played(&self) -> Levels {
         Levels::SILENT
     }
 

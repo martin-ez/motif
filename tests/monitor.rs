@@ -59,13 +59,34 @@ fn deaf() -> StreamConfig {
 
 const FILL: char = '#';
 
-/// How wide the monitor draws the level meter, and where its left edge lands.
+/// How wide the monitor draws each level meter, and where the pair of them
+/// starts.
 ///
-/// The monitor keeps it against the right margin so that the state it writes
+/// The monitor keeps them against the right margin so that the state it writes
 /// from column zero has the rest of the row, which is what these say.
-const METER_COLUMNS: usize = 24;
-const METER_COLUMN: usize = DeviceProfile::TARGET.screen.columns - METER_COLUMNS;
+const METER_COLUMNS: usize = 20;
+const METERS_COLUMNS: usize = "in ".len() + " out ".len() + METER_COLUMNS + METER_COLUMNS;
+const METER_COLUMN: usize = DeviceProfile::TARGET.screen.columns - METERS_COLUMNS;
 const METER_SCALE: usize = METER_COLUMNS - 2;
+
+fn empty() -> String {
+    format!("[{}]", "-".repeat(METER_SCALE))
+}
+
+fn full() -> String {
+    format!("[{}|]", "#".repeat(METER_SCALE - 1))
+}
+
+fn meters(captured: &str, played: &str) -> String {
+    format!("in {captured} out {played}")
+}
+
+fn loud() -> Levels {
+    Levels {
+        peak: 1.0,
+        rms: 1.0,
+    }
+}
 
 fn pressed(button: Button) -> ControlEvent {
     ControlEvent::Pressed {
@@ -252,7 +273,11 @@ impl DuplexStream for RecordingStream {
         StreamState::Stopped
     }
 
-    fn levels(&self) -> Levels {
+    fn captured(&self) -> Levels {
+        Levels::SILENT
+    }
+
+    fn played(&self) -> Levels {
         Levels::SILENT
     }
 
@@ -289,14 +314,16 @@ impl DuplexStream for RecordingStream {
     }
 }
 
-/// A backend whose stream reports a level the test chose.
+/// A backend whose stream reports the two levels a test chose.
 ///
 /// The stream with no hardware behind it meters nothing, so it can only ever
-/// say the input is silent. This one stands in for a device with signal on it,
-/// which is what says a level reaches the screen rather than merely a bar.
-struct LoudBackend(Levels);
+/// say both are silent. This one stands in for a device with signal on it,
+/// which is what says a level reaches the screen rather than merely a bar — and
+/// it reports the two separately, which is what says the screen tells them
+/// apart.
+struct LoudBackend(Levels, Levels);
 
-struct LoudStream(Levels);
+struct LoudStream(Levels, Levels);
 
 impl AudioBackend for LoudBackend {
     type Stream = LoudStream;
@@ -315,7 +342,7 @@ impl AudioBackend for LoudBackend {
         _request: StreamRequest,
         _path: P,
     ) -> Result<Self::Stream, DeviceError> {
-        Ok(LoudStream(self.0))
+        Ok(LoudStream(self.0, self.1))
     }
 }
 
@@ -328,8 +355,12 @@ impl DuplexStream for LoudStream {
         StreamState::Running
     }
 
-    fn levels(&self) -> Levels {
+    fn captured(&self) -> Levels {
         self.0
+    }
+
+    fn played(&self) -> Levels {
+        self.1
     }
 
     fn xruns(&self) -> Xruns {
@@ -364,10 +395,13 @@ impl DuplexStream for LoudStream {
 /// A monitor over the null backend, playing what it captures.
 type Monitoring<A> = Monitor<A, NullBackend, fn() -> Passthrough>;
 
-fn hearing_a(levels: Levels) -> Monitor<Counted, LoudBackend, fn() -> Passthrough> {
+fn metering(
+    captured: Levels,
+    played: Levels,
+) -> Monitor<Counted, LoudBackend, fn() -> Passthrough> {
     Monitor::watching(
         Counted::default(),
-        SharedLink::defaulting(LoudBackend(levels), request(), Passthrough::new),
+        SharedLink::defaulting(LoudBackend(captured, played), request(), Passthrough::new),
     )
 }
 
@@ -437,6 +471,10 @@ fn bottom_row(frame: &Frame, columns: impl Iterator<Item = usize>) -> String {
 
 fn status(frame: &Frame) -> String {
     bottom_row(frame, 0..METER_COLUMN)
+}
+
+fn whole_row(frame: &Frame) -> String {
+    bottom_row(frame, 0..DeviceProfile::TARGET.screen.columns)
 }
 
 fn meter(frame: &Frame) -> String {
@@ -556,40 +594,47 @@ fn a_lost_device_says_on_screen_why_it_was_lost() {
     unplug(&monitor);
 
     assert_eq!(
-        status(&drawn(&mut monitor)),
+        whole_row(&drawn(&mut monitor)),
         "audio lost: the device is not available"
     );
 }
 
 #[test]
-fn a_silent_input_draws_an_empty_meter() {
+fn a_silent_device_draws_two_empty_meters() {
     let mut monitor = playing();
 
-    assert_eq!(
-        meter(&drawn(&mut monitor)),
-        format!("[{}]", "-".repeat(METER_SCALE))
-    );
+    assert_eq!(meter(&drawn(&mut monitor)), meters(&empty(), &empty()));
 }
 
 #[test]
-fn the_input_level_reaches_the_screen() {
-    let mut monitor = hearing_a(Levels {
-        peak: 1.0,
-        rms: 1.0,
-    });
+fn the_captured_level_reaches_the_screen() {
+    let mut monitor = metering(loud(), Levels::SILENT);
 
-    assert_eq!(
-        meter(&drawn(&mut monitor)),
-        format!("[{}|]", "#".repeat(METER_SCALE - 1))
+    assert_eq!(meter(&drawn(&mut monitor)), meters(&full(), &empty()));
+}
+
+#[test]
+fn the_played_level_reaches_the_screen() {
+    let mut monitor = metering(Levels::SILENT, loud());
+
+    assert_eq!(meter(&drawn(&mut monitor)), meters(&empty(), &full()));
+}
+
+#[test]
+fn a_silent_path_under_a_loud_input_is_told_apart_on_the_screen() {
+    let mut monitor = metering(loud(), Levels::SILENT);
+    let drawn = drawn(&mut monitor);
+
+    assert_ne!(
+        meter(&drawn),
+        meters(&full(), &full()),
+        "a player cannot see that nothing is being played"
     );
 }
 
 #[test]
 fn a_meter_leaves_the_state_beside_it_alone() {
-    let mut monitor = hearing_a(Levels {
-        peak: 1.0,
-        rms: 1.0,
-    });
+    let mut monitor = metering(loud(), loud());
 
     assert_eq!(status(&drawn(&mut monitor)), "audio playing");
 }

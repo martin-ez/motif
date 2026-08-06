@@ -18,9 +18,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    AudioPath, ChannelSelection, SampleConsumer, SampleProducer, SlackReader, SlackTrim,
-    StreamConfig, Trim, sample_ring, slack_hold,
+    AudioPath, ChannelSelection, LevelReader, LevelWriter, SampleConsumer, SampleProducer,
+    SlackReader, SlackTrim, StreamConfig, Trim, level_meter, sample_ring, slack_hold,
 };
+
+const PLAYED_CHANNELS: u16 = 1;
 
 /// Build the two ends of the boundary for a stream at `config`, carrying
 /// `input` of its capture channels to `path` and back out over `output`.
@@ -115,6 +117,7 @@ pub fn boundary<P: AudioPath>(
 
     path.prepare(config);
     let priming = Priming::new();
+    let (played, metering) = level_meter(PLAYED_CHANNELS, ChannelSelection::all(PLAYED_CHANNELS));
     let (trim, holding) = slack_hold(slack, block);
 
     (
@@ -136,6 +139,8 @@ pub fn boundary<P: AudioPath>(
             trim,
             holding,
             priming,
+            played,
+            metering,
         },
     )
 }
@@ -308,6 +313,8 @@ pub struct BlockPlayback<P> {
     trim: SlackTrim,
     holding: SlackReader,
     priming: Priming,
+    played: LevelWriter,
+    metering: LevelReader,
 }
 
 impl<P: AudioPath> BlockPlayback<P> {
@@ -326,6 +333,7 @@ impl<P: AudioPath> BlockPlayback<P> {
         self.priming.playback_ran();
         if !self.priming.carrying() && !self.takes_up_the_slack() {
             output.fill(0.0);
+            self.played.silence();
             return output.len() / self.channels;
         }
 
@@ -345,6 +353,7 @@ impl<P: AudioPath> BlockPlayback<P> {
             let playing = &mut self.playing[..frames];
             playing.fill(0.0);
             self.path.render(captured, playing);
+            self.played.publish(playing);
 
             for (slot, sample) in chunk.chunks_exact_mut(self.channels).zip(playing.iter()) {
                 slot.fill(0.0);
@@ -356,6 +365,17 @@ impl<P: AudioPath> BlockPlayback<P> {
         }
 
         supplied
+    }
+
+    /// A handle on how loud the frames the path played were.
+    ///
+    /// Taken from this end because a callback owns it once the stream is built,
+    /// as [`BlockCapture::priming`] is. Measured on what the path wrote and
+    /// before it is spread across the device's channels, so it reads what was
+    /// played rather than what a device made of it: a mute upstream reads
+    /// silent here while the input goes on arriving.
+    pub fn metering(&self) -> LevelReader {
+        self.metering.clone()
     }
 
     /// A handle on the slack the boundary is holding, for whatever reports on
