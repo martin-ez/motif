@@ -6,8 +6,8 @@
 //! terminal over, runs the event loop, and reports why the run ended. The link
 //! is built here because a run has one, whatever comes to share it, and it opens
 //! before the terminal does so that a host enumerating onto stderr does it to an
-//! ordinary screen. The shell owns the pages and quitting, and is the only way
-//! out of the mode the terminal is left in.
+//! ordinary screen. The shell owns the pages and quitting, and the terminal's
+//! own interrupt ends a run the shell would not.
 //!
 //! The settings page is built before the monitor, because listing the devices
 //! has to happen before a stream holds one of them.

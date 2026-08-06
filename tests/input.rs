@@ -23,6 +23,14 @@ fn turned(encoder: Encoder, turn: Turn) -> ControlEvent {
 }
 
 #[test]
+fn a_panel_with_no_way_out_of_its_own_is_never_interrupted() {
+    let mut controls = ScriptedControls::new([pressed(Button::Play)]);
+    controls.poll();
+
+    assert!(!controls.interrupted());
+}
+
+#[test]
 fn a_scripted_event_is_polled_back() {
     let mut controls = ScriptedControls::new([pressed(Button::Play)]);
 

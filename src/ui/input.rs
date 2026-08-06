@@ -143,6 +143,20 @@ pub trait Controls {
     fn hint(&self, _control: Control) -> Option<Hint> {
         None
     }
+
+    /// Whether the panel has ended the run itself.
+    ///
+    /// A panel with a way out the application neither declares nor can refuse
+    /// answers true once it has been taken, and the loop stops without asking.
+    /// It exists because a run can outlast the gesture that was meant to end
+    /// it, and one that cannot be ended where it was started has to be killed
+    /// from somewhere else.
+    ///
+    /// The default is false: a panel whose every control reaches the
+    /// application has no way out the application does not already hold.
+    fn interrupted(&self) -> bool {
+        false
+    }
 }
 
 /// A panel with no hardware behind it, handing back events given in advance.

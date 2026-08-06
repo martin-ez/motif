@@ -246,6 +246,48 @@ fn a_source_that_refuses_a_read_is_no_event() {
     assert!(events_from(BrokenSource).is_empty());
 }
 
+/// The byte a terminal sends for Ctrl+C, which is the way out of a run that the
+/// application does not offer.
+const INTERRUPT: &[u8] = b"\x03";
+
+#[test]
+fn the_interrupt_key_ends_the_panel() {
+    let mut reader = KeyReader::new(INTERRUPT);
+
+    assert_eq!(reader.poll(), None);
+    assert!(reader.interrupted());
+}
+
+#[test]
+fn the_interrupt_key_is_no_control() {
+    assert!(events(INTERRUPT).is_empty());
+}
+
+#[test]
+fn a_panel_nobody_interrupted_carries_on() {
+    let mut reader = KeyReader::new(&b"z"[..]);
+
+    assert_eq!(reader.poll(), pressed(Button::Play));
+    assert!(!reader.interrupted());
+}
+
+#[test]
+fn an_interrupt_behind_a_key_still_ends_the_panel() {
+    let mut reader = KeyReader::new(&b"z\x03"[..]);
+
+    assert_eq!(reader.poll(), pressed(Button::Play));
+    assert_eq!(reader.poll(), None);
+    assert!(reader.interrupted());
+}
+
+#[test]
+fn a_key_typed_after_the_interrupt_is_not_read() {
+    let mut reader = KeyReader::new(&b"\x03z"[..]);
+
+    assert_eq!(reader.poll(), None);
+    assert_eq!(reader.poll(), None);
+}
+
 fn hint(control: Control) -> String {
     KeyReader::new(&b""[..])
         .hint(control)
