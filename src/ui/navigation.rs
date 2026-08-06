@@ -12,8 +12,10 @@
 //! than typed out where the application is built, so that a test can assert the
 //! bindings and a change to them is a change to one value.
 
-use crate::device::Button;
-use crate::ui::{ControlEvent, Mode};
+use crate::device::{Button, Control, Encoder};
+use crate::ui::{ControlEvent, Legend, Mode, Turn};
+
+const SHIFTS: [bool; 2] = [false, true];
 
 /// Something the application should do about where it is.
 ///
@@ -144,4 +146,61 @@ impl Navigation for Scheme {
             .find(|(gesture, _)| *gesture == event)
             .map(|&(_, intent)| intent)
     }
+}
+
+/// Which controls `navigation` keeps for itself, drawn as a legend.
+///
+/// Asked of the same value the shell navigates by, gesture by gesture, so the
+/// keys the picture lights are the scheme rather than a second copy of it that
+/// nothing checks. Changing the scheme changes what the screen says.
+///
+/// It joins the showing page's legend rather than taking a row of its own: a
+/// [`Panel`](crate::ui::Panel) is drawn beside the frame and costs the screen
+/// nothing, where a row of its own would spend one of the fifteen. A key drawn
+/// heavy then means the same everywhere — this does something here.
+///
+/// ```
+/// use motif::device::Button;
+/// use motif::ui::{Scheme, navigating};
+///
+/// let legend = navigating(&Scheme::scenes());
+///
+/// assert!(legend.answers(Button::FirstScene));
+/// assert!(!legend.answers(Button::Play));
+/// ```
+pub fn navigating(navigation: &dyn Navigation) -> Legend {
+    let pressed = Button::ALL
+        .into_iter()
+        .filter(|&button| resolves(navigation, presses(button)))
+        .map(Control::Button);
+    let turned = Encoder::ALL
+        .into_iter()
+        .filter(|&encoder| resolves(navigation, turns(encoder)))
+        .map(Control::Encoder);
+
+    pressed
+        .chain(turned)
+        .fold(Legend::blank(), |legend, control| legend.answering(control))
+}
+
+fn resolves(navigation: &dyn Navigation, gestures: impl IntoIterator<Item = ControlEvent>) -> bool {
+    gestures
+        .into_iter()
+        .any(|event| navigation.intent(event).is_some())
+}
+
+fn presses(button: Button) -> impl Iterator<Item = ControlEvent> {
+    SHIFTS
+        .into_iter()
+        .map(move |shifted| ControlEvent::Pressed { button, shifted })
+}
+
+fn turns(encoder: Encoder) -> impl Iterator<Item = ControlEvent> {
+    Turn::ALL.into_iter().flat_map(move |turn| {
+        SHIFTS.map(move |shifted| ControlEvent::Turned {
+            encoder,
+            turn,
+            shifted,
+        })
+    })
 }

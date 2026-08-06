@@ -240,6 +240,32 @@ impl Legend {
         self
     }
 
+    /// The same legend, also answering everything `other` answers.
+    ///
+    /// What puts two declarations together. A page declares what it answers and
+    /// nothing else, so a control the page never sees — the way out of the run,
+    /// a gesture that navigates — is declared by whoever keeps it and joined on
+    /// here.
+    ///
+    /// ```
+    /// use motif::device::{Button, Encoder};
+    /// use motif::ui::Legend;
+    ///
+    /// let legend = Legend::blank()
+    ///     .answering(Button::Play)
+    ///     .also_answering(Legend::blank().answering(Encoder::Main));
+    ///
+    /// assert!(legend.answers(Button::Play));
+    /// assert!(legend.answers(Encoder::Main));
+    /// ```
+    pub fn also_answering(mut self, other: Self) -> Self {
+        for (answered, also) in self.answered.iter_mut().zip(other.answered) {
+            *answered |= also;
+        }
+
+        self
+    }
+
     /// Whether `control` does anything on this page.
     pub fn answers(&self, control: impl Into<Control>) -> bool {
         self.answered[control.into().position()]

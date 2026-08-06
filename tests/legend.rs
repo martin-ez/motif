@@ -140,6 +140,49 @@ fn answering_a_control_twice_answers_it_once() {
 }
 
 #[test]
+fn a_legend_also_answering_another_answers_what_each_answers() {
+    let legend = Legend::blank()
+        .answering(Button::Play)
+        .also_answering(Legend::blank().answering(Button::Up));
+
+    assert!(legend.answers(Button::Play));
+    assert!(legend.answers(Button::Up));
+}
+
+#[test]
+fn a_control_neither_legend_answers_stays_unanswered() {
+    let legend = Legend::blank()
+        .answering(Button::Play)
+        .also_answering(Legend::blank().answering(Button::Up));
+
+    assert!(!legend.answers(Button::Stop));
+    assert!(!legend.answers(Encoder::Main));
+}
+
+#[test]
+fn a_control_both_legends_answer_stays_answered() {
+    let legend = Legend::blank()
+        .answering(Button::Play)
+        .also_answering(Legend::blank().answering(Button::Play));
+
+    assert!(legend.answers(Button::Play));
+}
+
+#[test]
+fn also_answering_a_blank_legend_changes_nothing() {
+    let legend = Legend::blank().answering(Button::Play);
+
+    assert_eq!(legend.also_answering(Legend::blank()), legend);
+}
+
+#[test]
+fn a_blank_legend_also_answering_another_becomes_it() {
+    let other = Legend::blank().answering(Button::Play);
+
+    assert_eq!(Legend::blank().also_answering(other), other);
+}
+
+#[test]
 fn every_key_wears_the_glyph_that_reaches_it_answered_or_not() {
     let panel = drawn(&Legend::blank(), &Lettered);
     let text = text_of(&panel);

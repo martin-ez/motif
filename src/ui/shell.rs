@@ -2,7 +2,9 @@
 //! reaches it.
 
 use crate::device::Button;
-use crate::ui::{App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page, Region};
+use crate::ui::{
+    App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page, Region, navigating,
+};
 
 /// The pages the instrument has, and the one it is showing.
 ///
@@ -13,8 +15,8 @@ use crate::ui::{App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page,
 /// A control a [`Navigation`] resolves into an [`Intent`] is applied here and
 /// not forwarded, so a page never sees what navigates.
 ///
-/// Shift + stop is kept whatever a scheme says, and declared beside the page's
-/// legend so the way out is drawn live on a page that ignores stop.
+/// Shift + stop is kept whatever a scheme says, and the legend is the page's,
+/// [`navigating`]'s and that way out at once — so every live key is drawn live.
 ///
 /// ```
 /// use motif::device::Button;
@@ -130,10 +132,16 @@ impl App for Shell {
     }
 
     fn legend(&self) -> Legend {
-        self.page()
+        let page = self
+            .page()
             .legend()
             .answering(Button::Shift)
-            .answering(Button::Stop)
+            .answering(Button::Stop);
+
+        match self.navigation.as_deref() {
+            Some(navigation) => page.also_answering(navigating(navigation)),
+            None => page,
+        }
     }
 
     fn draw(&mut self, region: Region<'_>) -> Flow {
