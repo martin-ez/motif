@@ -38,6 +38,8 @@ exclude_re = [
   'replace \| with \^ in Levels::packed',
   # Playhead above bit 32 and recorded length below.
   'replace \| with \^ in LoopPosition::packed',
+  # The take count above bit 32 and the round trip it carries below.
+  'replace \| with \^ in Measurement::packed',
   # `<=` admits only the selection sitting on the offset, where the assignment
   # it admits sets the offset to the value it already holds.
   'replace < with <= in ListPage::keep_the_selection_visible',
