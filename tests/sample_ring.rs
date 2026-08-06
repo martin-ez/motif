@@ -206,6 +206,75 @@ fn a_capacity_that_is_not_a_power_of_two_wraps_cleanly() {
 }
 
 #[test]
+fn a_skip_leaves_the_samples_after_the_ones_it_dropped() {
+    let (mut producer, mut consumer) = sample_ring(4);
+    let mut taken = [0.0; 2];
+    producer.write(&[1.0, 2.0, 3.0, 4.0]);
+
+    consumer.skip(2);
+    consumer.read(&mut taken);
+
+    assert_eq!(taken, [3.0, 4.0]);
+}
+
+#[test]
+fn a_skip_reports_how_many_samples_it_dropped() {
+    let (mut producer, mut consumer) = sample_ring(4);
+    producer.write(&[1.0, 2.0, 3.0, 4.0]);
+
+    assert_eq!(consumer.skip(3), 3);
+}
+
+#[test]
+fn a_skip_past_the_last_sample_drops_only_what_is_there() {
+    let (mut producer, mut consumer) = sample_ring(4);
+    producer.write(&[1.0, 2.0]);
+
+    assert_eq!(consumer.skip(4), 2);
+    assert_eq!(consumer.available(), 0);
+}
+
+#[test]
+fn a_skip_of_an_empty_ring_drops_nothing() {
+    let (_producer, mut consumer) = sample_ring(4);
+
+    assert_eq!(consumer.skip(2), 0);
+}
+
+#[test]
+fn a_skip_of_nothing_drops_nothing() {
+    let (mut producer, mut consumer) = sample_ring(4);
+    producer.write(&[1.0, 2.0]);
+
+    assert_eq!(consumer.skip(0), 0);
+    assert_eq!(consumer.available(), 2);
+}
+
+#[test]
+fn skipping_frees_the_slots_it_dropped() {
+    let (mut producer, mut consumer) = sample_ring(4);
+    producer.write(&[1.0, 2.0, 3.0, 4.0]);
+
+    consumer.skip(2);
+
+    assert_eq!(producer.write(&[5.0, 6.0]), 2);
+}
+
+#[test]
+fn skipping_does_not_allocate() {
+    let (mut producer, mut consumer) = sample_ring(4);
+
+    let before = allocations();
+    for _ in 0..128 {
+        producer.write(&[1.0, 2.0]);
+        consumer.skip(2);
+    }
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
+
+#[test]
 fn a_ring_reports_the_capacity_it_was_built_with() {
     let (producer, consumer) = sample_ring(64);
 

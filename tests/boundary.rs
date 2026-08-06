@@ -8,8 +8,9 @@
 //! The facts worth stating are that a frame survives the fold to one sample and
 //! the spread back across channels, that the path in between decides the
 //! samples that are spread, that only the selected channels carry them, that a
-//! ring which is full or dry is reported rather than waited on, and that
-//! neither callback allocates.
+//! ring which is full or dry is reported rather than waited on, that nothing is
+//! due across the boundary until both ends have run once, and that neither
+//! callback allocates.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -119,7 +120,16 @@ fn config(input_channels: u16, output_channels: u16) -> StreamConfig {
     }
 }
 
-fn whole(config: StreamConfig, slack: usize) -> (BlockCapture, BlockPlayback<Passthrough>) {
+fn running<P: AudioPath>(
+    ends: (BlockCapture, BlockPlayback<P>),
+) -> (BlockCapture, BlockPlayback<P>) {
+    let (mut input, mut output) = ends;
+    input.capture(&[]);
+    output.render(&mut []);
+    (input, output)
+}
+
+fn unstarted(config: StreamConfig, slack: usize) -> (BlockCapture, BlockPlayback<Passthrough>) {
     boundary(
         config,
         ChannelSelection::all(config.input_channels),
@@ -129,12 +139,16 @@ fn whole(config: StreamConfig, slack: usize) -> (BlockCapture, BlockPlayback<Pas
     )
 }
 
+fn whole(config: StreamConfig, slack: usize) -> (BlockCapture, BlockPlayback<Passthrough>) {
+    running(unstarted(config, slack))
+}
+
 fn played_through(
     config: StreamConfig,
     input: ChannelSelection,
     output: ChannelSelection,
 ) -> (BlockCapture, BlockPlayback<Passthrough>) {
-    boundary(config, input, output, 0, Passthrough::new())
+    running(boundary(config, input, output, 0, Passthrough::new()))
 }
 
 fn channels(first: u16, count: u16) -> ChannelSelection {
@@ -234,13 +248,13 @@ fn an_output_channel_outside_the_selection_is_silent() {
 #[test]
 fn a_path_is_handed_one_sample_for_every_captured_frame() {
     let heard = Heard::default();
-    let (mut input, mut output) = boundary(
+    let (mut input, mut output) = running(boundary(
         config(2, 1),
         ChannelSelection::all(2),
         ChannelSelection::all(1),
         0,
         heard.clone(),
-    );
+    ));
 
     input.capture(&[1.0, 0.0, 0.5, 0.5]);
     output.render(&mut [0.0; 2]);
@@ -250,13 +264,13 @@ fn a_path_is_handed_one_sample_for_every_captured_frame() {
 
 #[test]
 fn what_a_path_plays_is_spread_rather_than_what_was_captured() {
-    let (mut input, mut output) = boundary(
+    let (mut input, mut output) = running(boundary(
         config(1, 2),
         ChannelSelection::all(1),
         ChannelSelection::all(2),
         0,
         Tone(0.25),
-    );
+    ));
     let mut played = [0.0; 4];
 
     input.capture(&[1.0, 1.0]);
@@ -268,13 +282,13 @@ fn what_a_path_plays_is_spread_rather_than_what_was_captured() {
 #[test]
 fn a_path_is_handed_silence_for_the_frames_the_ring_could_not_supply() {
     let heard = Heard::default();
-    let (mut input, mut output) = boundary(
+    let (mut input, mut output) = running(boundary(
         config(1, 1),
         ChannelSelection::all(1),
         ChannelSelection::all(1),
         0,
         heard.clone(),
-    );
+    ));
 
     input.capture(&[1.0]);
     output.render(&mut [0.0; 3]);
@@ -381,6 +395,102 @@ fn a_full_ring_drops_the_frames_it_cannot_hold() {
 }
 
 #[test]
+fn a_capture_before_the_playback_end_has_run_is_not_a_dropout() {
+    let (mut input, _output) = unstarted(config(1, 1), 0);
+    let capacity = input.capacity();
+
+    assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity + 1);
+}
+
+#[test]
+fn a_playback_before_the_capture_end_has_run_is_not_a_dropout() {
+    let (_input, mut output) = unstarted(config(1, 1), 0);
+    let mut played = [9.0; 4];
+
+    let supplied = output.render(&mut played);
+
+    assert_eq!(supplied, 4);
+    assert_eq!(played, [0.0; 4]);
+}
+
+#[test]
+fn frames_captured_before_the_playback_end_ran_are_not_played() {
+    let (mut input, mut output) = unstarted(config(1, 1), 0);
+    let mut played = [0.0; 2];
+
+    input.capture(&[0.1, 0.2]);
+    output.render(&mut played);
+    input.capture(&[0.3, 0.4]);
+    output.render(&mut played);
+
+    assert_eq!(played, [0.3, 0.4]);
+}
+
+#[test]
+fn the_slack_survives_a_playback_that_ran_before_any_capture() {
+    let (mut input, mut output) = unstarted(config(1, 1), 2);
+    let mut played = [0.0; 4];
+
+    output.render(&mut played);
+    output.render(&mut played);
+    input.capture(&[1.0, 2.0]);
+    output.render(&mut played);
+
+    assert_eq!(played, [0.0, 0.0, 1.0, 2.0]);
+}
+
+#[test]
+fn the_slack_survives_a_capture_that_ran_before_any_playback() {
+    let (mut input, mut output) = unstarted(config(1, 1), 2);
+    let mut played = [0.0; 4];
+
+    input.capture(&[8.0, 9.0]);
+    output.render(&mut played);
+    input.capture(&[1.0, 2.0]);
+    output.render(&mut played);
+
+    assert_eq!(played, [0.0, 0.0, 1.0, 2.0]);
+}
+
+#[test]
+fn a_dry_ring_is_reported_short_once_the_boundary_is_carrying() {
+    let (mut input, mut output) = whole(config(1, 1), 2);
+    let mut played = [0.0; 4];
+    input.capture(&[1.0, 2.0]);
+
+    output.render(&mut played);
+    let starved = output.render(&mut played);
+
+    assert_eq!(starved, 0);
+}
+
+#[test]
+fn a_restarted_boundary_does_not_count_its_start_as_a_dropout() {
+    let (mut input, _output) = whole(config(1, 1), 0);
+    let capacity = input.capacity();
+    let priming = input.priming();
+
+    priming.restart();
+
+    assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity + 1);
+}
+
+#[test]
+fn a_restarted_boundary_falls_back_to_its_slack() {
+    let (mut input, mut output) = whole(config(1, 1), 2);
+    let priming = input.priming();
+    let mut played = [0.0; 4];
+    input.capture(&[7.0, 8.0, 9.0, 10.0]);
+
+    priming.restart();
+    output.render(&mut played);
+    input.capture(&[1.0, 2.0]);
+    output.render(&mut played);
+
+    assert_eq!(played, [9.0, 10.0, 1.0, 2.0]);
+}
+
+#[test]
 fn neither_callback_allocates() {
     let profile = DeviceProfile::TARGET.audio;
     let block = profile.block_size as usize;
@@ -401,6 +511,24 @@ fn neither_callback_allocates() {
         input.capture(&captured);
         output.render(&mut played);
     }
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
+
+#[test]
+fn neither_callback_allocates_while_the_boundary_is_priming() {
+    let (mut input, mut output) = whole(config(1, 1), 4);
+    let priming = input.priming();
+    let captured = [0.25; 32];
+    let mut played = [0.0; 32];
+    input.capture(&captured);
+
+    let before = allocations();
+    priming.restart();
+    output.render(&mut played);
+    input.capture(&captured);
+    output.render(&mut played);
     let after = allocations();
 
     assert_eq!(after, before);

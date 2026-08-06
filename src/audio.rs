@@ -30,7 +30,7 @@ mod placement;
 mod ring;
 mod xrun;
 
-pub use boundary::{BlockCapture, BlockPlayback, boundary};
+pub use boundary::{BlockCapture, BlockPlayback, Priming, boundary};
 pub use catalog::DeviceCatalog;
 pub use clock::{Counting, SampleClockReader, SampleClockWriter, sample_clock};
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
