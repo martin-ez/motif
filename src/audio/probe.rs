@@ -7,9 +7,11 @@
 //! device buffers at each end. It publishes over one atomic store, as the
 //! meters beside it do, and allocates nothing in the callback.
 //!
-//! A take is not started until the stream has settled, and one whose click
-//! never comes back is abandoned rather than reported, so an unplugged cable
-//! produces no measurement instead of a wrong one.
+//! A take is not started until the stream has settled, and a click that does
+//! not come back inside [`LISTENING`] stops the probe rather than starting
+//! another: a second click would collect the first one's late return inside its
+//! own window and report it as a short round trip. So an unplugged loop, and a
+//! slow one, measure nothing at all rather than something wrong.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -50,10 +52,12 @@ pub const DETECTION_FRACTION: f32 = 0.2;
 /// polling the meter sees every one of them.
 pub const SETTLING: Duration = Duration::from_millis(250);
 
-/// How long a probe waits for its click before abandoning the take.
+/// How long a probe waits for its click before it gives up on the loop.
 ///
-/// A round trip longer than this is a loop that is not wired up rather than one
-/// that is slow, so the take is dropped and another started.
+/// A click that has not come back by then stops the probe rather than starting
+/// another take: clicking again would collect this one's late return inside the
+/// next one's window and report it as a short round trip. A loop slower than
+/// this measures nothing, which is what a cable is for.
 pub const LISTENING: Duration = Duration::from_millis(250);
 
 /// How long a click took to come back, in frames.
@@ -181,8 +185,9 @@ pub fn latency_probe() -> (LatencyProbe, RoundTripReader) {
 /// The path that measures its own round trip.
 ///
 /// Runs a take at a time: silence while the stream settles, one click, then
-/// listening for it. Both ends of the loop are the caller's to wire — over a
-/// cable this measures the hardware, and over anything else it measures that.
+/// listening for it, and it stops for good at the first click that does not
+/// come back. Both ends of the loop are the caller's to wire — over a cable
+/// this measures the hardware, and over anything else it measures that.
 ///
 /// It hears nothing of the block it clicked in, whose frames were captured
 /// before the click was played, so a round trip shorter than one block is not
@@ -248,9 +253,7 @@ impl AudioPath for LatencyProbe {
                         until: ended + self.settling,
                     }
                 }
-                None if ended >= until => Stage::Settling {
-                    until: ended + self.settling,
-                },
+                None if ended >= until => Stage::Silent,
                 None => Stage::Listening { emitted_at, until },
             },
             waiting => waiting,
@@ -270,6 +273,7 @@ impl AudioPath for LatencyProbe {
 enum Stage {
     Settling { until: u64 },
     Listening { emitted_at: u64, until: u64 },
+    Silent,
 }
 
 fn frames_in(span: Duration, sample_rate: u32) -> u64 {

@@ -35,16 +35,28 @@ rather than by feel.
 cargo run --example loopback
 ```
 
-It clicks nine times, a quarter of a second apart, and reports each round trip
-in frames and milliseconds along with the median. A take whose click does not
-come back inside a quarter of a second is dropped rather than reported, so a
-loop that is not wired up prints nothing instead of a wrong number.
+It clicks up to nine times, a quarter of a second apart, and reports each round
+trip in frames and milliseconds along with the median. The click is one frame at
+full scale, so turn the output down before running it into anything you are
+listening to.
+
+The first click that does not come back within a quarter of a second stops it,
+rather than starting another take. That is what keeps the figure honest: a
+second click would collect the first one's late return inside its own window and
+report a slow loop as a fast one. So a loop that is not wired up, and one slower
+than the listening window, both print nothing rather than a wrong number — which
+is the case for using a cable rather than a wireless output.
 
 ## The budget
 
 **Five blocks**, which at the target profile's 48 kHz in 256-frame blocks is
 1280 frames, or **26.7 ms**. It is stated in blocks rather than milliseconds so
-that it follows whatever block size a device grants.
+that it follows the block size the stream was opened for.
+
+The block it follows is the one **requested**, not the one the device granted. A
+device may grant a shorter block, and the boundary's slack is built from the
+request either way, so a budget denominated in the granted size would shrink
+while the thing it is paying for did not.
 
 Where the five come from:
 

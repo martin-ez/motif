@@ -31,6 +31,11 @@ const BLOCK: usize = 50;
 /// test turns a mutant into a hang.
 const SETTLE_BLOCKS: usize = 5;
 
+/// A loop long enough that the click lands past the listening window and inside
+/// the window a second click would have opened, which is where a probe that
+/// went on clicking would report it as a short round trip.
+const SLOW_LOOP: usize = 600;
+
 fn config() -> StreamConfig {
     StreamConfig {
         sample_rate: RATE,
@@ -209,12 +214,21 @@ fn a_click_that_never_returns_reports_no_measurement() {
 }
 
 #[test]
-fn a_probe_that_hears_no_return_settles_before_clicking_again() {
+fn a_probe_that_hears_no_return_stops_clicking() {
     let mut loopback = Loopback::unplugged();
 
     loopback.run(16);
 
-    assert_eq!(loopback.clicks(), vec![SETTLE_BLOCKS, 15]);
+    assert_eq!(loopback.clicks(), vec![SETTLE_BLOCKS]);
+}
+
+#[test]
+fn a_loop_slower_than_the_listening_window_is_not_measured() {
+    let mut loopback = Loopback::wired(SLOW_LOOP);
+
+    loopback.run(40);
+
+    assert!(loopback.reader.read().is_none());
 }
 
 #[test]

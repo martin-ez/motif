@@ -11,7 +11,8 @@
 //!
 //! Wire output to input before running it — a jack lead for a line interface,
 //! or the headphone socket to the microphone socket. Failing that a speaker and
-//! a microphone will do, and the figure then carries the air between them.
+//! a microphone will do, and the figure then carries the air between them. The
+//! click is one frame at full scale, so turn the output down first.
 //!
 //! Nothing is emitted until you ask for it, as in `duplex`: reaching the end of
 //! the input rather than a keypress, which is how anything automated runs this,
@@ -30,6 +31,7 @@ use motif::device::DeviceProfile;
 const TAKES: u32 = 9;
 const POLL: Duration = Duration::from_millis(20);
 const GIVING_UP: Duration = Duration::from_secs(30);
+const GRACE: Duration = Duration::from_secs(5);
 
 fn main() -> Result<(), DeviceError> {
     let profile = DeviceProfile::TARGET.audio;
@@ -37,6 +39,11 @@ fn main() -> Result<(), DeviceError> {
         sample_rate: profile.sample_rate,
         block_size: profile.block_size,
     };
+
+    println!(
+        "requested  {} Hz, {} frames",
+        request.sample_rate, request.block_size
+    );
 
     let backend = CpalBackend::new();
     let Some(selection) = backend.defaults(request.sample_rate) else {
@@ -56,14 +63,14 @@ fn main() -> Result<(), DeviceError> {
         granted.sample_rate, granted.block_size
     );
 
-    let budget = RoundTrip::budget(granted.block_size);
+    let budget = RoundTrip::budget(request.block_size);
     println!(
         "budget     {} frames, {}",
         budget.frames,
         milliseconds(budget, granted.sample_rate)
     );
 
-    if !enter_pressed("output wired to input? Enter clicks, Ctrl-C quits") {
+    if !enter_pressed("output wired to input? Enter clicks at full scale, Ctrl-C quits") {
         return Ok(());
     }
 
@@ -87,6 +94,9 @@ fn collected(measured: &RoundTripReader) -> Vec<RoundTrip> {
         {
             seen = measurement.takes;
             taken.push(measurement.round_trip);
+        }
+        if taken.is_empty() && started.elapsed() > GRACE {
+            break;
         }
         thread::sleep(POLL);
     }
