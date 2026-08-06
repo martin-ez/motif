@@ -73,10 +73,27 @@ fn allocations() -> usize {
 /// mutant is free to make enormous.
 const BLOCKS_ALLOWED: usize = 16;
 
+/// More blocks than a crossing at the smallest block these tests grant can
+/// need, so a take that never crosses fails rather than hanging.
+const CROSSINGS_ALLOWED: usize = 512;
+
 fn eight_frame_profile() -> AudioProfile {
     AudioProfile {
         sample_rate: 8,
         block_size: 4,
+        max_loop_seconds: 1,
+    }
+}
+
+/// A profile whose longest loop is twice the blocks a take gets to cross in, so
+/// a full block's share is two frames and half a block's is one.
+///
+/// A share of one frame is the floor, so a loop any shorter than this crosses
+/// in the same blocks whatever it was handed.
+fn scaling_profile() -> AudioProfile {
+    AudioProfile {
+        sample_rate: 128,
+        block_size: 8,
         max_loop_seconds: 1,
     }
 }
@@ -127,24 +144,25 @@ fn engine_drawing() -> (Commanded<LoopEngine>, CommandSender, WaveformReader) {
     )
 }
 
-/// An engine over an eight-frame loop, with the end its takes are read from.
-fn engine_handing_takes() -> (Commanded<LoopEngine>, CommandSender, TakeReader) {
+/// An engine over `profile`'s longest loop, with the end its takes are read
+/// from.
+fn engine_over(profile: AudioProfile) -> (Commanded<LoopEngine>, CommandSender, TakeReader) {
     let (sender, receiver) = command_channel(8);
-    let (crossing, takes) = take_handoff(eight_frame_profile());
+    let (crossing, takes) = take_handoff(profile);
 
     (
         Commanded::new(
             receiver,
-            LoopEngine::new(
-                eight_frame_profile(),
-                position_meter().0,
-                waveform_meter().0,
-                crossing,
-            ),
+            LoopEngine::new(profile, position_meter().0, waveform_meter().0, crossing),
         ),
         sender,
         takes,
     )
+}
+
+/// An engine over an eight-frame loop, with the end its takes are read from.
+fn engine_handing_takes() -> (Commanded<LoopEngine>, CommandSender, TakeReader) {
+    engine_over(eight_frame_profile())
 }
 
 /// Queue `command`, as the application thread does.
@@ -933,6 +951,58 @@ fn undoing_a_layer_hands_the_loop_that_is_left_over() {
     press(&mut sender, Command::Undo);
 
     assert_eq!(crossed(&mut engine, &mut takes), [0.25, 0.5]);
+}
+
+/// Fill `profile`'s longest loop `block` frames at a time, stop, and report how
+/// many frames the engine rendered before the take crossed.
+fn frames_rendered_to_cross(profile: AudioProfile, block: usize) -> usize {
+    let (mut engine, mut sender, mut takes) = engine_over(profile);
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    for _ in 0..profile.max_loop_frames() / block {
+        heard(&mut engine, block);
+    }
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    for rendered in 0..CROSSINGS_ALLOWED {
+        heard(&mut engine, block);
+        if takes.claim().is_some() {
+            return (rendered + 1) * block;
+        }
+    }
+
+    panic!("no take crossed");
+}
+
+#[test]
+fn a_take_crosses_in_the_same_frames_whatever_block_the_device_grants() {
+    let profile = scaling_profile();
+    let granted = profile.block_size as usize;
+
+    assert_eq!(
+        frames_rendered_to_cross(profile, granted / 2),
+        frames_rendered_to_cross(profile, granted)
+    );
+}
+
+#[test]
+fn a_take_crosses_whole_at_a_block_shorter_than_the_profiles() {
+    let profile = scaling_profile();
+    let (mut engine, mut sender, mut takes) = engine_over(profile);
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    for _ in 0..profile.max_loop_frames() / 4 {
+        played(&mut engine, &[0.25; 4]);
+    }
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    for _ in 0..CROSSINGS_ALLOWED {
+        heard(&mut engine, 4);
+        if let Some(take) = takes.claim() {
+            assert_eq!(take.frames(), profile.max_loop_frames());
+            return;
+        }
+    }
+
+    panic!("no take crossed");
 }
 
 #[test]

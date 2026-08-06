@@ -147,7 +147,7 @@ impl LoopEngine {
             }
         }
         self.buffer.resummarise(frames);
-        self.takes.advance(&self.buffer);
+        self.takes.advance(&self.buffer, frames);
 
         for (played, level) in playing.iter_mut().zip(gained) {
             *played += level;
@@ -173,7 +173,13 @@ fn frame_count(frames: usize) -> u32 {
 
 impl AudioPath for LoopEngine {
     /// Nothing to prepare: the loop and the scratch are sized from the profile
-    /// the engine was built with, and a longer block is worked in chunks.
+    /// the engine was built with, and what the device granted reaches the block
+    /// as the frames it was handed rather than as a number stated up front.
+    ///
+    /// That is the honest reading of the two, since the block a
+    /// [`StreamConfig`] states is not a bound on the block a callback gets. A
+    /// longer one is worked in chunks, and a shorter one takes a smaller share
+    /// of the take crossing.
     fn prepare(&mut self, _config: StreamConfig) {}
 
     /// Plays the loop under the player's input, and publishes the playhead the

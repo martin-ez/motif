@@ -8,7 +8,7 @@
 //! analysis takes.
 //!
 //! A take is finished exactly once, when the player leaves a capturing state,
-//! and it is swept across over a fixed number of blocks rather than in a single
+//! and it is swept across over a fixed span of frames rather than in a single
 //! pass: a whole loop copied inside one callback is a spike no deadline
 //! survives. Samples travel as bits in atomics, as the waveform's buckets do.
 
@@ -46,7 +46,7 @@ struct Crossing {
 ///
 /// # Panics
 ///
-/// Panics on a profile with no loop to record, a mistake in setup.
+/// Panics on a profile with no loop to record, or no block to cross it in.
 ///
 /// ```
 /// use motif::device::DeviceProfile;
@@ -59,7 +59,7 @@ struct Crossing {
 ///
 /// writer.begin(&buffer);
 /// for _ in 0..TakeWriter::CROSSING_BLOCKS {
-///     writer.advance(&buffer);
+///     writer.advance(&buffer, profile.block_size as usize);
 /// }
 ///
 /// let take = reader.claim().expect("a finished take crossed");
@@ -67,7 +67,9 @@ struct Crossing {
 /// ```
 pub fn take_handoff(profile: AudioProfile) -> (TakeWriter, TakeReader) {
     let capacity = profile.max_loop_frames();
+    let block = profile.block_size as usize;
     assert!(capacity > 0, "a handoff carries no take without frames");
+    assert!(block > 0, "a take crosses nothing block by block");
 
     let shared = Arc::new(Shared {
         slots: array::from_fn(|_| (0..capacity).map(|_| AtomicU32::new(0)).collect()),
@@ -79,6 +81,7 @@ pub fn take_handoff(profile: AudioProfile) -> (TakeWriter, TakeReader) {
         TakeWriter {
             shared: Arc::clone(&shared),
             scratch: vec![0.0; capacity.div_ceil(TakeWriter::CROSSING_BLOCKS)].into_boxed_slice(),
+            block,
             writing: 0,
             crossing: None,
         },
@@ -93,20 +96,21 @@ pub fn take_handoff(profile: AudioProfile) -> (TakeWriter, TakeReader) {
 pub struct TakeWriter {
     shared: Arc<Shared>,
     scratch: Box<[f32]>,
+    block: usize,
     writing: usize,
     crossing: Option<Crossing>,
 }
 
 impl TakeWriter {
-    /// How many blocks a take is spread across as it crosses.
+    /// How many blocks of the profile's size a take is spread across.
     ///
     /// A whole loop is megabytes, and copying it inside one callback is a spike
-    /// no deadline survives. Counting blocks rather than frames is what makes
-    /// every take cross in the same wall-clock, about a third of a second at
-    /// [`DeviceProfile::TARGET`](crate::device::DeviceProfile::TARGET), which
-    /// is what a deadline needs. The cost is a share that grows with the loop
-    /// rather than with the block: a sixty-fourth of the longest loop, against
-    /// the 256 frames a block of it mixes.
+    /// no deadline survives. Spreading it over that span of frames rather than
+    /// a count of callbacks is what makes every take cross in the same
+    /// wall-clock, about a third of a second at
+    /// [`DeviceProfile::TARGET`](crate::device::DeviceProfile::TARGET),
+    /// whatever block the device granted. The cost is a share that grows with
+    /// the loop rather than with the block.
     pub const CROSSING_BLOCKS: usize = CROSSING_BLOCK_COUNT;
 
     /// Begin handing over the loop `buffer` holds, dropping whatever crossing
@@ -121,19 +125,21 @@ impl TakeWriter {
         self.crossing = (frames > 0).then_some(Crossing { frames, cursor: 0 });
     }
 
-    /// Carry the crossing forward by one block's share of the take, and report
-    /// whether any of it is still to cross.
+    /// Carry the crossing forward by the share `handed` frames of block buy,
+    /// and report whether any of it is still to cross.
     ///
-    /// A fixed number of passes over storage that is already there, waiting on
-    /// nobody, which is what makes it safe on a callback. Nothing is published
-    /// until the last share lands, so a reader never sees half a take; with no
-    /// crossing in flight there is nothing to do and the answer is `false`.
-    pub fn advance(&mut self, buffer: &LoopBuffer) -> bool {
+    /// The share follows those frames against the block the profile states, so
+    /// a shorter block carries less of the take in each of the more callbacks
+    /// it makes and a crossing costs the same wall-clock either way. It is
+    /// capped at the scratch a whole block's share was allocated in, so a
+    /// longer block is bounded rather than a panic. Nothing is published until
+    /// the last share lands, and with none in flight the answer is `false`.
+    pub fn advance(&mut self, buffer: &LoopBuffer, handed: usize) -> bool {
         let Some(Crossing { frames, cursor }) = self.crossing else {
             return false;
         };
 
-        let share = (frames - cursor).min(frames.div_ceil(Self::CROSSING_BLOCKS));
+        let share = (frames - cursor).min(self.share_of(frames, handed));
         let crossing = &mut self.scratch[..share];
         crossing.fill(0.0);
         buffer.mix_into(crossing, cursor);
@@ -162,6 +168,14 @@ impl TakeWriter {
     /// rather than wrong, so it is dropped rather than published.
     pub fn abandon(&mut self) {
         self.crossing = None;
+    }
+
+    fn share_of(&self, frames: usize, handed: usize) -> usize {
+        frames
+            .div_ceil(Self::CROSSING_BLOCKS)
+            .saturating_mul(handed)
+            .div_ceil(self.block)
+            .min(self.scratch.len())
     }
 
     fn publish(&mut self, frames: usize) {
