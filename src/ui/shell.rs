@@ -15,8 +15,7 @@ use crate::ui::{
 /// not forwarded, so a page never sees what navigates.
 ///
 /// The legend is the page's and [`navigating`]'s at once, so every live key is
-/// drawn live. The shell keeps no gesture back: a run is ended by the panel it
-/// is read from, which is a way out no page has to leave free.
+/// drawn live. Nothing is kept back: a run ends at the panel it is read from.
 ///
 /// ```
 /// use motif::device::Button;
