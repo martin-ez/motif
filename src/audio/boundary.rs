@@ -318,6 +318,18 @@ pub struct BlockPlayback<P> {
 }
 
 impl<P: AudioPath> BlockPlayback<P> {
+    /// The magnitude past which a sample is not handed to the device.
+    ///
+    /// A converter handed an overshoot may clip it or may wrap it, and a wrap
+    /// turns a hot mix into a full-scale square wave — the waveform that costs
+    /// a tweeter, rather than the overshoot that caused it. Below full scale
+    /// the bound is inaudible.
+    ///
+    /// A sample that is not finite is played as silence: no level is the right
+    /// one to make of it, and `f32::clamp` returns NaN for a NaN input where
+    /// `min` then `max` would scrub one to full scale.
+    pub const FULL_SCALE: f32 = 1.0;
+
     /// Ask the path what to play for the frames the ring supplied, spread the
     /// answer across the selected channels of `output`, and report how many.
     ///
@@ -329,6 +341,31 @@ impl<P: AudioPath> BlockPlayback<P> {
     ///
     /// Until the ring has risen past its slack, `output` is silence reported
     /// whole; so is a block the [`Trim`] padded. See [`Priming`].
+    ///
+    /// ```
+    /// use motif::audio::{ChannelSelection, Passthrough, StreamConfig, boundary};
+    ///
+    /// let (mut input, mut output) = boundary(
+    ///     StreamConfig {
+    ///         sample_rate: 48_000,
+    ///         block_size: 3,
+    ///         input_channels: 1,
+    ///         output_channels: 1,
+    ///     },
+    ///     ChannelSelection::all(1),
+    ///     ChannelSelection::all(1),
+    ///     0,
+    ///     Passthrough::new(),
+    /// );
+    /// let mut played = [0.0; 3];
+    ///
+    /// input.capture(&[4.0, -4.0, f32::NAN]);
+    /// output.render(&mut played);
+    /// input.capture(&[4.0, -4.0, f32::NAN]);
+    /// output.render(&mut played);
+    ///
+    /// assert_eq!(played, [1.0, -1.0, 0.0]);
+    /// ```
     pub fn render(&mut self, output: &mut [f32]) -> usize {
         self.priming.playback_ran();
         if !self.priming.carrying() && !self.takes_up_the_slack() {
@@ -357,7 +394,7 @@ impl<P: AudioPath> BlockPlayback<P> {
 
             for (slot, sample) in chunk.chunks_exact_mut(self.channels).zip(playing.iter()) {
                 slot.fill(0.0);
-                slot[self.selected.clone()].fill(*sample);
+                slot[self.selected.clone()].fill(Self::bounded(*sample));
             }
             chunk[frames * self.channels..].fill(0.0);
 
@@ -385,6 +422,18 @@ impl<P: AudioPath> BlockPlayback<P> {
     /// because a callback owns it once the stream is built.
     pub fn slack(&self) -> SlackReader {
         self.holding.clone()
+    }
+
+    #[expect(
+        clippy::manual_clamp,
+        reason = "clamp asserts its bounds, and AGENTS.md invariant 2 keeps a branch that can panic off the audio thread even where the bounds are constant"
+    )]
+    fn bounded(sample: f32) -> f32 {
+        if sample.is_finite() {
+            sample.min(Self::FULL_SCALE).max(-Self::FULL_SCALE)
+        } else {
+            0.0
+        }
     }
 
     fn trimmed(&mut self, wanted: usize) -> usize {

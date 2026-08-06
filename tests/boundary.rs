@@ -6,12 +6,12 @@
 //! reads, so the whole boundary is exercised here on one thread with no device.
 //!
 //! The facts worth stating are that a frame survives the fold to one sample and
-//! the spread back across channels, that the path in between decides the
-//! samples that are spread, that only the selected channels carry them, that a
-//! full or dry ring is reported rather than waited on, that nothing is due
-//! across the boundary until both ends have run once, that the slack outlasts
-//! both a clock that will not keep step and a ring that has run dry, that the
-//! meter reads what the path played, and that neither callback allocates.
+//! the spread back out, that the path in between decides what is spread, that
+//! only the selected channels carry it, that a full or dry ring is reported
+//! rather than waited on, that nothing is due until both ends have run once,
+//! that the slack outlasts a drifting clock and a dry ring, that the meter
+//! reads what the path played, that nothing past full scale reaches the device,
+//! and that neither callback allocates.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -228,6 +228,24 @@ fn drain(ends: &mut (BlockCapture, BlockPlayback<Passthrough>), renders: usize) 
     for _ in 0..renders {
         ends.1.render(&mut sink);
     }
+}
+
+/// Play a block of `tone` through a boundary and report what the device was
+/// handed, which is what the bound is stated on.
+fn handed_to_the_device(tone: f32) -> [f32; 2] {
+    let (mut input, mut output) = running(boundary(
+        config(1, 1),
+        ChannelSelection::all(1),
+        ChannelSelection::all(1),
+        0,
+        Tone(tone),
+    ));
+    let mut played = [0.0; 2];
+
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut played);
+
+    played
 }
 
 /// Play half a block before the capture that feeds it, and say whether the
@@ -455,16 +473,16 @@ fn slack_delays_playback_by_that_many_frames() {
     let (mut input, mut output) = whole(config(1, 1), 2);
     let mut played = [0.0; 4];
 
-    input.capture(&[1.0, 2.0]);
+    input.capture(&[0.1, 0.2]);
     output.render(&mut played);
 
-    assert_eq!(played, [0.0, 0.0, 1.0, 2.0]);
+    assert_eq!(played, [0.0, 0.0, 0.1, 0.2]);
 }
 
 #[test]
 fn a_block_larger_than_the_configured_one_is_carried_whole() {
     let (mut input, mut output) = whole(config(1, 1), 0);
-    let captured: Vec<f32> = (1..=8).map(|frame| frame as f32).collect();
+    let captured: Vec<f32> = (1..=8).map(|frame| frame as f32 / 10.0).collect();
     let mut played = [0.0; 8];
 
     assert_eq!(input.capture(&captured), 8);
@@ -520,10 +538,10 @@ fn the_slack_survives_a_playback_that_ran_before_any_capture() {
 
     output.render(&mut played);
     output.render(&mut played);
-    input.capture(&[1.0, 2.0]);
+    input.capture(&[0.1, 0.2]);
     output.render(&mut played);
 
-    assert_eq!(played, [0.0, 0.0, 1.0, 2.0]);
+    assert_eq!(played, [0.0, 0.0, 0.1, 0.2]);
 }
 
 #[test]
@@ -531,19 +549,19 @@ fn the_slack_survives_a_capture_that_ran_before_any_playback() {
     let (mut input, mut output) = unstarted(config(1, 1), 2);
     let mut played = [0.0; 4];
 
-    input.capture(&[8.0, 9.0]);
+    input.capture(&[0.8, 0.9]);
     output.render(&mut played);
-    input.capture(&[1.0, 2.0]);
+    input.capture(&[0.1, 0.2]);
     output.render(&mut played);
 
-    assert_eq!(played, [0.0, 0.0, 1.0, 2.0]);
+    assert_eq!(played, [0.0, 0.0, 0.1, 0.2]);
 }
 
 #[test]
 fn a_dry_ring_is_reported_short_once_the_boundary_is_carrying() {
     let (mut input, mut output) = whole(config(1, 1), 2);
     let mut played = [0.0; 4];
-    input.capture(&[1.0, 2.0]);
+    input.capture(&[0.1, 0.2]);
 
     output.render(&mut played);
     let starved = output.render(&mut played);
@@ -567,7 +585,7 @@ fn a_restart_plays_silence_rather_than_what_the_last_run_left() {
     let (mut input, mut output) = whole(config(1, 1), 2);
     let priming = input.priming();
     let mut played = [0.0; 4];
-    input.capture(&[7.0, 8.0, 9.0, 10.0]);
+    input.capture(&[0.7, 0.8, 0.9, 1.0]);
 
     priming.restart();
     output.render(&mut played);
@@ -580,14 +598,14 @@ fn a_restarted_boundary_falls_back_to_its_slack() {
     let (mut input, mut output) = whole(config(1, 1), 2);
     let priming = input.priming();
     let mut played = [0.0; 4];
-    input.capture(&[7.0, 8.0, 9.0, 10.0]);
+    input.capture(&[0.7, 0.8, 0.9, 1.0]);
 
     priming.restart();
     output.render(&mut played);
-    input.capture(&[1.0, 2.0]);
+    input.capture(&[0.1, 0.2]);
     output.render(&mut played);
 
-    assert_eq!(played, [9.0, 10.0, 1.0, 2.0]);
+    assert_eq!(played, [0.9, 1.0, 0.1, 0.2]);
 }
 
 #[test]
@@ -820,6 +838,65 @@ fn the_played_meter_is_taken_before_the_frames_are_spread() {
     output.render(&mut [0.0; 4]);
 
     assert_eq!(output.metering().read().rms, 1.0);
+}
+
+#[test]
+fn a_sample_inside_full_scale_reaches_the_device_as_the_path_played_it() {
+    assert_eq!(handed_to_the_device(0.5), [0.5, 0.5]);
+}
+
+#[test]
+fn a_sample_past_full_scale_reaches_the_device_at_full_scale() {
+    assert_eq!(handed_to_the_device(4.0), [1.0, 1.0]);
+}
+
+#[test]
+fn a_sample_under_full_scale_the_other_way_reaches_the_device_bounded() {
+    assert_eq!(handed_to_the_device(-4.0), [-1.0, -1.0]);
+}
+
+#[test]
+fn a_sample_that_is_not_a_number_reaches_the_device_as_silence() {
+    assert_eq!(handed_to_the_device(f32::NAN), [0.0, 0.0]);
+}
+
+#[test]
+fn an_infinite_sample_reaches_the_device_as_silence() {
+    assert_eq!(handed_to_the_device(f32::INFINITY), [0.0, 0.0]);
+    assert_eq!(handed_to_the_device(f32::NEG_INFINITY), [0.0, 0.0]);
+}
+
+#[test]
+fn a_channel_outside_the_selection_stays_silent_under_a_bounded_sample() {
+    let (mut input, mut output) = running(boundary(
+        config(1, 2),
+        ChannelSelection::all(1),
+        channels(0, 1),
+        0,
+        Tone(4.0),
+    ));
+    let mut played = [0.0; 4];
+
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut played);
+
+    assert_eq!(played, [1.0, 0.0, 1.0, 0.0]);
+}
+
+#[test]
+fn the_played_meter_reads_the_overshoot_the_path_wrote() {
+    let (mut input, mut output) = running(boundary(
+        config(1, 1),
+        ChannelSelection::all(1),
+        ChannelSelection::all(1),
+        0,
+        Tone(4.0),
+    ));
+
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut [0.0; 2]);
+
+    assert_eq!(output.metering().read().peak, 4.0);
 }
 
 #[test]
