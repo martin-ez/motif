@@ -11,10 +11,11 @@ against.
   see whether that size is enough.
 - `generate-fixtures` — render the synthetic fixture set into `tests/fixtures`.
 - `loopback` — time the round trip out of the output and back into the input.
+- `crossing` — time a finished take crossing off the audio thread.
 
 Each one's own module doc says what it does and how to run it. What follows is
-the part of `loopback` that belongs to the repository rather than to the
-program: the procedure, and the figures it produces.
+the part of `loopback` and `crossing` that belongs to the repository rather than
+to the programs: the procedures, and the figures they produce.
 
 ## Measuring the round trip
 
@@ -77,3 +78,50 @@ holds the number, and the example prints whether the median is inside it.
 
 No run has been recorded. A run adds a row, with the median from the output
 above.
+
+## Measuring the take crossing
+
+A finished take crosses to the analysis thread inside the audio callback, a
+share of it a block. What that share costs is a claim about a number too, and
+the callback is where a number that is wrong costs a dropout rather than a
+slower answer.
+
+```sh
+cargo run --release --example crossing
+```
+
+No hardware is needed and nothing is heard. It builds the worst case the target
+profile allows — the longest loop, with every layer of the stack laid over it,
+so a block mixes as many layers as it ever will — crosses it a block at a time,
+and reports the median and worst block against the block period.
+
+Run it on the target board rather than on a development machine. The `aarch64`
+corollary makes the laptop the optimistic case, and the whole point of the
+figure is that it is the one that binds. `--release` matters as much: an
+unoptimised build of a copy loop measures the build.
+
+### The budget
+
+**A quarter of the block period**, which at the target profile's 48 kHz in
+256-frame blocks is 1.33 ms. It is stated as a share rather than a duration so
+that it follows the block the device granted, which is also what the share
+itself now follows.
+
+A quarter rather than the whole because the crossing is not the only thing in
+the callback: the same block is gained, mixed against the loop, summarised for
+the waveform and metered, and the crossing is the one piece of it that is
+background work. Leaving the rest of the block three times the room the crossing
+takes is what keeps a take handed over from being the reason a block is late.
+
+The span the crossing takes is a separate figure and not a measured one. It is
+`TakeWriter::CROSSING_BLOCKS` block periods — 341 ms at the target profile,
+whatever block the device granted — and the example prints it as a share of the
+deadline analysis has, because it is spent before analysis can start.
+
+### Measurements
+
+| Date | Machine | Layers | Granted | Median | Worst | Within budget |
+| ---- | ------- | ------ | ------- | ------ | ----- | ------------- |
+
+No run on the target has been recorded. A run adds a row, with the median and
+worst from the output above.

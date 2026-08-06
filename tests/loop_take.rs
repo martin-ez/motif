@@ -98,6 +98,33 @@ fn four_frame_profile() -> AudioProfile {
     }
 }
 
+/// A profile whose longest loop is twice the blocks a take gets to cross in, so
+/// a full block's share is two frames and half a block's is one.
+///
+/// A share of one frame is the floor, so a profile any smaller than this cannot
+/// show a share following the block it was handed.
+fn scaling_profile() -> AudioProfile {
+    AudioProfile {
+        sample_rate: 128,
+        block_size: 8,
+        max_loop_seconds: 1,
+    }
+}
+
+/// A signal of `frames` frames, no two of them alike, so a frame that crossed
+/// out of place is a frame that fails.
+fn ramp(frames: usize) -> Vec<f32> {
+    (0..frames).map(|frame| frame as f32 / 128.0).collect()
+}
+
+/// A buffer over `profile`'s longest loop, full to its last frame.
+fn full_loop(profile: AudioProfile) -> LoopBuffer {
+    let mut buffer = LoopBuffer::for_profile(profile);
+    buffer.record(&ramp(profile.max_loop_frames()));
+
+    buffer
+}
+
 /// A buffer over an eight-frame loop, holding `captured`.
 fn recorded(captured: &[f32]) -> LoopBuffer {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
@@ -106,18 +133,28 @@ fn recorded(captured: &[f32]) -> LoopBuffer {
     buffer
 }
 
-/// Hand `buffer`'s loop across, a chunk a block, as the callback does, and
-/// report how many blocks that took.
-fn cross(writer: &mut TakeWriter, buffer: &LoopBuffer) -> usize {
+/// The block every profile here but [`scaling_profile`] states, pinned so that
+/// a crossing is handed the frames its writer was built to expect.
+const A_BLOCK: usize = 4;
+
+/// Hand `buffer`'s loop across, `handed` frames of it a block, as a callback
+/// given that many frames does, and report how many blocks that took.
+fn cross_in_blocks_of(writer: &mut TakeWriter, buffer: &LoopBuffer, handed: usize) -> usize {
     writer.begin(buffer);
 
     for advance in 0..ADVANCES_ALLOWED {
-        if !writer.advance(buffer) {
+        if !writer.advance(buffer, handed) {
             return advance + 1;
         }
     }
 
     panic!("the handoff never finished crossing");
+}
+
+/// Hand `buffer`'s loop across a block at a time, as the callback does, and
+/// report how many blocks that took.
+fn cross(writer: &mut TakeWriter, buffer: &LoopBuffer) -> usize {
+    cross_in_blocks_of(writer, buffer, A_BLOCK)
 }
 
 fn samples(take: &FinishedTake<'_>) -> Vec<f32> {
@@ -143,6 +180,15 @@ fn the_allocation_counter_counts_a_zeroed_allocation() {
         after > before,
         "the counter is not wired to zeroed allocation"
     );
+}
+
+#[test]
+#[should_panic(expected = "block")]
+fn a_profile_with_no_block_is_refused_at_setup() {
+    take_handoff(AudioProfile {
+        block_size: 0,
+        ..eight_frame_profile()
+    });
 }
 
 #[test]
@@ -222,7 +268,7 @@ fn half_a_take_is_not_a_take() {
     let buffer = recorded(&[0.25, 0.5, 0.75, 1.0]);
 
     writer.begin(&buffer);
-    writer.advance(&buffer);
+    writer.advance(&buffer, A_BLOCK);
 
     assert!(reader.claim().is_none());
 }
@@ -233,10 +279,10 @@ fn an_abandoned_crossing_hands_over_nothing() {
     let buffer = recorded(&[0.25, 0.5, 0.75, 1.0]);
 
     writer.begin(&buffer);
-    writer.advance(&buffer);
+    writer.advance(&buffer, A_BLOCK);
     writer.abandon();
     for _ in 0..ADVANCES_ALLOWED {
-        writer.advance(&buffer);
+        writer.advance(&buffer, A_BLOCK);
     }
 
     assert!(reader.claim().is_none());
@@ -250,7 +296,7 @@ fn an_abandoned_crossing_leaves_the_take_before_it_where_it_was() {
 
     cross(&mut writer, &crossed);
     writer.begin(&abandoned);
-    writer.advance(&abandoned);
+    writer.advance(&abandoned, A_BLOCK);
     writer.abandon();
 
     let take = reader.claim().expect("the first take crossed");
@@ -319,16 +365,12 @@ fn a_take_nobody_looked_at_is_gone() {
 fn a_take_that_fills_the_buffer_crosses_to_its_last_frame() {
     let profile = odd_profile();
     let (mut writer, mut reader) = take_handoff(profile);
-    let mut buffer = LoopBuffer::for_profile(profile);
-    let take: Vec<f32> = (0..profile.max_loop_frames())
-        .map(|frame| frame as f32 / 128.0)
-        .collect();
-    buffer.record(&take);
+    let buffer = full_loop(profile);
 
     cross(&mut writer, &buffer);
 
     let crossed = reader.claim().expect("the take crossed");
-    assert_eq!(samples(&crossed), take);
+    assert_eq!(samples(&crossed), ramp(profile.max_loop_frames()));
 }
 
 #[test]
@@ -340,6 +382,56 @@ fn a_take_longer_than_the_handoff_crosses_as_much_as_fits() {
 
     let take = reader.claim().expect("as much of the take as fits crossed");
     assert_eq!(samples(&take), [0.25, 0.5, 0.75, 1.0]);
+}
+
+#[test]
+fn a_take_crossing_at_half_the_block_takes_twice_the_blocks() {
+    let profile = scaling_profile();
+    let (mut writer, _reader) = take_handoff(profile);
+    let buffer = full_loop(profile);
+    let whole = cross_in_blocks_of(&mut writer, &buffer, 8);
+
+    let halved = cross_in_blocks_of(&mut writer, &buffer, 4);
+
+    assert_eq!(halved, 2 * whole);
+}
+
+#[test]
+fn a_take_crossing_at_half_the_block_still_crosses_whole() {
+    let profile = scaling_profile();
+    let (mut writer, mut reader) = take_handoff(profile);
+    let buffer = full_loop(profile);
+
+    cross_in_blocks_of(&mut writer, &buffer, 4);
+
+    let crossed = reader.claim().expect("the take crossed");
+    assert_eq!(samples(&crossed), ramp(profile.max_loop_frames()));
+}
+
+#[test]
+fn a_block_of_no_frames_carries_none_of_the_take_across() {
+    let profile = scaling_profile();
+    let (mut writer, mut reader) = take_handoff(profile);
+    let buffer = full_loop(profile);
+
+    writer.begin(&buffer);
+    for _ in 0..ADVANCES_ALLOWED {
+        assert!(writer.advance(&buffer, 0), "the crossing gave up");
+    }
+
+    assert!(reader.claim().is_none());
+}
+
+#[test]
+fn a_block_longer_than_the_profiles_crosses_no_faster_than_its_scratch() {
+    let profile = scaling_profile();
+    let (mut writer, _reader) = take_handoff(profile);
+    let buffer = full_loop(profile);
+    let whole = cross_in_blocks_of(&mut writer, &buffer, 8);
+
+    let overlong = cross_in_blocks_of(&mut writer, &buffer, 64);
+
+    assert_eq!(overlong, whole);
 }
 
 #[test]
