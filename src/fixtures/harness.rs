@@ -6,6 +6,9 @@
 //! is compared against — an analyser that loads and aggregates for itself will
 //! eventually disagree with another about what the figure means.
 //!
+//! Every fixture is timed as well as scored, against a [`deadline`] taken as a
+//! share of the take, so each fixture sets its own.
+//!
 //! A candidate arrives as a sequence of timestamps, so nothing here knows about
 //! analysers or audio.
 
@@ -14,11 +17,37 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{Annotation, AnnotationError, Score};
 
 const ANNOTATION_EXTENSION: &str = "beats";
+
+/// The share of a take that analysis has to answer in.
+///
+/// Half, so the result is up before the loop passes the midpoint of its first
+/// replay. A share rather than a fixed figure because the loop length is what
+/// the player chose, and it is the wait they are measuring against. It is one
+/// value, which keeps what it should be a question the instrument answers
+/// rather than a decision spread through the code.
+pub const DEADLINE_SHARE: f64 = 0.5;
+
+/// How long analysis has over a take of `length`, measured from the take's last
+/// frame to the result reaching the player.
+///
+/// [`DEADLINE_SHARE`] of the take. The loop wraps to bar one and plays again
+/// the moment the take closes, so what bounds the wait is the loop the player
+/// set rather than any fixed figure.
+///
+/// ```
+/// use motif::fixtures::harness;
+/// use std::time::Duration;
+///
+/// assert_eq!(harness::deadline(Duration::from_secs(8)), Duration::from_secs(4));
+/// ```
+pub fn deadline(length: Duration) -> Duration {
+    length.mul_f64(DEADLINE_SHARE)
+}
 
 /// Which of a fixture's annotated positions a run is measured against.
 ///
@@ -92,8 +121,8 @@ pub fn checked_in() -> PathBuf {
 /// Score `candidate` against every fixture in `directory`.
 ///
 /// A fixture is a `.beats` file; anything else is left alone. `candidate` is
-/// asked once per fixture and answers with the positions it found, so the
-/// harness never learns what produced them.
+/// asked once per fixture and answers with positions, so the harness never
+/// learns what produced them; only that call is timed, never the loading.
 ///
 /// # Errors
 ///
@@ -122,11 +151,17 @@ pub fn measure(
         .into_iter()
         .map(|truth| {
             let annotated: Vec<Duration> = target.positions(truth.annotation()).collect();
+            let allowed = deadline(truth.annotation().span());
+
+            let started = Instant::now();
             let detected = candidate(&truth);
+            let elapsed = started.elapsed();
 
             Row {
                 name: truth.name,
                 score: Score::of(&annotated, &detected),
+                elapsed,
+                deadline: allowed,
             }
         })
         .collect();
@@ -214,6 +249,19 @@ impl Report {
 
         self.rows.iter().map(|row| row.score.f1()).sum::<f64>() / self.rows.len() as f64
     }
+
+    /// The tightest headroom any fixture left against its own deadline.
+    ///
+    /// The smallest rather than the mean: a set where one fixture overran did
+    /// not meet the deadline, however much room the others left. Zero says one
+    /// of them spent everything it had.
+    pub fn headroom(&self) -> Duration {
+        self.rows
+            .iter()
+            .map(Row::headroom)
+            .min()
+            .unwrap_or_default()
+    }
 }
 
 impl fmt::Display for Report {
@@ -225,33 +273,44 @@ impl fmt::Display for Report {
             .max()
             .unwrap_or_default();
 
-        for Row { name, score } in &self.rows {
+        for Row {
+            name,
+            score,
+            elapsed,
+            deadline,
+        } in &self.rows
+        {
             writeln!(
                 f,
-                "{name:<width$}  F1 {:.3}  precision {:.3}  recall {:.3}  hits {}/{}  detected {}",
+                "{name:<width$}  F1 {:.3}  precision {:.3}  recall {:.3}  hits {}/{}  detected {}  took {:.1?} of {:.1?}",
                 score.f1(),
                 score.precision(),
                 score.recall(),
                 score.hits(),
                 score.annotated(),
                 score.detected(),
+                elapsed,
+                deadline,
             )?;
         }
 
         write!(
             f,
-            "mean F1 {:.3} over {} fixtures",
+            "mean F1 {:.3} over {} fixtures, headroom {:.1?}",
             self.mean_f1(),
-            self.rows.len()
+            self.rows.len(),
+            self.headroom()
         )
     }
 }
 
-/// What a candidate scored on one fixture.
+/// What a candidate scored on one fixture, and what it spent doing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     name: String,
     score: Score,
+    elapsed: Duration,
+    deadline: Duration,
 }
 
 impl Row {
@@ -263,6 +322,21 @@ impl Row {
     /// What the candidate scored on it.
     pub fn score(&self) -> Score {
         self.score
+    }
+
+    /// How long the candidate took over it.
+    pub fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// How long it had, which is [`DEADLINE_SHARE`] of this fixture's length.
+    pub fn deadline(&self) -> Duration {
+        self.deadline
+    }
+
+    /// What is left of that deadline, and zero where the candidate spent it.
+    pub fn headroom(&self) -> Duration {
+        self.deadline.saturating_sub(self.elapsed)
     }
 }
 
