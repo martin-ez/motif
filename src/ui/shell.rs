@@ -1,7 +1,6 @@
 //! The application around the pages: which one is showing, and what never
 //! reaches it.
 
-use crate::device::Button;
 use crate::ui::{
     App, ControlEvent, Flow, Intent, Legend, Mode, Navigation, Page, Region, navigating,
 };
@@ -15,8 +14,9 @@ use crate::ui::{
 /// A control a [`Navigation`] resolves into an [`Intent`] is applied here and
 /// not forwarded, so a page never sees what navigates.
 ///
-/// Shift + stop is kept whatever a scheme says, and the legend is the page's,
-/// [`navigating`]'s and that way out at once — so every live key is drawn live.
+/// The legend is the page's and [`navigating`]'s at once, so every live key is
+/// drawn live. The shell keeps no gesture back: a run is ended by the panel it
+/// is read from, which is a way out no page has to leave free.
 ///
 /// ```
 /// use motif::device::Button;
@@ -110,16 +110,6 @@ impl Shell {
 
 impl App for Shell {
     fn control(&mut self, event: ControlEvent) -> Flow {
-        if matches!(
-            event,
-            ControlEvent::Pressed {
-                button: Button::Stop,
-                shifted: true,
-            }
-        ) {
-            return Flow::Exit;
-        }
-
         if let Some(intent) = self.intent(event) {
             self.apply(intent);
 
@@ -132,11 +122,7 @@ impl App for Shell {
     }
 
     fn legend(&self) -> Legend {
-        let page = self
-            .page()
-            .legend()
-            .answering(Button::Shift)
-            .answering(Button::Stop);
+        let page = self.page().legend();
 
         match self.navigation.as_deref() {
             Some(navigation) => page.also_answering(navigating(navigation)),

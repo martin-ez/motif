@@ -391,6 +391,7 @@ impl Page for LooperPage {
             .answering(Button::Stop)
             .answering(Button::Record)
             .answering(Button::Down)
+            .answering(Button::Shift)
             .answering(Encoder::Main)
     }
 

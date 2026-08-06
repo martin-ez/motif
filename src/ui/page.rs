@@ -6,7 +6,7 @@ use crate::ui::{ControlEvent, Legend, Region};
 ///
 /// The same three members an [`App`](crate::ui::App) has, less the
 /// [`Flow`](crate::ui::Flow): a page cannot end the run, having nothing to
-/// return that would say so. Quitting belongs to the shell.
+/// return that would say so.
 ///
 /// A page is handed a region and keeps every cell of it: the chrome around it
 /// took its rows before the page was called, so nothing is drawn over a page

@@ -1079,3 +1079,8 @@ fn a_loop_that_was_emptied_is_not_emptied_again_every_frame() {
 fn the_page_declares_the_button_that_empties_the_loop() {
     assert!(page().legend().answers(Button::Down));
 }
+
+#[test]
+fn the_page_declares_the_shift_its_gestures_are_held_with() {
+    assert!(page().legend().answers(Button::Shift));
+}

@@ -1,5 +1,5 @@
-//! The shell that holds a page per mode: which one gets the controls, which one
-//! draws, and what the shell keeps for itself.
+//! The shell that holds a page per mode: which one gets the controls, and which
+//! one draws.
 //!
 //! The pages here are the test's own, because which pages a shell holds is a
 //! composition question and not something the shell knows. Each draws a glyph of
@@ -76,6 +76,20 @@ impl Page for Marked {
 
     fn draw(&mut self, mut region: Region<'_>) {
         region.set(0, 0, Cell::new(self.glyph));
+    }
+}
+
+/// A panel that ends a run itself, the way the terminal's own interrupt does:
+/// a way out the shell neither declares nor can refuse.
+struct Interrupting;
+
+impl Controls for Interrupting {
+    fn poll(&mut self) -> Option<ControlEvent> {
+        None
+    }
+
+    fn interrupted(&self) -> bool {
+        true
     }
 }
 
@@ -183,20 +197,6 @@ fn the_shell_takes_its_legend_from_the_showing_page() {
 }
 
 #[test]
-fn the_shell_declares_the_shift_it_keeps() {
-    let shell = shell_of(Marked::new(MARKER, Button::Play));
-
-    assert!(shell.legend().answers(Button::Shift));
-}
-
-#[test]
-fn the_shell_declares_the_stop_it_keeps() {
-    let shell = shell_of(Marked::new(MARKER, Button::Play));
-
-    assert!(shell.legend().answers(Button::Stop));
-}
-
-#[test]
 fn the_shell_declares_what_its_navigation_keeps() {
     let (shell, _) = navigated(Navigating(vec![Button::Up]));
 
@@ -204,12 +204,11 @@ fn the_shell_declares_what_its_navigation_keeps() {
 }
 
 #[test]
-fn a_shell_with_no_navigation_declares_only_the_page_and_what_it_keeps() {
+fn a_shell_with_no_navigation_declares_only_the_page() {
     let shell = shell_of(Marked::new(MARKER, Button::Play));
-    let kept = [Button::Play, Button::Shift, Button::Stop];
 
     for control in Control::ALL {
-        let expected = matches!(control, Control::Button(button) if kept.contains(&button));
+        let expected = matches!(control, Control::Button(Button::Play));
 
         assert_eq!(shell.legend().answers(control), expected, "{control:?}");
     }
@@ -225,19 +224,12 @@ fn changing_the_navigation_changes_the_legend_the_shell_declares() {
 }
 
 #[test]
-fn shift_and_stop_ends_the_run() {
-    let (mut shell, _) = showing(MARKER);
-
-    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Exit);
-}
-
-#[test]
-fn the_control_the_shell_keeps_does_not_reach_the_page() {
+fn a_shifted_stop_reaches_the_page() {
     let (mut shell, taken) = showing(MARKER);
 
     driven_by(&mut shell, [shifted(Button::Stop)]);
 
-    assert!(taken.events().is_empty());
+    assert_eq!(taken.events(), vec![shifted(Button::Stop)]);
 }
 
 #[test]
@@ -250,13 +242,10 @@ fn stop_on_its_own_reaches_the_page() {
 }
 
 #[test]
-fn a_shifted_control_that_is_not_stop_keeps_the_run_going() {
+fn every_shifted_control_keeps_the_run_going() {
     let (mut shell, _) = showing(MARKER);
 
     for button in Button::ALL {
-        if matches!(button, Button::Stop) {
-            continue;
-        }
         assert_eq!(shell.control(shifted(button)), Flow::Continue);
     }
 }
@@ -368,10 +357,11 @@ fn a_shell_with_no_navigation_hands_every_control_to_the_page() {
 }
 
 #[test]
-fn the_way_out_is_not_a_gesture_a_scheme_can_take() {
-    let (mut shell, _) = navigated(Navigating::everything());
+fn a_scheme_that_takes_a_shifted_stop_keeps_it_from_the_page() {
+    let (mut shell, taken) = navigated(Navigating::everything());
 
-    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Exit);
+    assert_eq!(shell.control(shifted(Button::Stop)), Flow::Continue);
+    assert!(taken.events().is_empty());
 }
 
 #[test]
@@ -390,13 +380,12 @@ fn a_shell_driven_by_controls_renders_the_page_that_drew() {
 }
 
 #[test]
-fn the_event_loop_runs_a_shell_until_it_is_asked_to_stop() {
+fn the_event_loop_runs_a_shell_until_the_panel_is_interrupted() {
     let (mut shell, _) = showing(MARKER);
-    let mut controls = ScriptedControls::new([shifted(Button::Stop)]);
     let mut screen = NullRenderer::new();
 
     let report = EventLoop::with_clock(ScriptedClock::new([]))
-        .run(&mut shell, &mut controls, &mut screen)
+        .run(&mut shell, &mut Interrupting, &mut screen)
         .expect("the null renderer takes every frame");
 
     assert_eq!(report.frames(), 0);

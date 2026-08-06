@@ -251,9 +251,9 @@ fn face(panel: &mut Panel, row: usize, at: usize, width: usize, edges: &Edges, h
 ///
 /// A page answers a handful of controls and ignores the rest, and until it says
 /// which, the only way to find out is to press one and watch. A shell composes
-/// one declaration from the page it is showing, the gestures that navigate and
-/// the way out of the run, so what is live is stated in one place rather than
-/// spread over whoever happens to handle it.
+/// one declaration from the page it is showing and the gestures that navigate,
+/// so what is live is stated in one place rather than spread over whoever
+/// happens to handle it.
 ///
 /// ```
 /// use motif::device::{Button, Encoder};
@@ -286,9 +286,8 @@ impl Legend {
     /// The same legend, also answering everything `other` answers.
     ///
     /// What puts two declarations together. A page declares what it answers and
-    /// nothing else, so a control the page never sees — the way out of the run,
-    /// a gesture that navigates — is declared by whoever keeps it and joined on
-    /// here.
+    /// nothing else, so a control the page never sees — a gesture that
+    /// navigates, say — is declared by whoever keeps it and joined on here.
     ///
     /// ```
     /// use motif::device::{Button, Encoder};

@@ -13,10 +13,10 @@ to stay simple.
 the length of the run, and puts the looper on screen. Record opens the first
 take, records again to layer over it, and drops back out of the layer; play
 closes whatever is open and runs the loop; stop halts it keeping what was
-recorded. Held with shift, play taps a pulse instead of starting one and record
-mutes the input, and the encoder moves the input gain a decibel a detent. The
-bottom row carries the device's state and the input level, and shift with stop
-ends the run.
+recorded. Held with shift, play taps a pulse instead of starting one, record
+mutes the input, stop takes the last layer back off and down empties the loop,
+and the encoder moves the input gain a decibel a detent. The bottom row carries
+the device's state and the input level, and `ctrl + c` ends the run.
 
 The keyboard stands in for the panel the design is aimed at, twelve buttons and
 one encoder: `z`, `x` and `c` are play, stop and record, `,` and `.` turn the

@@ -1,10 +1,10 @@
-//! The rows the application never sees: what the chrome draws on them, and that
+//! The row the application never sees: what the chrome draws on it, and that
 //! everything else about the application passes through it untouched.
 //!
 //! The application under it is the test's own, and it fills every row it was
 //! handed. One that keeps all of its region is what makes the split visible: the
-//! rows it reached are the rows it was given, and the two the chrome took carry
-//! the chrome instead.
+//! rows it reached are the rows it was given, and the one the chrome took carries
+//! the name instead.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -128,46 +128,32 @@ fn the_name_is_drawn_against_the_right_margin() {
 }
 
 #[test]
-fn the_way_out_is_drawn_on_the_bottom_row() {
+fn the_application_keeps_every_row_below() {
     let (mut chrome, _) = around(Filling::new());
 
     let frame = drawn(&mut chrome);
-    let bottom = row(&frame, rows(&frame) - 1);
+    let below: Vec<usize> = (1..rows(&frame)).collect();
 
-    assert!(bottom.contains("shift"));
-    assert!(bottom.contains("stop"));
+    assert_eq!(filled(&frame), below);
 }
 
 #[test]
-fn the_way_out_is_drawn_against_the_right_margin() {
+fn the_row_the_chrome_took_is_not_the_applications() {
     let (mut chrome, _) = around(Filling::new());
 
     let frame = drawn(&mut chrome);
-    let bottom = row(&frame, rows(&frame) - 1);
 
-    assert_eq!(bottom.trim_end(), bottom);
-    assert!(bottom.starts_with(' '));
+    assert_ne!(frame.get(0, 0), Some(Cell::new(MARKER)));
 }
 
 #[test]
-fn the_application_keeps_every_row_between() {
-    let (mut chrome, _) = around(Filling::new());
-
-    let frame = drawn(&mut chrome);
-    let between: Vec<usize> = (1..rows(&frame) - 1).collect();
-
-    assert_eq!(filled(&frame), between);
-}
-
-#[test]
-fn a_row_the_chrome_took_is_not_the_applications() {
+fn nothing_is_drawn_below_the_application() {
     let (mut chrome, _) = around(Filling::new());
 
     let frame = drawn(&mut chrome);
     let last = rows(&frame) - 1;
 
-    assert_ne!(frame.get(0, 0), Some(Cell::new(MARKER)));
-    assert_ne!(frame.get(0, last), Some(Cell::new(MARKER)));
+    assert_eq!(frame.get(0, last), Some(Cell::new(MARKER)));
 }
 
 #[test]
