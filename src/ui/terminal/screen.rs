@@ -192,6 +192,10 @@ impl Controls for TerminalScreen {
     fn poll(&mut self) -> Option<ControlEvent> {
         self.reader.poll()
     }
+
+    fn interrupted(&self) -> bool {
+        self.reader.interrupted()
+    }
 }
 
 impl Renderer for TerminalScreen {

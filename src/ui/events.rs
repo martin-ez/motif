@@ -222,7 +222,7 @@ impl<K: Clock> EventLoop<K> {
         loop {
             let started = self.clock.now();
 
-            if drain(app, controls).is_exit() {
+            if drain(app, controls).is_exit() || controls.interrupted() {
                 return Ok(report);
             }
 

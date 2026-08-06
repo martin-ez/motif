@@ -90,6 +90,30 @@ impl Controls for Endless {
     }
 }
 
+/// A panel with a way out of its own, taken once it has been polled the stated
+/// number of times. Standing in for the key a terminal ends a run with, which
+/// no application declares and none can refuse.
+struct Escapable {
+    polls_first: usize,
+}
+
+impl Escapable {
+    fn after(polls: usize) -> Self {
+        Self { polls_first: polls }
+    }
+}
+
+impl Controls for Escapable {
+    fn poll(&mut self) -> Option<ControlEvent> {
+        self.polls_first = self.polls_first.saturating_sub(1);
+        None
+    }
+
+    fn interrupted(&self) -> bool {
+        self.polls_first == 0
+    }
+}
+
 /// A screen that takes a stated number of frames and then reports failure.
 ///
 /// A loop that will not stop makes a test that never ends, and a test that never
@@ -195,6 +219,44 @@ fn events_waiting_behind_an_exit_are_left_unread() {
         .expect("the screen accepts the frames this run draws");
 
     assert_eq!(controls.poll(), Some(pressed(Button::Play)));
+}
+
+#[test]
+fn a_run_ends_when_the_panel_is_interrupted() {
+    let mut app = Page::lasting(usize::MAX);
+    let mut controls = Escapable::after(0);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    let report = still().run(&mut app, &mut controls, &mut screen);
+
+    assert!(report.is_ok());
+}
+
+#[test]
+fn an_interrupted_panel_ends_a_run_the_application_would_not() {
+    let mut app = Page::lasting(usize::MAX);
+    let mut controls = Escapable::after(2);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    let report = still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    assert_eq!(report.frames(), 1);
+}
+
+#[test]
+fn an_interrupted_panel_leaves_the_frame_it_ended_undrawn() {
+    let mut app = Page::lasting(usize::MAX);
+    let mut controls = Escapable::after(0);
+    let mut screen = Patient::accepting(FRAMES_ACCEPTED);
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    assert_eq!(app.drawn, 0);
+    assert_eq!(screen.rendered(), None);
 }
 
 #[test]

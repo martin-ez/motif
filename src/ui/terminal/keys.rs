@@ -10,6 +10,7 @@ use crate::device::{Button, Control, Encoder};
 use crate::ui::{ControlEvent, Controls, Hint, Turn};
 
 const ESCAPE: u8 = 0x1b;
+const INTERRUPT: u8 = 0x03;
 const SHIFT: char = '⇧';
 const TURN: char = '/';
 const PARAMETERS_START: usize = 2;
@@ -31,8 +32,13 @@ struct Press {
     shifted: bool,
 }
 
+enum Taken {
+    Press(Press),
+    Interrupt,
+}
+
 enum Step {
-    Took { bytes: usize, press: Option<Press> },
+    Took { bytes: usize, taken: Option<Taken> },
     Incomplete,
 }
 
@@ -145,10 +151,12 @@ fn control_sequence(bytes: &[u8]) -> Step {
 
     Step::Took {
         bytes: PARAMETERS_START + length + 1,
-        press: arrow(parameters[length]).map(|key| Press {
-            key,
-            shifted: shift_held(&parameters[..length]),
-        }),
+        taken: arrow(parameters[length])
+            .map(|key| Press {
+                key,
+                shifted: shift_held(&parameters[..length]),
+            })
+            .map(Taken::Press),
     }
 }
 
@@ -157,10 +165,12 @@ fn single_shift(bytes: &[u8]) -> Step {
         None => Step::Incomplete,
         Some(final_byte) => Step::Took {
             bytes: 3,
-            press: arrow(*final_byte).map(|key| Press {
-                key,
-                shifted: false,
-            }),
+            taken: arrow(*final_byte)
+                .map(|key| Press {
+                    key,
+                    shifted: false,
+                })
+                .map(Taken::Press),
         },
     }
 }
@@ -172,19 +182,29 @@ fn escaped(bytes: &[u8]) -> Step {
         Some(b'O') => single_shift(bytes),
         Some(_) => Step::Took {
             bytes: 1,
-            press: None,
+            taken: None,
         },
     }
 }
 
 fn typed(byte: u8) -> Step {
-    let typed = char::from(byte);
-    let press = typed.is_ascii_graphic().then(|| Press {
-        key: Key::Glyph(typed.to_ascii_lowercase()),
-        shifted: typed.is_ascii_uppercase(),
-    });
+    if byte == INTERRUPT {
+        return Step::Took {
+            bytes: 1,
+            taken: Some(Taken::Interrupt),
+        };
+    }
 
-    Step::Took { bytes: 1, press }
+    let typed = char::from(byte);
+    let taken = typed
+        .is_ascii_graphic()
+        .then(|| Press {
+            key: Key::Glyph(typed.to_ascii_lowercase()),
+            shifted: typed.is_ascii_uppercase(),
+        })
+        .map(Taken::Press);
+
+    Step::Took { bytes: 1, taken }
 }
 
 fn next_press(bytes: &[u8]) -> Step {
@@ -200,15 +220,16 @@ fn next_press(bytes: &[u8]) -> Step {
 /// Scenes are `1`–`4`; transport `z`, `x`, `c` for play, stop and record;
 /// navigation the arrow keys; the encoder turns with `,` and `.`. Shift is an
 /// upper case letter or an arrow carrying modifier 2, resolved here rather than
-/// reported as a press; the same mapping is what names a control for the legend.
+/// reported as a press; the same mapping names a control for the legend. Ctrl+C
+/// reaches no control and interrupts the panel instead.
 ///
-/// Reads are never waited on, and a poll gives up after a bufferful of bytes
-/// yielding no control. A split key is held until the rest arrives; a byte that
-/// begins nothing is dropped.
+/// Reads are never waited on and a poll gives up after a bufferful of bytes
+/// yielding no control. A split key waits for the rest; a stray byte is dropped.
 pub struct KeyReader<R: Read> {
     source: R,
     pending: [u8; PENDING_CAPACITY],
     filled: usize,
+    interrupted: bool,
 }
 
 impl<R: Read> KeyReader<R> {
@@ -218,6 +239,7 @@ impl<R: Read> KeyReader<R> {
             source,
             pending: [0; PENDING_CAPACITY],
             filled: 0,
+            interrupted: false,
         }
     }
 
@@ -246,13 +268,27 @@ impl<R: Read> Controls for KeyReader<R> {
         Some(hint_of(control))
     }
 
+    fn interrupted(&self) -> bool {
+        self.interrupted
+    }
+
     fn poll(&mut self) -> Option<ControlEvent> {
         for _ in 0..PENDING_CAPACITY {
+            if self.interrupted {
+                return None;
+            }
+
             match next_press(&self.pending[..self.filled]) {
-                Step::Took { bytes, press } => {
+                Step::Took { bytes, taken } => {
                     self.take(bytes);
-                    if let Some(event) = press.and_then(control_of) {
-                        return Some(event);
+                    match taken {
+                        Some(Taken::Interrupt) => self.interrupted = true,
+                        Some(Taken::Press(press)) => {
+                            if let Some(event) = control_of(press) {
+                                return Some(event);
+                            }
+                        }
+                        None => {}
                     }
                 }
                 Step::Incomplete => {
