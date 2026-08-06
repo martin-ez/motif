@@ -59,6 +59,14 @@ impl Gain {
     /// the other, and ten milliseconds is where both are below noticing.
     pub const RAMP: usize = RAMP_MILLISECONDS;
 
+    /// The largest multiplier a gain will head for.
+    ///
+    /// Twelve decibels above unity, the top of the range the panel's encoder
+    /// moves over. Held here rather than at each sender because a mapping, a
+    /// session file and the panel are three chances to forget it, and the one
+    /// that forgets puts a multiplier of a few thousand on the audio thread.
+    pub const CEILING: f32 = 3.981_071_7;
+
     /// A gain that passes what it is given, unmuted and already there.
     pub const fn unity() -> Self {
         Self {
@@ -87,14 +95,17 @@ impl Gain {
     /// A target that is not a number is refused and the last one kept: it
     /// arrives from a queue that accepts any bit pattern as a gain, and one
     /// NaN multiplied into the block would silence the output for the rest of
-    /// the run. Below silence is taken as silence, a gain control having no
-    /// meaning under it.
+    /// the run. Anything else is held between silence and [`CEILING`], a gain
+    /// control having no meaning under the one and no sender being trusted to
+    /// have applied the other.
+    ///
+    /// [`CEILING`]: Self::CEILING
     pub fn set_target(&mut self, target: f32) {
         if !target.is_finite() {
             return;
         }
 
-        self.target = target.max(SILENCE);
+        self.target = target.clamp(SILENCE, Self::CEILING);
         self.retarget();
     }
 

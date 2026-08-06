@@ -13,6 +13,9 @@ const SAMPLE_RATE: u32 = 48_000;
 const RAMP_FRAMES: usize = (SAMPLE_RATE as usize * 10) / 1_000;
 const HALF: f32 = 0.5;
 const TOLERANCE: f32 = 1e-6;
+const CEILING_DECIBELS: f32 = 12.0;
+const DECIBELS_PER_DECADE: f32 = 20.0;
+const FAR_ABOVE_THE_CEILING: f32 = 1_000.0;
 
 fn prepared() -> Gain {
     let mut gain = Gain::unity();
@@ -228,4 +231,38 @@ fn a_negative_target_is_taken_as_silence() {
     gain.set_target(-1.0);
 
     assert_eq!(gain.target(), 0.0);
+}
+
+#[test]
+fn the_ceiling_is_twelve_decibels_above_unity() {
+    let twelve_decibels = 10.0_f32.powf(CEILING_DECIBELS / DECIBELS_PER_DECADE);
+
+    assert!((Gain::CEILING - twelve_decibels).abs() < TOLERANCE);
+}
+
+#[test]
+fn a_target_above_the_ceiling_is_taken_as_the_ceiling() {
+    let mut gain = prepared();
+
+    gain.set_target(FAR_ABOVE_THE_CEILING);
+
+    assert_eq!(gain.target(), Gain::CEILING);
+}
+
+#[test]
+fn a_gain_never_multiplies_by_more_than_the_ceiling() {
+    let mut gain = prepared();
+
+    gain.set_target(FAR_ABOVE_THE_CEILING);
+
+    assert!((settled(&mut gain) - Gain::CEILING).abs() < TOLERANCE);
+}
+
+#[test]
+fn a_target_at_the_ceiling_is_kept() {
+    let mut gain = prepared();
+
+    gain.set_target(Gain::CEILING);
+
+    assert_eq!(gain.target(), Gain::CEILING);
 }

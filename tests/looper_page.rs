@@ -6,8 +6,8 @@
 //! application is allowed to know about either end.
 
 use motif::audio::{
-    AudioPath, Command, CommandReceiver, CommandSender, Counting, Passthrough, SampleClockWriter,
-    StreamConfig, command_channel, sample_clock,
+    AudioPath, Command, CommandReceiver, CommandSender, Counting, Gain, Passthrough,
+    SampleClockWriter, StreamConfig, command_channel, sample_clock,
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{
@@ -17,6 +17,7 @@ use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Frame, Page, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
+const TOLERANCE: f32 = 1e-4;
 const SECOND: u32 = DeviceProfile::TARGET.audio.sample_rate;
 
 /// Half a second of frames, which is 120 BPM.
@@ -660,6 +661,13 @@ fn the_gain_stops_at_the_top_of_its_range() {
 
     assert_eq!(page.decibels(), ceiling);
     assert!(ceiling > 0.0);
+}
+
+#[test]
+fn the_top_of_the_range_is_the_gain_ceiling() {
+    let page = turned_repeatedly(200, Turn::Clockwise);
+
+    assert!((page.gain() - Gain::CEILING).abs() < TOLERANCE);
 }
 
 #[test]
