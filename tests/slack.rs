@@ -21,8 +21,23 @@ const SLACK: usize = 4;
 /// boundary built with [`SLACK`] frames of slack.
 const TARGET: usize = SLACK + BLOCK;
 
+/// A block long enough that a correction is several frames rather than one, so
+/// that what caps a correction is visible at all.
+const WIDE: usize = 64;
+
+/// The occupancy a block of [`WIDE`] frames should begin with.
+const WIDE_TARGET: usize = WIDE + WIDE;
+
 fn holding() -> (SlackTrim, SlackReader) {
     slack_hold(SLACK, BLOCK)
+}
+
+/// A wide hold already past its band, so that what a correction is capped at is
+/// what the test reads rather than whether one has started.
+fn correcting() -> SlackTrim {
+    let (mut trim, _reader) = slack_hold(WIDE, WIDE);
+    trim.trim(0, WIDE);
+    trim
 }
 
 fn trimmed(available: usize) -> Trim {
@@ -67,9 +82,41 @@ fn a_ring_too_dry_to_fill_the_block_is_not_padded() {
 
 #[test]
 fn a_correction_is_capped_at_a_fraction_of_the_block() {
-    let (mut trim, _reader) = slack_hold(64, 64);
+    let (mut trim, _reader) = slack_hold(WIDE, WIDE);
 
-    assert_eq!(trim.trim(1_000, 64), Trim::Drop(2));
+    assert_eq!(trim.trim(1_000, WIDE), Trim::Drop(2));
+}
+
+#[test]
+fn a_wide_ring_too_dry_to_fill_the_block_is_not_padded() {
+    assert_eq!(correcting().trim(WIDE - 24, WIDE), Trim::Steady);
+}
+
+#[test]
+fn an_excess_within_the_cap_is_given_up_whole() {
+    assert_eq!(correcting().trim(WIDE_TARGET + 2, WIDE), Trim::Drop(2));
+}
+
+#[test]
+fn an_excess_of_one_frame_costs_one_frame() {
+    assert_eq!(correcting().trim(WIDE_TARGET + 1, WIDE), Trim::Drop(1));
+}
+
+#[test]
+fn a_shortfall_of_one_frame_is_made_up_with_one_frame() {
+    assert_eq!(correcting().trim(WIDE_TARGET - 1, WIDE), Trim::Insert(1));
+}
+
+#[test]
+fn a_padded_block_always_keeps_a_frame_to_hold() {
+    let (mut trim, _reader) = slack_hold(256, 256);
+
+    assert_eq!(trim.trim(1, 4), Trim::Insert(3));
+}
+
+#[test]
+fn a_ring_the_block_exactly_drains_is_padded() {
+    assert_eq!(trimmed(BLOCK - 1), Trim::Insert(1));
 }
 
 #[test]

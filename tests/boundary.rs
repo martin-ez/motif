@@ -589,6 +589,25 @@ fn a_capture_clock_running_slow_costs_no_frames() {
 }
 
 #[test]
+fn a_drifting_clock_is_held_in_frames_rather_than_samples() {
+    let stereo = StreamConfig {
+        output_channels: 2,
+        ..mono(BLOCK)
+    };
+    let (mut input, mut output) = whole(stereo, BLOCK);
+    let source = vec![0.5; BLOCK - 1];
+    let mut sink = vec![0.0; BLOCK * 2];
+    let mut starved = 0;
+
+    for _ in 0..400 {
+        input.capture(&source);
+        starved += usize::from(output.render(&mut sink) < BLOCK);
+    }
+
+    assert_eq!(starved, 0);
+}
+
+#[test]
 fn a_hiccup_is_absorbed_by_the_slack() {
     let mut ends = carrying(BLOCK);
     in_step(&mut ends, 4);
