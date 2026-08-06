@@ -15,9 +15,9 @@ use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 use super::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, ChannelSelection, DeviceError, DeviceId,
     DeviceSelection, DuplexStream, FaultReader, FaultReporter, Grant, Headroom, HeadroomReader,
-    LevelReader, Levels, Placed, Placement, PriorityReader, PriorityReporter, StreamConfig,
-    StreamRequest, StreamState, XrunReader, Xruns, boundary, fault_channel, headroom_meter,
-    level_meter, opened_width, pinning, priority_latch, xrun_counter,
+    LevelReader, Levels, Placed, Placement, Priming, PriorityReader, PriorityReporter,
+    StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, boundary, fault_channel,
+    headroom_meter, level_meter, opened_width, pinning, priority_latch, xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -309,6 +309,7 @@ impl AudioBackend for CpalBackend {
             request.block_size as usize,
             path,
         );
+        let priming = capture.priming();
         let (mut level_writer, levels) = level_meter(input_channels, selection.input_channels);
         let (mut overruns, mut underruns, xruns) = xrun_counter();
         let (mut capture_headroom, capture_load) = headroom_meter(request.sample_rate);
@@ -382,6 +383,7 @@ impl AudioBackend for CpalBackend {
             affinity,
             priority,
             faults,
+            priming,
         })
     }
 }
@@ -399,6 +401,7 @@ pub struct CpalStream {
     affinity: Grant,
     priority: PriorityReader,
     faults: FaultReader,
+    priming: Priming,
 }
 
 impl DuplexStream for CpalStream {
@@ -462,7 +465,13 @@ impl DuplexStream for CpalStream {
     /// them failing never leaves the other untouched. The state is the
     /// conservative reading of what happened: [`StreamState::Running`] if
     /// either stream may be calling back.
+    ///
+    /// The boundary is primed first, because the two streams begin calling back
+    /// independently and a device can take tens of milliseconds over it — long
+    /// enough for the other end to fill or drain the ring several times over.
     fn start(&mut self) -> Result<(), DeviceError> {
+        self.priming.restart();
+
         let input = self.input.play();
         let output = self.output.play();
 

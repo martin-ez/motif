@@ -129,6 +129,35 @@ impl SampleConsumer {
         taken
     }
 
+    /// Drop up to `count` samples without reading them, and report how many
+    /// that was.
+    ///
+    /// A result below `count` means the ring ran dry first. Nothing is copied,
+    /// so this is a place to put samples that are known to be stale rather than
+    /// a faster [`read`](Self::read).
+    ///
+    /// ```
+    /// let (mut producer, mut consumer) = motif::audio::sample_ring(4);
+    /// let mut taken = [0.0; 2];
+    ///
+    /// producer.write(&[1.0, 2.0, 3.0, 4.0]);
+    /// consumer.skip(2);
+    /// consumer.read(&mut taken);
+    ///
+    /// assert_eq!(taken, [3.0, 4.0]);
+    /// ```
+    pub fn skip(&mut self, count: usize) -> usize {
+        let dropped = count.min(self.available());
+        if dropped == 0 {
+            return 0;
+        }
+
+        let read = self.ring.read.load(Ordering::Relaxed);
+        self.ring.read.store(read + dropped, Ordering::Release);
+
+        dropped
+    }
+
     /// How many samples are waiting to be read.
     ///
     /// A producer running concurrently can only make this larger, so a read of
