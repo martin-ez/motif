@@ -396,20 +396,20 @@ fn a_full_ring_drops_the_frames_it_cannot_hold() {
 
 #[test]
 fn a_capture_before_the_playback_end_has_run_is_not_a_dropout() {
-    let (mut input, _output) = unstarted(config(1, 1), 0);
-    let capacity = input.capacity();
+    let (mut input, _output) = unstarted(config(2, 1), 0);
+    let frames = input.capacity() + 1;
 
-    assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity + 1);
+    assert_eq!(input.capture(&vec![1.0; frames * 2]), frames);
 }
 
 #[test]
 fn a_playback_before_the_capture_end_has_run_is_not_a_dropout() {
-    let (_input, mut output) = unstarted(config(1, 1), 0);
+    let (_input, mut output) = unstarted(config(1, 2), 0);
     let mut played = [9.0; 4];
 
     let supplied = output.render(&mut played);
 
-    assert_eq!(supplied, 4);
+    assert_eq!(supplied, 2);
     assert_eq!(played, [0.0; 4]);
 }
 
@@ -473,6 +473,19 @@ fn a_restarted_boundary_does_not_count_its_start_as_a_dropout() {
     priming.restart();
 
     assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity + 1);
+}
+
+#[test]
+fn a_restart_plays_silence_rather_than_what_the_last_run_left() {
+    let (mut input, mut output) = whole(config(1, 1), 2);
+    let priming = input.priming();
+    let mut played = [0.0; 4];
+    input.capture(&[7.0, 8.0, 9.0, 10.0]);
+
+    priming.restart();
+    output.render(&mut played);
+
+    assert_eq!(played, [0.0; 4]);
 }
 
 #[test]
