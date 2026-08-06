@@ -9,12 +9,17 @@
 //!
 //! A physical loop is at least a block long, since the boundary starts playback
 //! a block behind capture, so every delay here is at least that.
+//!
+//! The last two run the probe through the real [`boundary`] instead, with its
+//! output wired back to its input, which is what states that the slack the
+//! boundary is built with is what the round trip costs.
 
 use std::collections::VecDeque;
 use std::time::Duration;
 
 use motif::audio::{
-    AudioPath, Command, LatencyProbe, RoundTrip, RoundTripReader, StreamConfig, latency_probe,
+    AudioPath, ChannelSelection, Command, LatencyProbe, RoundTrip, RoundTripReader, StreamConfig,
+    boundary, latency_probe,
 };
 use motif::device::DeviceProfile;
 
@@ -237,6 +242,54 @@ fn a_probe_answers_no_command() {
     .any(|command| probe.apply(command));
 
     assert!(!answered);
+}
+
+/// Blocks to run a wired boundary for: enough to prime it, settle the probe and
+/// carry a click back, pinned here rather than derived from any of the three.
+const BOUNDARY_BLOCKS: usize = 20;
+
+/// The wiring cannot capture a block before it has been played, so every
+/// measurement taken through it carries one block that is the harness's own and
+/// not the boundary's.
+const WIRING: usize = BLOCK;
+
+/// Run a boundary built with `slack` until its own click comes back.
+fn round_trip_through_boundary(slack: usize) -> RoundTrip {
+    let (probe, measured) = latency_probe();
+    let (mut input, mut output) = boundary(
+        config(),
+        ChannelSelection::all(1),
+        ChannelSelection::all(1),
+        slack,
+        probe,
+    );
+    let mut wire = vec![0.0; BLOCK];
+
+    for _ in 0..BOUNDARY_BLOCKS {
+        input.capture(&wire);
+        output.render(&mut wire);
+
+        if let Some(measurement) = measured.read() {
+            return measurement.round_trip;
+        }
+    }
+
+    panic!("the click never came back through the boundary");
+}
+
+#[test]
+fn a_round_trip_through_the_boundary_carries_its_slack() {
+    let measured = round_trip_through_boundary(2 * BLOCK);
+
+    assert_eq!(measured.frames, (WIRING + 2 * BLOCK) as u32);
+}
+
+#[test]
+fn slack_in_the_boundary_lengthens_the_round_trip_by_its_own_length() {
+    let tight = round_trip_through_boundary(0).frames;
+    let slack = round_trip_through_boundary(BLOCK).frames;
+
+    assert_eq!(slack - tight, BLOCK as u32);
 }
 
 #[test]
