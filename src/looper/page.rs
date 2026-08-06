@@ -17,8 +17,8 @@
 use crate::audio::{Command, CommandSender, Commanded, SampleClockReader, command_channel};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
 use crate::looper::{
-    LoopBuffer, LoopEngine, PositionReader, TakeReader, Transport, WaveformReader, position_meter,
-    take_handoff, waveform_meter,
+    LoopBuffer, LoopEngine, LoopMarks, PositionReader, TakeReader, Transport, WaveformReader,
+    position_meter, take_handoff, waveform_meter,
 };
 use crate::seq::{BeatGrid, TapTempo};
 use crate::ui::{ControlEvent, Page, Region, Turn};
@@ -29,7 +29,8 @@ const ARMED_COLUMN: usize = 14;
 const TEMPO_ROW: usize = 1;
 const READOUT_ROW: usize = 2;
 const BAR_ROW: usize = 3;
-const WAVEFORM_ROW: usize = 4;
+const MARKS_ROW: usize = 4;
+const WAVEFORM_ROW: usize = MARKS_ROW + LoopMarks::ROWS;
 const WAVEFORM_ROWS: usize = 4;
 const GAIN_ROW: usize = WAVEFORM_ROW + WAVEFORM_ROWS;
 const STACK_ROW: usize = GAIN_ROW + 1;
@@ -121,6 +122,7 @@ pub struct LooperPage {
     commands: CommandSender,
     position: PositionReader,
     waveform: WaveformReader,
+    marks: LoopMarks,
     elapsed: SampleClockReader,
     taps: TapTempo,
     decibels: f32,
@@ -151,6 +153,7 @@ impl LooperPage {
             commands,
             position,
             waveform,
+            marks: LoopMarks::none(),
             elapsed,
             decibels: UNITY_DECIBELS,
             muted: false,
@@ -277,6 +280,16 @@ impl LooperPage {
     /// tempo worked out from them.
     pub const fn grid(&self) -> &BeatGrid {
         self.taps.grid()
+    }
+
+    /// Show `marks` over the loop, replacing whatever analysis found last.
+    ///
+    /// They are drawn against the summary the page is already reading, so a
+    /// mark lands on the column of the loop it was found in; one found in a
+    /// take the player has since recorded over is dropped rather than drawn
+    /// somewhere it does not belong.
+    pub fn analysed(&mut self, marks: LoopMarks) {
+        self.marks = marks;
     }
 
     /// Where the input gain sits, in decibels, with zero at unity.
@@ -412,7 +425,17 @@ impl Page for LooperPage {
             &bar(position.playhead(), position.recorded(), region.columns()),
         );
 
-        let shape = self.waveform.read().drawn(region.columns(), WAVEFORM_ROWS);
+        let waveform = self.waveform.read();
+        for (offset, drawn) in self
+            .marks
+            .drawn(&waveform, region.columns())
+            .iter()
+            .enumerate()
+        {
+            region.write(0, MARKS_ROW + offset, drawn);
+        }
+
+        let shape = waveform.drawn(region.columns(), WAVEFORM_ROWS);
         for (offset, drawn) in shape.iter().enumerate() {
             region.write(0, WAVEFORM_ROW + offset, drawn);
         }

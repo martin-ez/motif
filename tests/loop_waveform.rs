@@ -7,14 +7,25 @@
 //!
 //! The drawing is the other half. A region is rarely as wide as the buckets, so
 //! the tests state both directions: narrower keeps the extreme in each column,
-//! wider interpolates between the buckets either side.
+//! wider interpolates between the buckets either side. The column a single
+//! frame is drawn in is the same mapping asked the other way round, and it is
+//! stated against the ink that frame's own signal puts on the row.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use motif::device::DeviceProfile;
 use motif::looper::{Extremes, LoopWaveform, waveform_meter};
 
 const BUCKETS: usize = LoopWaveform::BUCKETS;
+
+/// A region as wide as the device's screen, which is narrower than the buckets.
+const COLUMNS: usize = DeviceProfile::TARGET.screen.columns;
+
+/// A loop of four frames a bucket, so the bucket a frame falls in is arithmetic
+/// a reader can do.
+const FRAMES_PER_BUCKET: usize = 4;
+const LONG: usize = BUCKETS * FRAMES_PER_BUCKET;
 
 fn summarising(samples: &[f32]) -> LoopWaveform {
     let mut waveform = LoopWaveform::EMPTY;
@@ -262,4 +273,72 @@ fn interpolation_walks_the_buckets_it_passes() {
 #[test]
 fn a_region_with_no_rows_draws_nothing() {
     assert!(summarising(&[1.0]).drawn(3, 0).is_empty());
+}
+
+#[test]
+fn the_first_frame_is_drawn_in_the_first_column() {
+    assert_eq!(summarising(&vec![0.0; LONG]).column_of(0, COLUMNS), Some(0));
+}
+
+#[test]
+fn the_last_frame_is_drawn_in_the_last_column() {
+    let waveform = summarising(&vec![0.0; LONG]);
+
+    assert_eq!(waveform.column_of(LONG - 1, COLUMNS), Some(COLUMNS - 1));
+}
+
+#[test]
+fn a_frame_further_through_the_loop_is_drawn_further_right() {
+    let waveform = summarising(&vec![0.0; LONG]);
+
+    assert!(waveform.column_of(LONG / 4, COLUMNS) < waveform.column_of(LONG / 2, COLUMNS));
+}
+
+#[test]
+fn frames_sharing_a_bucket_are_drawn_in_one_column() {
+    let waveform = summarising(&vec![0.0; LONG]);
+    let bucket = FRAMES_PER_BUCKET..2 * FRAMES_PER_BUCKET;
+
+    assert_eq!(
+        waveform.column_of(bucket.start, COLUMNS),
+        waveform.column_of(bucket.end - 1, COLUMNS)
+    );
+}
+
+#[test]
+fn a_frame_past_the_end_of_the_loop_is_drawn_nowhere() {
+    assert_eq!(summarising(&vec![0.0; LONG]).column_of(LONG, COLUMNS), None);
+}
+
+#[test]
+fn a_frame_of_a_loop_with_nothing_recorded_is_drawn_nowhere() {
+    assert_eq!(LoopWaveform::EMPTY.column_of(0, COLUMNS), None);
+}
+
+#[test]
+fn a_frame_is_drawn_nowhere_in_a_region_with_no_columns() {
+    assert_eq!(summarising(&vec![0.0; LONG]).column_of(0, 0), None);
+}
+
+/// What anything drawn over a loop rests on: the column a frame is said to be
+/// drawn in is the column that frame's own signal puts ink in. One loud frame,
+/// so the row carries one column of ink and nothing else.
+#[test]
+fn a_frame_is_drawn_in_the_column_its_own_signal_reaches() {
+    let frame = LONG / 3;
+    let waveform = loud_at(frame, LONG);
+
+    let lit: Vec<usize> = waveform.drawn(COLUMNS, 1)[0]
+        .chars()
+        .enumerate()
+        .filter(|(_at, glyph)| *glyph != ' ')
+        .map(|(at, _glyph)| at)
+        .collect();
+
+    assert_eq!(
+        lit,
+        [waveform
+            .column_of(frame, COLUMNS)
+            .expect("the frame is inside the loop")]
+    );
 }

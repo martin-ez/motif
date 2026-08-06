@@ -11,7 +11,8 @@ use motif::audio::{
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{
-    LoopBuffer, LoopPosition, LoopWaveform, LooperPage, Transport, position_meter, waveform_meter,
+    LoopBuffer, LoopMarks, LoopPosition, LoopWaveform, LooperPage, Mark, Transport, position_meter,
+    waveform_meter,
 };
 use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Frame, Page, Turn};
@@ -226,6 +227,59 @@ fn shape_rows(page: &mut LooperPage) -> Vec<usize> {
         .filter(|(_row, drawn)| drawn.chars().any(|glyph| BLOCKS.contains(&glyph)))
         .map(|(row, _drawn)| row)
         .collect()
+}
+
+/// The glyphs a mark is drawn with, one row of the grid and one of the events.
+const DOWNBEAT: char = '┃';
+const BEAT: char = '│';
+const CHORD_CHANGE: char = '◆';
+const ONSET: char = '•';
+
+/// A loop of four frames a bucket, so the bucket a frame falls in is arithmetic
+/// a reader can do.
+const FRAMES_PER_BUCKET: usize = 4;
+const LONG: usize = LoopWaveform::BUCKETS * FRAMES_PER_BUCKET;
+
+/// A frame far enough into the loop that the column it is drawn in is neither
+/// the first nor the last.
+const A_FRAME: usize = LONG / 3;
+
+/// A loop with one loud frame in it, so its shape puts ink in one column.
+fn recorded_loud_at(frame: usize) -> LoopWaveform {
+    let mut samples = vec![0.0; LONG];
+    samples[frame] = 1.0;
+
+    recorded(&samples)
+}
+
+fn found(marks: &[(u64, Mark)]) -> LoopMarks {
+    let mut analysis = LoopMarks::none();
+    for &(at, mark) in marks {
+        analysis.add(at, mark);
+    }
+
+    analysis
+}
+
+fn page_analysing(waveform: &LoopWaveform, marks: &[(u64, Mark)]) -> LooperPage {
+    let mut page = page_drawing(waveform);
+    page.analysed(found(marks));
+
+    page
+}
+
+/// Which columns of the drawn page carry any of `wanted`, each once.
+fn columns_holding(rows: &[String], wanted: &[char]) -> Vec<usize> {
+    let mut columns: Vec<usize> = rows
+        .iter()
+        .flat_map(|row| row.chars().enumerate())
+        .filter(|(_at, glyph)| wanted.contains(glyph))
+        .map(|(at, _glyph)| at)
+        .collect();
+    columns.sort_unstable();
+    columns.dedup();
+
+    columns
 }
 
 fn row_starting_with(page: &mut LooperPage, opening: &str) -> usize {
@@ -896,6 +950,63 @@ fn the_gain_readout_sits_directly_under_the_loop() {
         .expect("the page draws the loop");
 
     assert_eq!(gain, lowest + 1);
+}
+
+#[test]
+fn a_loop_nobody_has_analysed_draws_no_marks() {
+    let rows = drawn(&mut page_drawing(&recorded_at_full_scale()));
+
+    assert_eq!(
+        columns_holding(&rows, &[DOWNBEAT, BEAT, CHORD_CHANGE, ONSET]),
+        []
+    );
+}
+
+#[test]
+fn the_beat_grid_is_drawn_directly_above_the_events() {
+    let marks = [
+        (A_FRAME as u64, Mark::Downbeat),
+        (A_FRAME as u64, Mark::Onset),
+    ];
+    let rows = drawn(&mut page_analysing(&recorded_at_full_scale(), &marks));
+
+    assert_eq!(row_holding(&rows, "┃") + 1, row_holding(&rows, "•"));
+}
+
+#[test]
+fn the_events_are_drawn_directly_above_the_loop() {
+    let marks = [(A_FRAME as u64, Mark::ChordChange)];
+    let mut page = page_analysing(&recorded_at_full_scale(), &marks);
+    let rows = drawn(&mut page);
+    let top = *shape_rows(&mut page)
+        .first()
+        .expect("the page draws the loop");
+
+    assert_eq!(row_holding(&rows, "◆") + 1, top);
+}
+
+/// The alignment the marks exist for: a beat found at a frame is drawn in the
+/// column the loop's own shape puts that frame's signal in.
+#[test]
+fn a_mark_is_drawn_in_the_column_the_frame_it_was_found_at_is() {
+    let marks = [(A_FRAME as u64, Mark::Beat)];
+    let rows = drawn(&mut page_analysing(&recorded_loud_at(A_FRAME), &marks));
+
+    assert_eq!(
+        columns_holding(&rows, &[BEAT]),
+        columns_holding(&rows, &BLOCKS)
+    );
+}
+
+#[test]
+fn analysing_a_loop_again_replaces_the_marks_it_had() {
+    let mut page = page_analysing(&recorded_at_full_scale(), &[(A_FRAME as u64, Mark::Beat)]);
+
+    page.analysed(found(&[(A_FRAME as u64, Mark::Onset)]));
+    let rows = drawn(&mut page);
+
+    assert_eq!(columns_holding(&rows, &[BEAT]), []);
+    assert_eq!(columns_holding(&rows, &[ONSET]).len(), 1);
 }
 
 #[test]

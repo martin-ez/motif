@@ -19,6 +19,7 @@ use std::ops::Range;
 use crate::device::AudioProfile;
 
 mod engine;
+mod marks;
 mod page;
 mod position;
 mod take;
@@ -26,6 +27,7 @@ mod transport;
 mod waveform;
 
 pub use engine::LoopEngine;
+pub use marks::{LoopMarks, Mark};
 pub use page::LooperPage;
 pub use position::{LoopPosition, PositionReader, PositionWriter, position_meter};
 pub use take::{FinishedTake, TakeReader, TakeWriter, take_handoff};
