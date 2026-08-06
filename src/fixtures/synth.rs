@@ -432,7 +432,7 @@ fn drawn_from(draw: &mut Noise) -> Recipe {
 }
 
 fn pick<'a, T>(levels: &'a [T], draw: &mut Noise) -> &'a T {
-    &levels[(draw.unit() * levels.len() as f64) as usize]
+    &levels[draw.below(levels.len())]
 }
 
 fn percussive(onsets: Vec<Onset>) -> Content {
@@ -816,8 +816,8 @@ impl Noise {
         f64::from(self.step()) / f64::from(u32::MAX) * 2.0 - 1.0
     }
 
-    fn unit(&mut self) -> f64 {
-        f64::from(self.step()) / (f64::from(u32::MAX) + 1.0)
+    fn below(&mut self, bound: usize) -> usize {
+        self.step() as usize % bound
     }
 }
 

@@ -172,6 +172,31 @@ fn a_denser_recipe_puts_more_onsets_over_the_same_beats() {
 }
 
 #[test]
+fn a_denser_recipe_subdivides_each_beat_forwards() {
+    let fixture = synth::rendered("subdivided", clicks(2, 0.0, 0.0));
+    let beats = fixture.beats();
+    let last = beats[beats.len() - 1].at;
+    let latest = ticks(&fixture)
+        .into_iter()
+        .max()
+        .expect("a dense fixture ticks");
+
+    assert!(
+        latest > last,
+        "the last tick fell at {latest:?} and the last beat at {last:?}"
+    );
+}
+
+#[test]
+fn a_subdivision_falls_midway_between_the_beat_it_splits_and_the_next() {
+    let fixture = synth::rendered("split", clicks(2, 0.0, 0.0));
+    let beats = fixture.beats();
+    let midway = beats[1].at + (beats[2].at - beats[1].at) / 2;
+
+    assert!(ticks(&fixture).contains(&midway), "no tick at {midway:?}");
+}
+
+#[test]
 fn dropping_every_beat_leaves_only_the_accents_that_mark_the_bars() {
     let fixture = synth::rendered("dropped", clicks(1, 1.0, 0.0));
 
@@ -247,6 +272,34 @@ fn a_downbeat_is_accented_however_much_is_dropped() {
             );
         }
     }
+}
+
+const SOFTEST_RISE: Duration = Duration::from_millis(20);
+
+fn softly() -> Recipe {
+    Recipe {
+        texture: Texture::Percussion {
+            sharpness: 0.0,
+            density: 1,
+            dropout: 0.0,
+            syncopation: 0.0,
+        },
+        ..plain()
+    }
+}
+
+#[test]
+fn a_soft_attack_is_audible_while_it_rises_rather_than_silent_until_it_ends() {
+    let sharp = synth::rendered("attack", plain());
+    let soft = synth::rendered("attack", softly());
+
+    let rising = peak_over(&soft, SOFTEST_RISE);
+    let struck = peak_over(&sharp, SOFTEST_RISE);
+
+    assert!(
+        rising * 3 > struck,
+        "a soft attack peaked at {rising} over its rise where a sharp one peaked at {struck}"
+    );
 }
 
 #[test]
