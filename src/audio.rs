@@ -5,13 +5,13 @@
 //! it can stand in where none exists, and [`DeviceCatalog`] caches a listing.
 //!
 //! Everything crossing the callback boundary does so over a lock-free channel
-//! built here: [`sample_ring`] for the audio, [`command_channel`] for changes
-//! going the other way, [`level_meter`], [`headroom_meter`] and [`sample_clock`]
-//! for how loud it was, how close the deadline came and how many frames have
-//! gone by, [`priority_latch`] for the class the callback runs at, and
-//! [`xrun_counter`] and [`fault_channel`] for the two ways the boundary fails.
-//! A fault outlives the stream it came from, so [`DeviceLink`] holds what it
-//! takes to open another and is what the rest of the application talks to.
+//! built here: [`sample_ring`] for the audio, [`command_channel`] going the
+//! other way, [`level_meter`], [`headroom_meter`], [`sample_clock`] and
+//! [`latency_probe`] for how loud it was, how close the deadline came, how many
+//! frames went by and what the round trip cost, [`priority_latch`] for its
+//! priority class, and [`xrun_counter`] and [`fault_channel`] for the two ways
+//! the boundary fails. A fault outlives its stream, so [`DeviceLink`] holds
+//! what it takes to open another and is what the application talks to.
 
 use std::fmt;
 
@@ -28,6 +28,7 @@ mod level;
 mod link;
 mod path;
 mod placement;
+mod probe;
 mod ring;
 mod slack;
 mod xrun;
@@ -47,6 +48,10 @@ pub use path::{AudioPath, Commanded, InputMonitor, Passthrough};
 pub use placement::{
     Grant, HOSTED_PRIORITY, Placed, Placement, PriorityReader, PriorityReporter, pinning,
     priority_latch,
+};
+pub use probe::{
+    CLICK_AMPLITUDE, DETECTION_FRACTION, LISTENING, LatencyProbe, Measurement,
+    ROUND_TRIP_BUDGET_BLOCKS, RoundTrip, RoundTripReader, SETTLING, latency_probe,
 };
 pub use ring::{SampleConsumer, SampleProducer, sample_ring};
 pub use slack::{Slack, SlackReader, SlackTrim, Trim, slack_hold};
