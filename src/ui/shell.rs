@@ -12,8 +12,8 @@ use crate::ui::{App, ControlEvent, Flow, Intent, Mode, Navigation, Page, Region}
 /// A control a [`Navigation`] resolves into an [`Intent`] is applied here and
 /// not forwarded, so a page never sees what navigates.
 ///
-/// The legend is the page's and [`navigating`]'s at once, so every live key is
-/// drawn live. Nothing is kept back: a run ends at the panel it is read from.
+/// Nothing is kept back beyond that: a run ends at the panel it is read from,
+/// which is a way out no page has to leave free.
 ///
 /// ```
 /// use motif::device::Button;

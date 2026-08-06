@@ -513,7 +513,7 @@ fn a_screen_that_cannot_be_written_is_not_drawn_again() {
 }
 
 /// An application that draws in the last row of the screen, which is the row a
-/// legend drawn into the frame would take first.
+/// panel drawn into the frame would take first.
 struct Filling;
 
 impl App for Filling {

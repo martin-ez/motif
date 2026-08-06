@@ -16,8 +16,8 @@ fn write_right(region: &mut Region<'_>, text: &str) {
 /// One row the application never sees: it is taken off the region before the
 /// application is handed the rest, so a page filling every row it was given
 /// cannot land on it and the chrome cannot land on a page's. Everything else —
-/// the controls, the legend, whether the run goes on — is the application's,
-/// passed through.
+/// the controls, whether the run goes on — is the application's, passed
+/// through.
 ///
 /// ```
 /// use motif::device::Button;

@@ -197,8 +197,8 @@ impl<K: Clock> EventLoop<K> {
     /// Run `app` until it asks to stop, drawing to `screen` and reading `controls`.
     ///
     /// A frame takes up to [`EVENTS_PER_FRAME`] control events, draws, renders,
-    /// hands the screen the panel the [`Legend`] makes, and waits out its budget.
-    /// The picture is made here, the only place holding both halves of it.
+    /// hands the screen a picture of the panel, and waits out its budget. That
+    /// picture is made here, where the controls and the marks are both in hand.
     ///
     /// An exit from [`App::control`] ends the run undrawn; one from [`App::draw`]
     /// renders that frame first. Neither waits out its budget.
