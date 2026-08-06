@@ -1,11 +1,24 @@
 # motif
 
-A terminal groovebox for capturing a loop of what you play, inferring its
-musical structure, and using that structure to help build a song sketch.
+A terminal groovebox for turning one loop into the beginnings of a song.
 
-It is meant to be a sketchpad, not a DAW. The terminal is a deliberate
-constraint: it keeps UI design off the critical path and forces the interaction
-to stay simple.
+The idea it is built around: you play a phrase, and whatever ends up playing
+alongside it is derived from what was already in it — where the beats and the
+bar lines fall, what the harmony is doing, what notes were played — rather than
+picked from a menu. That is what the analysis is for, and what everything else
+here is in service of.
+
+It is a sketchpad, not a DAW. The distance it cares about is the one between a
+phrase you just played and something worth keeping. How much of that exists
+today is the next section, and it is the only part of this file that describes
+behaviour you can have.
+
+The terminal is a deliberate constraint, and it stands in for something
+specific. The target is a small desktop module, and its dimensions are already
+numbers the code compiles against: `DeviceProfile::TARGET` is a screen 66 by 20
+cells, twelve buttons and one encoder. So the terminal build is not a prototype
+to be ported later — it is the same application, drawn through a different
+backend, at the size it will always have.
 
 ## What runs today
 
@@ -113,8 +126,10 @@ omissions otherwise:
   compiles as an external consumer of the crate. The compiler then guarantees
   that tests can only reach the public API, so implementation details stay free
   to change.
-- **There is no roadmap in this repository.** Planned work is in the issue
-  tracker, where it can block and be blocked by other work.
+- **There is no roadmap in this repository.** The order of the work lives in the
+  issue tracker, as a chain of epics each blocked by the one before it with
+  every issue parented to one of them. That order is queryable, it closes itself
+  as work lands, and nothing written here can quietly disagree with it.
 - **Incomplete work sits behind Cargo features**, off by default, so branches
   stay short-lived and `main` stays green.
 
