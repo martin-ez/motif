@@ -11,9 +11,16 @@ is not always where the sounds are.
 
 Eight bits rather than sixteen is what pays for four bars a fixture inside the
 size ceiling, and four bars is what the accuracy figures rest on: a tracker that
-misreads one bar moves the aggregate by a twenty-eighth. Against clicks that
-peak near full scale, the quantisation noise it costs sits far below anything an
+misreads one bar moves the aggregate by a thirty-sixth. Against clicks that peak
+near full scale, the quantisation noise it costs sits far below anything an
 onset envelope resolves.
+
+Most fixtures annotate rhythm alone. `chords-150-4-4` also annotates a chord to
+the bar, and `line-150-4-4` the notes of a monophonic line; both are played on
+pitched voices with no percussion, so a chroma or pitch front-end hears the
+harmony rather than a noise burst over it. A fixture annotating neither is not
+part of a `measure_chords` or `measure_notes` run at all, rather than scoring
+zero on something it never claimed.
 
 The audio is synthetic, so its ground truth is exact by construction rather than
 tapped by a human, and its licence is this repository's. The standard annotated
@@ -52,4 +59,4 @@ cargo run --example generate-fixtures
 Do this on purpose and never as a side effect: regenerating moves the benchmark,
 which silently moves every number measured against it. `tests/fixture_set.rs`
 fails while these files disagree with the generator, and holds the set under its
-512 KiB ceiling.
+576 KiB ceiling.

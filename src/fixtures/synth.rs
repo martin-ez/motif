@@ -8,7 +8,7 @@
 //! Rendering is deterministic: the same call produces the same samples, so the
 //! files checked in beside this module can be checked against it.
 
-use crate::fixtures::Beat;
+use crate::fixtures::{Beat, Chord, ChordLabel, Note, PitchClass, Quality};
 use std::time::Duration;
 
 /// The sample rate every synthetic fixture is rendered at.
@@ -18,13 +18,20 @@ use std::time::Duration;
 /// is what keeps the committed set inside the size the epic commits to.
 pub const SAMPLE_RATE: u32 = 8_000;
 
-/// Which of the two synthesised sounds an onset plays.
+/// Which of the synthesised sounds an onset plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Voice {
     /// A low decaying tone under a short transient, marking the start of a bar.
     Accent,
     /// A short noise burst, marking anything else.
     Tick,
+    /// A pitched tone, held until it is released.
+    Tone {
+        /// Which note it plays, as a MIDI note number.
+        pitch: u8,
+        /// Where it stops, measured from the start of the audio.
+        until: Duration,
+    },
 }
 
 /// A sound in a fixture: when it happens, and what it plays.
@@ -57,6 +64,8 @@ pub struct Fixture {
     name: &'static str,
     description: &'static str,
     beats: Vec<Beat>,
+    chords: Vec<Chord>,
+    notes: Vec<Note>,
     onsets: Vec<Onset>,
     samples: Vec<i8>,
 }
@@ -77,6 +86,16 @@ impl Fixture {
         &self.beats
     }
 
+    /// The harmony sounding over the beats, one span per bar where there is any.
+    pub fn chords(&self) -> &[Chord] {
+        &self.chords
+    }
+
+    /// The notes of the monophonic line, where the fixture plays one.
+    pub fn notes(&self) -> &[Note] {
+        &self.notes
+    }
+
     /// Every sound the audio contains, in the order they play.
     pub fn onsets(&self) -> &[Onset] {
         &self.onsets
@@ -86,9 +105,9 @@ impl Fixture {
     ///
     /// Eight bits: quantisation noise lands around -42 dBFS against these
     /// near-full-scale clicks, far under what an onset envelope resolves. At
-    /// the 8 KB per second that leaves, the 512 KiB the set is held under is
-    /// about a minute of audio, so rendering refuses a fixture over twelve
-    /// seconds long.
+    /// the 8 KB per second that leaves, the 576 KiB the set is held under is
+    /// about seventy seconds of audio, so rendering refuses a fixture over
+    /// twelve seconds long.
     pub fn samples(&self) -> &[i8] {
         &self.samples
     }
@@ -125,13 +144,24 @@ impl Fixture {
     ///
     /// Timestamps carry six decimals, which is exact for a position on the
     /// sample grid at [`SAMPLE_RATE`], so the file names the same instant the
-    /// audio does.
+    /// audio does. The kinds are written in blocks, and the chords end with the
+    /// `N` that says where the harmony stops.
     pub fn annotation_text(&self) -> String {
         let mut text = format!("# {}: {}\n", self.name, self.description);
         text.push_str("# rendered by `cargo run --example generate-fixtures`\n");
         for beat in &self.beats {
             let kind = if beat.is_downbeat { "downbeat" } else { "beat" };
-            text.push_str(&format!("{:.6} {kind}\n", beat.at.as_secs_f64()));
+            text.push_str(&entry(beat.at, kind));
+        }
+        for chord in &self.chords {
+            text.push_str(&entry(chord.from, &format!("chord {}", chord.label)));
+        }
+        if let Some(last) = self.chords.last() {
+            text.push_str(&entry(last.to, "chord N"));
+        }
+        for note in &self.notes {
+            let played = format!("note {} {:.6}", note.pitch, note.offset.as_secs_f64());
+            text.push_str(&entry(note.onset, &played));
         }
 
         text
@@ -140,15 +170,15 @@ impl Fixture {
 
 /// Every synthetic fixture, in the order they are written.
 ///
-/// Each one breaks a different assumption: the steady pairs are the baseline,
-/// the waltz denies that a bar is four beats, the ramp and rubato passage deny
-/// that a tempo is a number, the syncopated case that a sound implies a beat.
+/// The steady pair is the baseline, and each of the rest denies something: that
+/// a bar is four beats, that a tempo is a number, that a sound implies a beat,
+/// or that what an analyser is handed is percussion.
 ///
 /// The rubato passage pulls 130 ms against its pulse — past the +/-70 ms
 /// scoring window — so a steady-tempo tracker is measurably wrong, not lucky.
 ///
 /// Four bars each is what the harness's resolution rests on: one misread bar
-/// moves its aggregate by a twenty-eighth rather than a fourteenth.
+/// moves its aggregate by a thirty-sixth rather than a fourteenth.
 pub fn set() -> Vec<Fixture> {
     vec![
         rendered(
@@ -193,24 +223,205 @@ pub fn set() -> Vec<Fixture> {
             steady(120.0, 4, 4),
             off_the_beat,
         ),
+        rendered(
+            "chords-150-4-4",
+            "4/4 at 150 BPM voicing a chord to the bar",
+            steady(150.0, 4, 4),
+            one_chord_per_bar,
+        ),
+        rendered(
+            "line-150-4-4",
+            "4/4 at 150 BPM playing a monophonic line",
+            steady(150.0, 4, 4),
+            a_monophonic_line,
+        ),
     ]
+}
+
+struct Content {
+    chords: Vec<Chord>,
+    notes: Vec<Note>,
+    onsets: Vec<Onset>,
 }
 
 fn rendered(
     name: &'static str,
     description: &'static str,
     beats: Vec<Beat>,
-    place: fn(&[Beat]) -> Vec<Onset>,
+    compose: fn(&[Beat]) -> Content,
 ) -> Fixture {
-    let onsets = place(&beats);
+    let Content {
+        chords,
+        notes,
+        onsets,
+    } = compose(&beats);
     let samples = render(&onsets, seed_of(name));
 
     Fixture {
         name,
         description,
         beats,
+        chords,
+        notes,
         onsets,
         samples,
+    }
+}
+
+fn percussive(onsets: Vec<Onset>) -> Content {
+    Content {
+        chords: Vec::new(),
+        notes: Vec::new(),
+        onsets,
+    }
+}
+
+const PROGRESSION: [(u8, Quality); 4] = [
+    (0, Quality::Maj),
+    (9, Quality::Min),
+    (5, Quality::Maj),
+    (7, Quality::Dom7),
+];
+
+const LOWEST_ROOT: u8 = 60;
+
+fn one_chord_per_bar(beats: &[Beat]) -> Content {
+    let chords: Vec<Chord> = bars(beats)
+        .into_iter()
+        .zip(PROGRESSION)
+        .map(|((from, to), (semitone, quality))| Chord {
+            label: ChordLabel::Sounding(PitchClass::from_semitone(semitone), quality),
+            from,
+            to,
+        })
+        .collect();
+    let lasting = lasting(beats);
+    let mut onsets = Vec::new();
+
+    for chord in &chords {
+        let voicing = voicing(chord);
+        for (index, beat) in beats.iter().enumerate() {
+            if !struck_under(chord, beat) {
+                continue;
+            }
+            for pitch in &voicing {
+                onsets.push(Onset {
+                    at: beat.at,
+                    voice: Voice::Tone {
+                        pitch: *pitch,
+                        until: detached(beat.at, lasting[index]),
+                    },
+                });
+            }
+        }
+    }
+
+    Content {
+        chords,
+        notes: Vec::new(),
+        onsets,
+    }
+}
+
+fn struck_under(chord: &Chord, beat: &Beat) -> bool {
+    chord.from <= beat.at && beat.at < chord.to
+}
+
+fn lasting(beats: &[Beat]) -> Vec<Duration> {
+    let mut spans: Vec<Duration> = beats
+        .windows(2)
+        .map(|pair| pair[1].at - pair[0].at)
+        .collect();
+    if let Some(last) = spans.last().copied() {
+        spans.push(last);
+    }
+
+    spans
+}
+
+fn detached(from: Duration, span: Duration) -> Duration {
+    from + span - span / DETACHED
+}
+
+fn bars(beats: &[Beat]) -> Vec<(Duration, Duration)> {
+    let starts: Vec<Duration> = beats
+        .iter()
+        .filter(|beat| beat.is_downbeat)
+        .map(|beat| beat.at)
+        .collect();
+    let ends = starts.iter().skip(1).copied().chain(past_the_end(beats));
+
+    starts.iter().copied().zip(ends).collect()
+}
+
+fn past_the_end(beats: &[Beat]) -> Option<Duration> {
+    let last = beats.last()?;
+
+    Some(last.at + *lasting(beats).last()?)
+}
+
+fn voicing(chord: &Chord) -> Vec<u8> {
+    let ChordLabel::Sounding(root, quality) = chord.label else {
+        return Vec::new();
+    };
+    let intervals: &[u8] = match quality {
+        Quality::Maj => &[0, 4, 7],
+        Quality::Min => &[0, 3, 7],
+        Quality::Dim => &[0, 3, 6],
+        Quality::Aug => &[0, 4, 8],
+        Quality::Maj7 => &[0, 4, 7, 11],
+        Quality::Min7 => &[0, 3, 7, 10],
+        Quality::Dom7 => &[0, 4, 7, 10],
+    };
+
+    intervals
+        .iter()
+        .map(|interval| LOWEST_ROOT + root.semitone() + interval)
+        .collect()
+}
+
+const LINE: [(usize, usize, u8); 12] = [
+    (0, 1, 60),
+    (1, 1, 62),
+    (2, 2, 64),
+    (4, 1, 65),
+    (5, 1, 64),
+    (6, 2, 62),
+    (8, 1, 67),
+    (9, 1, 65),
+    (10, 2, 64),
+    (12, 1, 62),
+    (13, 1, 60),
+    (14, 2, 55),
+];
+
+const DETACHED: u32 = 10;
+
+fn a_monophonic_line(beats: &[Beat]) -> Content {
+    let lasting = lasting(beats);
+    let notes: Vec<Note> = LINE
+        .into_iter()
+        .map(|(index, length, pitch)| Note {
+            pitch,
+            onset: beats[index].at,
+            offset: detached(beats[index].at, lasting[index..index + length].iter().sum()),
+        })
+        .collect();
+    let onsets = notes
+        .iter()
+        .map(|note| Onset {
+            at: note.onset,
+            voice: Voice::Tone {
+                pitch: note.pitch,
+                until: note.offset,
+            },
+        })
+        .collect();
+
+    Content {
+        chords: Vec::new(),
+        notes,
+        onsets,
     }
 }
 
@@ -264,21 +475,23 @@ fn on_the_sample_grid(seconds: f64) -> Duration {
     Duration::from_nanos(frame * 1_000_000_000 / u64::from(SAMPLE_RATE))
 }
 
-fn on_every_beat(beats: &[Beat]) -> Vec<Onset> {
-    beats
-        .iter()
-        .map(|beat| Onset {
-            at: beat.at,
-            voice: if beat.is_downbeat {
-                Voice::Accent
-            } else {
-                Voice::Tick
-            },
-        })
-        .collect()
+fn on_every_beat(beats: &[Beat]) -> Content {
+    percussive(
+        beats
+            .iter()
+            .map(|beat| Onset {
+                at: beat.at,
+                voice: if beat.is_downbeat {
+                    Voice::Accent
+                } else {
+                    Voice::Tick
+                },
+            })
+            .collect(),
+    )
 }
 
-fn off_the_beat(beats: &[Beat]) -> Vec<Onset> {
+fn off_the_beat(beats: &[Beat]) -> Content {
     let intervals: Vec<Duration> = beats
         .windows(2)
         .map(|pair| pair[1].at - pair[0].at)
@@ -302,7 +515,7 @@ fn off_the_beat(beats: &[Beat]) -> Vec<Onset> {
     }
     onsets.sort_by_key(|onset| onset.at);
 
-    onsets
+    percussive(onsets)
 }
 
 fn halfway_past(beat: Duration, interval: Duration) -> Duration {
@@ -319,14 +532,20 @@ const TRANSIENT_DECAY: f64 = 0.006;
 const TRANSIENT_LEVEL: f64 = 0.30;
 const TICK_DECAY: f64 = 0.030;
 const TICK_LEVEL: f64 = 0.55;
+const RELEASE: Duration = Duration::from_millis(60);
+const TONE_ATTACK: f64 = 0.005;
+const TONE_DECAY: f64 = 0.020;
+const TONE_LEVEL: f64 = 0.18;
+const CONCERT_A: f64 = 440.0;
+const CONCERT_A_PITCH: f64 = 69.0;
+const SEMITONES: f64 = 12.0;
 
 fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
-    let last = onsets
+    let length = onsets
         .iter()
-        .map(|onset| onset.at)
+        .map(|onset| onset.at + sounding(onset))
         .max()
         .unwrap_or_default();
-    let length = last + TAIL;
     assert!(
         length <= LONGEST,
         "a fixture running {length:?} cannot belong to a set held under its size ceiling"
@@ -336,7 +555,8 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
 
     for onset in onsets {
         let start = frames(onset.at);
-        for (offset, frame) in signal[start..].iter_mut().take(frames(TAIL)).enumerate() {
+        let held = frames(sounding(onset));
+        for (offset, frame) in signal[start..].iter_mut().take(held).enumerate() {
             let elapsed = offset as f64 / f64::from(SAMPLE_RATE);
             *frame += match onset.voice {
                 Voice::Accent => {
@@ -346,6 +566,12 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
                         + TRANSIENT_LEVEL * (-elapsed / TRANSIENT_DECAY).exp() * noise.next()
                 }
                 Voice::Tick => TICK_LEVEL * (-elapsed / TICK_DECAY).exp() * noise.next(),
+                Voice::Tone { pitch, until } => {
+                    let held = (until.saturating_sub(onset.at)).as_secs_f64();
+                    TONE_LEVEL
+                        * held_for(elapsed, held)
+                        * (std::f64::consts::TAU * hertz(pitch) * elapsed).sin()
+                }
             };
         }
     }
@@ -354,6 +580,28 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
         .into_iter()
         .map(|frame| (frame.clamp(-1.0, 1.0) * f64::from(i8::MAX)) as i8)
         .collect()
+}
+
+fn sounding(onset: &Onset) -> Duration {
+    match onset.voice {
+        Voice::Tone { until, .. } => until.saturating_sub(onset.at) + RELEASE,
+        Voice::Accent | Voice::Tick => TAIL,
+    }
+}
+
+fn held_for(elapsed: f64, held: f64) -> f64 {
+    let attack = (elapsed / TONE_ATTACK).min(1.0);
+    let release = (-(elapsed - held).max(0.0) / TONE_DECAY).exp();
+
+    attack * release
+}
+
+fn hertz(pitch: u8) -> f64 {
+    CONCERT_A * ((f64::from(pitch) - CONCERT_A_PITCH) / SEMITONES).exp2()
+}
+
+fn entry(at: Duration, described: &str) -> String {
+    format!("{:.6} {described}\n", at.as_secs_f64())
 }
 
 fn unsigned(sample: i8) -> u8 {

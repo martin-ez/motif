@@ -26,10 +26,12 @@ fn main() -> io::Result<()> {
         fs::write(&annotation, fixture.annotation_text())?;
 
         println!(
-            "{:<20} {:>7} bytes  {:>3} beats  {:>3} onsets  {}",
+            "{:<20} {:>7} bytes  {:>3} beats  {:>2} chords  {:>2} notes  {:>3} onsets  {}",
             fixture.name(),
             fs::metadata(&audio)?.len(),
             fixture.beats().len(),
+            fixture.chords().len(),
+            fixture.notes().len(),
             fixture.onsets().len(),
             fixture.description(),
         );

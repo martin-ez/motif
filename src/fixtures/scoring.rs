@@ -1,12 +1,18 @@
-//! Scoring a candidate sequence of positions against a fixture's ground truth.
+//! Scoring a candidate sequence of positions, or of notes, against a fixture's
+//! ground truth.
 //!
-//! Nothing here knows about audio, fixtures or analysers: two sequences of
-//! timestamps go in and three numbers come out, which is what lets an accuracy
-//! claim be checked against sequences written by hand.
+//! Nothing here knows about audio, fixtures or analysers: two sequences go in
+//! and three numbers come out, which is what lets an accuracy claim be checked
+//! against sequences written by hand.
 
+use std::fmt;
 use std::time::Duration;
 
-/// How well a candidate sequence of positions matches an annotated one.
+use super::Note;
+use super::harness::Measured;
+
+/// How well a candidate sequence matches an annotated one, whether of positions
+/// or of notes.
 ///
 /// Positions are timestamps from the start of the audio, so this scores beats
 /// against beats or downbeats against downbeats — it never learns which.
@@ -72,6 +78,54 @@ impl Score {
         }
     }
 
+    /// How far a note's onset may fall from the annotated one, and the floor
+    /// under how far its offset may.
+    ///
+    /// 50 ms either side, with the offset allowed a fifth of the annotated
+    /// note's length where that is wider, as `mir_eval.transcription` scores
+    /// note events. The window at the end widens with the note because a long
+    /// note's release is not placed as sharply as its attack.
+    pub const NOTE_TOLERANCE: Duration = Duration::from_millis(50);
+
+    /// Score the notes in `detected` against the ground truth in `annotated`.
+    ///
+    /// A note is a hit only where all three of it agree: the pitch exactly, the
+    /// onset within [`NOTE_TOLERANCE`](Self::NOTE_TOLERANCE), and the offset
+    /// within that or a fifth of the annotated note, whichever is wider.
+    /// Matching is one-to-one and greedy, as in [`of`](Self::of).
+    ///
+    /// ```
+    /// use motif::fixtures::{Note, Score};
+    /// use std::time::Duration;
+    ///
+    /// let played = |pitch, onset, offset| Note {
+    ///     pitch,
+    ///     onset: Duration::from_millis(onset),
+    ///     offset: Duration::from_millis(offset),
+    /// };
+    /// let annotated = [played(60, 0, 400)];
+    ///
+    /// assert_eq!(Score::of_notes(&annotated, &[played(60, 20, 420)]).hits(), 1);
+    /// assert_eq!(Score::of_notes(&annotated, &[played(61, 0, 400)]).hits(), 0);
+    /// ```
+    pub fn of_notes(annotated: &[Note], detected: &[Note]) -> Self {
+        let mut taken = vec![false; detected.len()];
+        let mut hits = 0;
+
+        for note in annotated {
+            if let Some(index) = nearest_free_note(detected, &taken, note) {
+                taken[index] = true;
+                hits += 1;
+            }
+        }
+
+        Self {
+            hits,
+            annotated: annotated.len(),
+            detected: detected.len(),
+        }
+    }
+
     /// How many annotated positions the candidate found.
     pub fn hits(&self) -> usize {
         self.hits
@@ -116,6 +170,47 @@ impl Score {
     pub fn f1(&self) -> f64 {
         share(2 * self.hits, self.annotated + self.detected)
     }
+}
+
+impl Measured for Score {
+    const QUOTED: &'static str = "F1";
+
+    fn quoted(&self) -> f64 {
+        self.f1()
+    }
+}
+
+impl fmt::Display for Score {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "F1 {:.3}  precision {:.3}  recall {:.3}  hits {}/{}  detected {}",
+            self.f1(),
+            self.precision(),
+            self.recall(),
+            self.hits,
+            self.annotated,
+            self.detected,
+        )
+    }
+}
+
+const OFFSET_SHARE: u32 = 5;
+
+fn nearest_free_note(detected: &[Note], taken: &[bool], note: &Note) -> Option<usize> {
+    let released = note.offset.saturating_sub(note.onset) / OFFSET_SHARE;
+    let release = released.max(Score::NOTE_TOLERANCE);
+
+    detected
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !taken[*index])
+        .filter(|(_, heard)| heard.pitch == note.pitch)
+        .filter(|(_, heard)| heard.offset.abs_diff(note.offset) <= release)
+        .map(|(index, heard)| (index, heard.onset.abs_diff(note.onset)))
+        .filter(|(_, gap)| *gap <= Score::NOTE_TOLERANCE)
+        .min_by_key(|(_, gap)| *gap)
+        .map(|(index, _)| index)
 }
 
 fn nearest_free(detected: &[Duration], taken: &[bool], position: Duration) -> Option<usize> {

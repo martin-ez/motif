@@ -1,8 +1,8 @@
 //! Running a candidate over the whole fixture set: what it scores, what it
 //! reports, and what it refuses to skip.
 
-use motif::fixtures::AnnotationError;
 use motif::fixtures::harness::{self, GroundTruth, Report, RunError, Target};
+use motif::fixtures::{AnnotationError, Chord, ChordLabel, Comparison, Note};
 use std::error::Error;
 use std::fs;
 use std::io;
@@ -33,6 +33,26 @@ fn one_bar() -> &'static str {
     "0.0 downbeat\n1.0 beat\n2.0 beat\n3.0 beat\n"
 }
 
+fn one_bar_of_each() -> String {
+    format!(
+        "{}0.0 chord C:maj\n2.0 chord A:min\n4.0 chord N\n0.0 note 60 0.9\n1.0 note 64 1.9\n",
+        one_bar()
+    )
+}
+
+fn relabelled(truth: &GroundTruth, label: &str) -> Vec<Chord> {
+    let heard = ChordLabel::parse(label).expect("a chord label");
+    truth
+        .annotation()
+        .chords()
+        .iter()
+        .map(|chord| Chord {
+            label: heard,
+            ..*chord
+        })
+        .collect()
+}
+
 fn exact(truth: &GroundTruth, target: Target) -> Vec<Duration> {
     target.positions(truth.annotation()).collect()
 }
@@ -58,7 +78,7 @@ fn an_exact_candidate_scores_one_on_every_fixture() {
     for row in report.rows() {
         assert_eq!(row.score().f1(), 1.0, "{}", row.name());
     }
-    assert_eq!(report.mean_f1(), 1.0);
+    assert_eq!(report.mean(), 1.0);
 }
 
 #[test]
@@ -68,7 +88,7 @@ fn a_candidate_that_reports_nothing_scores_zero() {
 
     let report = measure_over(&directory, Target::Beats, |_| Vec::new());
 
-    assert_eq!(report.mean_f1(), 0.0);
+    assert_eq!(report.mean(), 0.0);
     assert_eq!(report.rows()[0].score().hits(), 0);
     assert_eq!(report.rows()[0].score().detected(), 0);
 }
@@ -103,7 +123,7 @@ fn the_aggregate_is_the_mean_of_the_per_fixture_scores() {
         }
     });
 
-    assert_eq!(report.mean_f1(), 0.5);
+    assert_eq!(report.mean(), 0.5);
 }
 
 #[test]
@@ -263,7 +283,7 @@ fn a_broken_annotation_carries_the_parse_error_as_its_cause() {
 
     assert_eq!(
         cause.downcast_ref::<AnnotationError>(),
-        Some(&AnnotationError::BeatKind { line: 2 })
+        Some(&AnnotationError::EntryKind { line: 2 })
     );
 }
 
@@ -315,5 +335,172 @@ fn the_checked_in_set_scores_a_candidate_taken_from_its_own_annotations() {
     .expect("the checked-in set parses");
 
     assert!(!report.rows().is_empty());
-    assert_eq!(report.mean_f1(), 1.0);
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn a_report_of_beats_names_the_figure_it_quotes() {
+    let directory = scratch("quoted-beats");
+    write(&directory, "a", one_bar());
+
+    let report = measure_over(&directory, Target::Beats, |_| Vec::new());
+
+    assert!(report.to_string().contains("mean F1"), "{report}");
+}
+
+#[test]
+fn an_exact_chord_candidate_scores_one() {
+    let directory = scratch("chords-exact");
+    write(&directory, "a", &one_bar_of_each());
+
+    let report = harness::measure_chords(&directory, Comparison::Sevenths, |truth| {
+        truth.annotation().chords().to_vec()
+    })
+    .expect("the fixtures parse");
+
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn a_chord_candidate_that_reports_nothing_scores_zero() {
+    let directory = scratch("chords-silent");
+    write(&directory, "a", &one_bar_of_each());
+
+    let report = harness::measure_chords(&directory, Comparison::Root, |_| Vec::new())
+        .expect("the fixtures parse");
+
+    assert_eq!(report.mean(), 0.0);
+}
+
+#[test]
+fn a_chord_candidate_is_scored_at_the_level_it_is_given() {
+    let directory = scratch("chords-level");
+    write(&directory, "a", &one_bar_of_each());
+
+    let roots = harness::measure_chords(&directory, Comparison::Root, |truth| {
+        relabelled(truth, "C:min")
+    })
+    .expect("the fixtures parse");
+    let sevenths = harness::measure_chords(&directory, Comparison::Sevenths, |truth| {
+        relabelled(truth, "C:min")
+    })
+    .expect("the fixtures parse");
+
+    assert_eq!(roots.mean(), 0.5);
+    assert_eq!(sevenths.mean(), 0.0);
+}
+
+#[test]
+fn a_report_of_chords_names_the_figure_it_quotes() {
+    let directory = scratch("quoted-chords");
+    write(&directory, "a", &one_bar_of_each());
+
+    let report = harness::measure_chords(&directory, Comparison::Root, |_| Vec::new())
+        .expect("the fixtures parse");
+
+    assert!(report.to_string().contains("mean accuracy"), "{report}");
+}
+
+#[test]
+fn a_fixture_that_annotates_no_harmony_is_not_in_a_chord_run() {
+    let directory = scratch("chords-subset");
+    write(&directory, "harmony", &one_bar_of_each());
+    write(&directory, "rhythm", two_bars());
+
+    let report = harness::measure_chords(&directory, Comparison::Root, |truth| {
+        truth.annotation().chords().to_vec()
+    })
+    .expect("the fixtures parse");
+
+    assert_eq!(report.rows().len(), 1);
+    assert_eq!(report.rows()[0].name(), "harmony");
+}
+
+#[test]
+fn a_set_that_annotates_no_harmony_fails_a_chord_run() {
+    let directory = scratch("chords-none");
+    write(&directory, "rhythm", two_bars());
+
+    let error = harness::measure_chords(&directory, Comparison::Root, |_| Vec::new())
+        .expect_err("a set with no harmony fails a chord run");
+
+    assert!(matches!(error, RunError::Empty { .. }), "{error:?}");
+}
+
+#[test]
+fn an_exact_note_candidate_scores_one() {
+    let directory = scratch("notes-exact");
+    write(&directory, "a", &one_bar_of_each());
+
+    let report = harness::measure_notes(&directory, |truth| truth.annotation().notes().to_vec())
+        .expect("the fixtures parse");
+
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn a_note_candidate_transposed_by_a_semitone_scores_zero() {
+    let directory = scratch("notes-transposed");
+    write(&directory, "a", &one_bar_of_each());
+
+    let report = harness::measure_notes(&directory, |truth| {
+        truth
+            .annotation()
+            .notes()
+            .iter()
+            .map(|note| Note {
+                pitch: note.pitch + 1,
+                ..*note
+            })
+            .collect()
+    })
+    .expect("the fixtures parse");
+
+    assert_eq!(report.mean(), 0.0);
+}
+
+#[test]
+fn a_fixture_that_annotates_no_line_is_not_in_a_note_run() {
+    let directory = scratch("notes-subset");
+    write(&directory, "line", &one_bar_of_each());
+    write(&directory, "rhythm", two_bars());
+
+    let report = harness::measure_notes(&directory, |truth| truth.annotation().notes().to_vec())
+        .expect("the fixtures parse");
+
+    assert_eq!(report.rows().len(), 1);
+    assert_eq!(report.rows()[0].name(), "line");
+}
+
+#[test]
+fn a_set_that_annotates_no_line_fails_a_note_run() {
+    let directory = scratch("notes-none");
+    write(&directory, "rhythm", two_bars());
+
+    let error = harness::measure_notes(&directory, |_| Vec::new())
+        .expect_err("a set with no line fails a note run");
+
+    assert!(matches!(error, RunError::Empty { .. }), "{error:?}");
+}
+
+#[test]
+fn the_checked_in_set_scores_a_chord_candidate_taken_from_its_own_annotations() {
+    let report = harness::measure_chords(&harness::checked_in(), Comparison::Sevenths, |truth| {
+        truth.annotation().chords().to_vec()
+    })
+    .expect("the checked-in set parses");
+
+    assert!(!report.rows().is_empty());
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn the_checked_in_set_scores_a_note_candidate_taken_from_its_own_annotations() {
+    let report = harness::measure_notes(&harness::checked_in(), |truth| {
+        truth.annotation().notes().to_vec()
+    })
+    .expect("the checked-in set parses");
+
+    assert!(!report.rows().is_empty());
+    assert_eq!(report.mean(), 1.0);
 }

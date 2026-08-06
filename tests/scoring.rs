@@ -1,11 +1,19 @@
 //! Scoring a candidate sequence of positions against ground truth: what counts
 //! as a hit, and what the numbers say when something does not.
 
-use motif::fixtures::Score;
+use motif::fixtures::{Note, Score};
 use std::time::Duration;
 
 fn at(millis: &[u64]) -> Vec<Duration> {
     millis.iter().copied().map(Duration::from_millis).collect()
+}
+
+fn note(pitch: u8, onset: u64, offset: u64) -> Note {
+    Note {
+        pitch,
+        onset: Duration::from_millis(onset),
+        offset: Duration::from_millis(offset),
+    }
 }
 
 fn assert_close(actual: f64, expected: f64) {
@@ -160,4 +168,111 @@ fn two_empty_sequences_score_zero() {
     let score = Score::of(&[], &[]);
 
     assert_close(score.f1(), 0.0);
+}
+
+#[test]
+fn a_score_describes_what_it_counted() {
+    let shown = Score::of(&at(&[0, 500, 1_000]), &at(&[0, 500])).to_string();
+
+    assert!(shown.contains("F1"), "{shown}");
+    assert!(shown.contains("hits 2/3"), "{shown}");
+}
+
+#[test]
+fn the_note_tolerance_is_fifty_milliseconds() {
+    assert_eq!(Score::NOTE_TOLERANCE, Duration::from_millis(50));
+}
+
+#[test]
+fn a_transcription_that_matches_exactly_scores_one() {
+    let notes = [note(60, 0, 400), note(64, 500, 900)];
+
+    assert_close(Score::of_notes(&notes, &notes).f1(), 1.0);
+}
+
+#[test]
+fn a_note_heard_at_the_wrong_pitch_is_a_miss() {
+    let score = Score::of_notes(&[note(60, 0, 400)], &[note(61, 0, 400)]);
+
+    assert_eq!(score.hits(), 0);
+}
+
+#[test]
+fn a_note_heard_within_the_onset_tolerance_is_a_hit() {
+    let score = Score::of_notes(&[note(60, 1_000, 1_500)], &[note(60, 1_050, 1_500)]);
+
+    assert_eq!(score.hits(), 1);
+}
+
+#[test]
+fn a_note_heard_beyond_the_onset_tolerance_is_a_miss() {
+    let score = Score::of_notes(&[note(60, 1_000, 1_500)], &[note(60, 1_051, 1_500)]);
+
+    assert_eq!(score.hits(), 0);
+}
+
+#[test]
+fn a_short_note_is_allowed_the_tolerance_at_its_end() {
+    let score = Score::of_notes(&[note(60, 0, 200)], &[note(60, 0, 250)]);
+
+    assert_eq!(score.hits(), 1);
+}
+
+#[test]
+fn a_short_note_released_beyond_the_tolerance_is_a_miss() {
+    let score = Score::of_notes(&[note(60, 0, 200)], &[note(60, 0, 251)]);
+
+    assert_eq!(score.hits(), 0);
+}
+
+#[test]
+fn a_long_note_is_allowed_a_fifth_of_itself_at_its_end() {
+    let score = Score::of_notes(&[note(60, 0, 1_000)], &[note(60, 0, 1_200)]);
+
+    assert_eq!(score.hits(), 1);
+}
+
+#[test]
+fn a_long_note_released_beyond_a_fifth_of_itself_is_a_miss() {
+    let score = Score::of_notes(&[note(60, 0, 1_000)], &[note(60, 0, 1_201)]);
+
+    assert_eq!(score.hits(), 0);
+}
+
+#[test]
+fn two_candidates_for_one_note_are_one_hit() {
+    let score = Score::of_notes(
+        &[note(60, 1_000, 1_500)],
+        &[note(60, 980, 1_480), note(60, 1_020, 1_520)],
+    );
+
+    assert_eq!(score.hits(), 1);
+    assert_close(score.precision(), 0.5);
+    assert_close(score.recall(), 1.0);
+}
+
+#[test]
+fn a_note_takes_the_nearest_candidate_that_is_still_free() {
+    let score = Score::of_notes(
+        &[note(60, 1_000, 1_500), note(60, 1_040, 1_540)],
+        &[note(60, 1_020, 1_520)],
+    );
+
+    assert_eq!(score.hits(), 1);
+}
+
+#[test]
+fn a_transcription_of_nothing_scores_zero() {
+    let score = Score::of_notes(&[note(60, 0, 400)], &[]);
+
+    assert_close(score.f1(), 0.0);
+    assert_eq!(score.annotated(), 1);
+}
+
+#[test]
+fn a_transcription_of_notes_nobody_played_scores_zero() {
+    let score = Score::of_notes(&[], &[note(60, 0, 400)]);
+
+    assert_close(score.f1(), 0.0);
+    assert_eq!(score.detected(), 1);
 }

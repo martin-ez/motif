@@ -3,10 +3,15 @@
 
 use motif::fixtures::harness::{self, Target};
 use motif::fixtures::synth::{self, Fixture, SAMPLE_RATE, Voice};
-use motif::fixtures::{Annotation, Beat};
+use motif::fixtures::{Annotation, Beat, ChordLabel};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+
+const CEILING: u64 = 576 * 1024;
+
+const HARMONY: &str = "chords-150-4-4";
+const LINE: &str = "line-150-4-4";
 
 fn directory() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -41,6 +46,17 @@ fn beats_per_bar(fixture: &Fixture) -> Vec<usize> {
         lengths.push(counted);
     }
     lengths
+}
+
+fn plays_percussion(fixture: &Fixture) -> bool {
+    fixture
+        .onsets()
+        .iter()
+        .any(|onset| matches!(onset.voice, Voice::Accent | Voice::Tick))
+}
+
+fn frames(at: Duration) -> usize {
+    (at.as_secs_f64() * f64::from(SAMPLE_RATE)).round() as usize
 }
 
 fn read(name: &str) -> Vec<u8> {
@@ -88,6 +104,8 @@ fn every_annotation_round_trips_through_the_parser() {
             .unwrap_or_else(|error| panic!("{} annotates cleanly: {error}", fixture.name()));
 
         assert_eq!(annotation.beats(), fixture.beats(), "{}", fixture.name());
+        assert_eq!(annotation.chords(), fixture.chords(), "{}", fixture.name());
+        assert_eq!(annotation.notes(), fixture.notes(), "{}", fixture.name());
     }
 }
 
@@ -201,7 +219,7 @@ fn misreading_one_bar_moves_the_aggregate_by_under_four_points() {
             downbeats
         })
         .expect("the checked-in set scores");
-        let step = 1.0 - report.mean_f1();
+        let step = 1.0 - report.mean();
 
         assert!(
             step < COARSEST_STEP,
@@ -310,8 +328,22 @@ fn a_syncopated_onset_falls_midway_between_the_beats_it_sits_between() {
 }
 
 #[test]
-fn every_downbeat_is_accented() {
+fn every_downbeat_is_sounded() {
     for fixture in synth::set() {
+        for beat in fixture.beats().iter().filter(|beat| beat.is_downbeat) {
+            assert!(
+                fixture.onsets().iter().any(|onset| onset.at == beat.at),
+                "{} at {:?}",
+                fixture.name(),
+                beat.at
+            );
+        }
+    }
+}
+
+#[test]
+fn every_percussive_downbeat_is_accented() {
+    for fixture in synth::set().iter().filter(|f| plays_percussion(f)) {
         for beat in fixture.beats().iter().filter(|beat| beat.is_downbeat) {
             assert!(
                 fixture
@@ -501,7 +533,236 @@ fn the_committed_set_is_under_its_size_ceiling() {
         .map(|entry| entry.metadata().expect("the metadata is readable").len())
         .sum();
 
-    assert!(total <= 512 * 1024, "the set totals {total} bytes");
+    assert!(total <= CEILING, "the set totals {total} bytes");
+}
+
+#[test]
+fn the_set_carries_a_fixture_of_annotated_harmony() {
+    assert!(!named(HARMONY).chords().is_empty());
+}
+
+#[test]
+fn the_set_carries_a_fixture_of_a_monophonic_line() {
+    assert!(!named(LINE).notes().is_empty());
+}
+
+#[test]
+fn only_the_harmony_fixture_annotates_chords() {
+    let annotated: Vec<_> = synth::set()
+        .iter()
+        .filter(|fixture| !fixture.chords().is_empty())
+        .map(|fixture| fixture.name().to_owned())
+        .collect();
+
+    assert_eq!(annotated, [HARMONY]);
+}
+
+#[test]
+fn only_the_line_fixture_annotates_notes() {
+    let annotated: Vec<_> = synth::set()
+        .iter()
+        .filter(|fixture| !fixture.notes().is_empty())
+        .map(|fixture| fixture.name().to_owned())
+        .collect();
+
+    assert_eq!(annotated, [LINE]);
+}
+
+#[test]
+fn the_progression_is_one_chord_to_every_bar() {
+    let fixture = named(HARMONY);
+
+    assert_eq!(fixture.chords().len(), beats_per_bar(&fixture).len());
+}
+
+#[test]
+fn every_chord_starts_on_a_downbeat() {
+    let fixture = named(HARMONY);
+
+    for chord in fixture.chords() {
+        assert!(
+            fixture
+                .beats()
+                .iter()
+                .any(|beat| beat.is_downbeat && beat.at == chord.from),
+            "a chord starts at {:?}",
+            chord.from
+        );
+    }
+}
+
+#[test]
+fn the_chords_run_end_to_end_with_no_gap_between_them() {
+    let fixture = named(HARMONY);
+
+    for pair in fixture.chords().windows(2) {
+        assert_eq!(pair[0].to, pair[1].from);
+    }
+}
+
+#[test]
+fn the_progression_does_not_repeat_one_chord_throughout() {
+    let fixture = named(HARMONY);
+    let mut labels: Vec<_> = fixture
+        .chords()
+        .iter()
+        .map(|chord| chord.label.to_string())
+        .collect();
+    labels.sort();
+    labels.dedup();
+
+    assert!(labels.len() > 1, "the progression is {labels:?}");
+}
+
+#[test]
+fn a_chord_puts_its_root_in_the_audio() {
+    let fixture = named(HARMONY);
+
+    for chord in fixture.chords() {
+        let ChordLabel::Sounding(root, _) = chord.label else {
+            continue;
+        };
+        assert!(
+            fixture.onsets().iter().any(|onset| onset.at == chord.from
+                && matches!(onset.voice, Voice::Tone { pitch, .. }
+                    if pitch % 12 == root.semitone())),
+            "{} is not voiced at {:?}",
+            chord.label,
+            chord.from
+        );
+    }
+}
+
+#[test]
+fn a_chord_is_struck_again_on_every_beat_of_its_bar() {
+    let fixture = named(HARMONY);
+
+    for chord in fixture.chords() {
+        let under = fixture
+            .beats()
+            .iter()
+            .filter(|beat| chord.from <= beat.at && beat.at < chord.to);
+        for beat in under {
+            assert!(
+                fixture
+                    .onsets()
+                    .iter()
+                    .any(|onset| onset.at == beat.at && matches!(onset.voice, Voice::Tone { .. })),
+                "nothing is struck at {:?}",
+                beat.at
+            );
+        }
+    }
+}
+
+#[test]
+fn a_struck_chord_releases_before_the_next_beat() {
+    let fixture = named(HARMONY);
+    let beats = fixture.beats();
+
+    for onset in fixture.onsets() {
+        let Voice::Tone { until, .. } = onset.voice else {
+            continue;
+        };
+        let Some(next) = beats.iter().find(|beat| beat.at > onset.at) else {
+            continue;
+        };
+
+        assert!(
+            until < next.at,
+            "a strike at {:?} runs to {until:?}",
+            onset.at
+        );
+    }
+}
+
+#[test]
+fn a_line_sounds_one_note_at_a_time() {
+    let fixture = named(LINE);
+
+    for pair in fixture.notes().windows(2) {
+        assert!(pair[0].offset <= pair[1].onset, "{pair:?}");
+    }
+}
+
+#[test]
+fn a_line_does_not_hold_every_note_for_the_same_length() {
+    let fixture = named(LINE);
+    let mut lengths: Vec<_> = fixture
+        .notes()
+        .iter()
+        .map(|note| note.offset - note.onset)
+        .collect();
+    lengths.sort();
+    lengths.dedup();
+
+    assert!(lengths.len() > 1, "the lengths are {lengths:?}");
+}
+
+#[test]
+fn a_note_stops_before_the_next_one_starts_so_its_end_is_annotated() {
+    let fixture = named(LINE);
+
+    for pair in fixture.notes().windows(2) {
+        assert!(pair[0].offset < pair[1].onset, "{pair:?}");
+    }
+}
+
+#[test]
+fn every_note_is_sounded_as_a_tone_of_its_pitch() {
+    let fixture = named(LINE);
+
+    for note in fixture.notes() {
+        assert!(
+            fixture.onsets().iter().any(|onset| onset.at == note.onset
+                && onset.voice
+                    == Voice::Tone {
+                        pitch: note.pitch,
+                        until: note.offset,
+                    }),
+            "{note:?} is not sounded"
+        );
+    }
+}
+
+#[test]
+fn every_chord_and_note_lands_on_the_sample_grid() {
+    let frame = u128::from(1_000_000_000 / SAMPLE_RATE);
+    for fixture in synth::set() {
+        for chord in fixture.chords() {
+            assert_eq!(chord.from.as_nanos() % frame, 0, "{}", fixture.name());
+            assert_eq!(chord.to.as_nanos() % frame, 0, "{}", fixture.name());
+        }
+        for note in fixture.notes() {
+            assert_eq!(note.onset.as_nanos() % frame, 0, "{}", fixture.name());
+            assert_eq!(note.offset.as_nanos() % frame, 0, "{}", fixture.name());
+        }
+    }
+}
+
+#[test]
+fn a_note_is_rendered_at_the_pitch_it_annotates() {
+    let fixture = named(LINE);
+    let note = fixture.notes()[1];
+    let hertz = 440.0 * 2f64.powf((f64::from(note.pitch) - 69.0) / 12.0);
+    let from = frames(note.onset + Duration::from_millis(50));
+    let window = SAMPLE_RATE as usize / 10;
+
+    let sounding: Vec<i8> = fixture.samples()[from..from + window]
+        .iter()
+        .map(|sample| sample.signum())
+        .filter(|sign| *sign != 0)
+        .collect();
+    let crossings = sounding
+        .windows(2)
+        .filter(|pair| pair[0] != pair[1])
+        .count() as f64;
+    let sounded = crossings / 2.0 * 10.0;
+
+    assert!(
+        (sounded - hertz).abs() < hertz * 0.15,
+        "a note annotated at {hertz:.1} Hz sounded at about {sounded:.1} Hz"
+    );
 }
 
 #[test]
