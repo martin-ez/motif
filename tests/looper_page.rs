@@ -887,3 +887,163 @@ fn the_gain_readout_sits_directly_under_the_loop() {
 
     assert_eq!(gain, lowest + 1);
 }
+
+#[test]
+fn shift_and_stop_takes_the_last_layer_off() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(shifted(Button::Stop));
+
+    assert_eq!(ordered(&mut orders), [Command::Undo]);
+}
+
+#[test]
+fn stop_on_its_own_halts_rather_than_undoing() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(pressed(Button::Record));
+    ordered(&mut orders);
+    page.control(pressed(Button::Stop));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Stopped)]
+    );
+}
+
+#[test]
+fn undoing_drops_out_of_the_layer_it_left_closed() {
+    let mut page = driven_by([Button::Record, Button::Record]);
+
+    page.control(shifted(Button::Stop));
+
+    assert_eq!(page.transport(), Transport::Playing);
+}
+
+#[test]
+fn undoing_leaves_the_first_take_recording() {
+    let mut page = driven_by([Button::Record]);
+
+    page.control(shifted(Button::Stop));
+
+    assert_eq!(page.transport(), Transport::Recording);
+}
+
+#[test]
+fn undoing_a_loop_that_is_playing_leaves_it_playing() {
+    let mut page = driven_by([Button::Record, Button::Play]);
+
+    page.control(shifted(Button::Stop));
+
+    assert_eq!(page.transport(), Transport::Playing);
+}
+
+#[test]
+fn shift_and_down_empties_the_loop() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(shifted(Button::Down));
+
+    assert!(ordered(&mut orders).contains(&Command::Clear));
+}
+
+#[test]
+fn down_on_its_own_orders_nothing() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(pressed(Button::Down));
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn clearing_takes_the_page_back_to_idle() {
+    let mut page = driven_by([Button::Record, Button::Play]);
+
+    page.control(shifted(Button::Down));
+
+    assert_eq!(page.transport(), Transport::Idle);
+}
+
+#[test]
+fn the_idle_transport_is_ordered_before_the_loop_is_emptied() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(pressed(Button::Record));
+    ordered(&mut orders);
+    page.control(shifted(Button::Down));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Idle), Command::Clear]
+    );
+}
+
+#[test]
+fn an_undo_the_queue_had_no_room_for_is_ordered_on_the_next_frame() {
+    let (mut page, mut orders) = page_ordering_with_room_for(1);
+
+    page.control(pressed(Button::Record));
+    page.control(shifted(Button::Stop));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+    drawn(&mut page);
+    assert_eq!(ordered(&mut orders), [Command::Undo]);
+}
+
+#[test]
+fn a_second_undo_the_queue_had_no_room_for_is_not_forgotten() {
+    let (mut page, mut orders) = page_ordering_with_room_for(1);
+
+    page.control(pressed(Button::Record));
+    page.control(shifted(Button::Stop));
+    page.control(shifted(Button::Stop));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+    drawn(&mut page);
+    assert_eq!(ordered(&mut orders), [Command::Undo]);
+    drawn(&mut page);
+    assert_eq!(ordered(&mut orders), [Command::Undo]);
+}
+
+#[test]
+fn a_clear_the_queue_had_no_room_for_is_ordered_on_a_later_frame() {
+    let (mut page, mut orders) = page_ordering_with_room_for(1);
+
+    page.control(pressed(Button::Record));
+    page.control(shifted(Button::Down));
+
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Recording)]
+    );
+    drawn(&mut page);
+    assert_eq!(
+        ordered(&mut orders),
+        [Command::SetTransport(Transport::Idle)]
+    );
+    drawn(&mut page);
+    assert_eq!(ordered(&mut orders), [Command::Clear]);
+}
+
+#[test]
+fn a_loop_that_was_emptied_is_not_emptied_again_every_frame() {
+    let (mut page, mut orders) = page_ordering();
+
+    page.control(shifted(Button::Down));
+    ordered(&mut orders);
+    drawn(&mut page);
+
+    assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn the_page_declares_the_button_that_empties_the_loop() {
+    assert!(page().legend().answers(Button::Down));
+}

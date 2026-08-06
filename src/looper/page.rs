@@ -93,10 +93,11 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 ///
 /// Record opens the first take, records again to layer onto it, and drops back
 /// out of the layer; play closes whatever is open and runs the loop; stop halts
-/// it keeping what was recorded. Held with shift, play taps a pulse instead of
-/// starting one and record mutes the input instead of arming it. The encoder
-/// moves the input gain a decibel a detent. Every other control is left alone,
-/// so the page can sit under a shell that uses them for something else.
+/// it keeping what was recorded. Shift makes a second gesture of each: play
+/// taps a pulse, record mutes the input, stop takes the last layer off, and
+/// shift with down empties the loop. The encoder moves the input gain a decibel
+/// a detent, and every other control is left alone, so the page can sit under a
+/// shell that uses them for something else.
 ///
 /// ```
 /// use motif::audio::{command_channel, sample_clock};
@@ -124,6 +125,8 @@ pub struct LooperPage {
     taps: TapTempo,
     decibels: f32,
     muted: bool,
+    undos: usize,
+    emptying: bool,
 }
 
 impl LooperPage {
@@ -151,6 +154,8 @@ impl LooperPage {
             elapsed,
             decibels: UNITY_DECIBELS,
             muted: false,
+            undos: 0,
+            emptying: false,
         }
     }
 
@@ -212,10 +217,38 @@ impl LooperPage {
         }
     }
 
+    fn order_undos(&mut self) {
+        while self.undos > 0 && self.commands.send(Command::Undo).is_ok() {
+            self.undos -= 1;
+        }
+    }
+
+    fn order_emptying(&mut self) {
+        if self.emptying && self.commands.send(Command::Clear).is_ok() {
+            self.emptying = false;
+        }
+    }
+
     fn order_the_engine(&mut self) {
         self.order_transport();
         self.order_gain();
         self.order_mute();
+        self.order_undos();
+        self.order_emptying();
+    }
+
+    fn undo_a_layer(&mut self) {
+        self.undos += 1;
+        if self.transport == Transport::Overdubbing {
+            self.transport = Transport::Playing;
+        }
+        self.order_the_engine();
+    }
+
+    fn empty_the_loop(&mut self) {
+        self.emptying = true;
+        self.transport = Transport::Idle;
+        self.order_the_engine();
     }
 
     /// What the looper is doing.
@@ -289,6 +322,24 @@ impl Page for LooperPage {
             return;
         }
 
+        if let ControlEvent::Pressed {
+            button: Button::Stop,
+            shifted: true,
+        } = event
+        {
+            self.undo_a_layer();
+            return;
+        }
+
+        if let ControlEvent::Pressed {
+            button: Button::Down,
+            shifted: true,
+        } = event
+        {
+            self.empty_the_loop();
+            return;
+        }
+
         if let ControlEvent::Turned {
             encoder: Encoder::Main,
             turn,
@@ -327,6 +378,7 @@ impl Page for LooperPage {
             .answering(Button::Play)
             .answering(Button::Stop)
             .answering(Button::Record)
+            .answering(Button::Down)
             .answering(Encoder::Main)
     }
 
