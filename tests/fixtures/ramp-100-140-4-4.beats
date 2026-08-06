@@ -2,9 +2,17 @@
 # rendered by `cargo run --example generate-fixtures`
 0.000000 downbeat
 0.600000 beat
-1.162500 beat
-1.691875 beat
-2.191875 downbeat
-2.665625 beat
-3.115625 beat
-3.544125 beat
+1.183375 beat
+1.750875 beat
+2.303500 downbeat
+2.842000 beat
+3.367000 beat
+3.879250 beat
+4.379250 downbeat
+4.867500 beat
+5.344875 beat
+5.811500 beat
+6.268000 downbeat
+6.714875 beat
+7.152375 beat
+7.580875 beat

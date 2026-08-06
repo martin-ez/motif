@@ -4,10 +4,16 @@ Annotated audio to measure an analyser against. Every file here is written by
 `motif::fixtures::synth`, and every claim about accuracy in this repository is a
 number measured over this set.
 
-Each fixture is two files sharing a name: `<name>.wav` is 16-bit mono PCM at
+Each fixture is two files sharing a name: `<name>.wav` is 8-bit mono PCM at
 8 kHz, and `<name>.beats` is its ground truth in the format
 `motif::fixtures::Annotation` documents. The beats are where the pulse is, which
 is not always where the sounds are.
+
+Eight bits rather than sixteen is what pays for four bars a fixture inside the
+size ceiling, and four bars is what the accuracy figures rest on: a tracker that
+misreads one bar moves the aggregate by a twenty-eighth. Against clicks that
+peak near full scale, the quantisation noise it costs sits far below anything an
+onset envelope resolves.
 
 The audio is synthetic, so its ground truth is exact by construction rather than
 tapped by a human, and its licence is this repository's. The standard annotated
