@@ -7,6 +7,9 @@
 //! aggregates for itself will eventually disagree with another about what the
 //! figure means.
 //!
+//! Every fixture is timed as well as scored, against a [`deadline`] taken as a
+//! share of the take, so each fixture sets its own.
+//!
 //! A candidate arrives as beats, chords or notes, so nothing here knows about
 //! analysers or audio.
 
@@ -15,7 +18,7 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::{Agreement, Annotation, AnnotationError, Chord, Comparison, Note, Score};
 
@@ -32,6 +35,32 @@ pub trait Measured: Copy + fmt::Display {
 
     /// The single figure to quote for one fixture, from zero to one.
     fn quoted(&self) -> f64;
+}
+
+/// The share of a take that analysis has to answer in.
+///
+/// Half, so the result is up before the loop passes the midpoint of its first
+/// replay. A share rather than a fixed figure because the loop length is what
+/// the player chose, and it is the wait they are measuring against. It is one
+/// value, which keeps what it should be a question the instrument answers
+/// rather than a decision spread through the code.
+pub const DEADLINE_SHARE: f64 = 0.5;
+
+/// How long analysis has over a take of `length`, measured from the take's last
+/// frame to the result reaching the player.
+///
+/// [`DEADLINE_SHARE`] of the take. The loop wraps to bar one and plays again
+/// the moment the take closes, so what bounds the wait is the loop the player
+/// set rather than any fixed figure.
+///
+/// ```
+/// use motif::fixtures::harness;
+/// use std::time::Duration;
+///
+/// assert_eq!(harness::deadline(Duration::from_secs(8)), Duration::from_secs(4));
+/// ```
+pub fn deadline(length: Duration) -> Duration {
+    length.mul_f64(DEADLINE_SHARE)
 }
 
 /// Which of a fixture's annotated positions a run is measured against.
@@ -106,8 +135,8 @@ pub fn checked_in() -> PathBuf {
 /// Score `candidate` against every fixture in `directory`.
 ///
 /// A fixture is a `.beats` file; anything else is left alone. `candidate` is
-/// asked once per fixture and answers with the positions it found, so the
-/// harness never learns what produced them.
+/// asked once per fixture and answers with positions, so the harness never
+/// learns what produced them; only that call is timed, never the loading.
 ///
 /// # Errors
 ///
@@ -135,8 +164,9 @@ pub fn measure(
         |_| true,
         |truth| {
             let annotated: Vec<Duration> = target.positions(truth.annotation()).collect();
+            let (detected, elapsed) = timed(|| candidate(truth));
 
-            Score::of(&annotated, &candidate(truth))
+            (Score::of(&annotated, &detected), elapsed)
         },
     )
 }
@@ -160,7 +190,14 @@ pub fn measure_chords(
     measure_with(
         directory,
         |truth| !truth.annotation().chords().is_empty(),
-        |truth| Agreement::of(truth.annotation().chords(), &candidate(truth), comparison),
+        |truth| {
+            let (detected, elapsed) = timed(|| candidate(truth));
+
+            (
+                Agreement::of(truth.annotation().chords(), &detected, comparison),
+                elapsed,
+            )
+        },
     )
 }
 
@@ -181,14 +218,21 @@ pub fn measure_notes(
     measure_with(
         directory,
         |truth| !truth.annotation().notes().is_empty(),
-        |truth| Score::of_notes(truth.annotation().notes(), &candidate(truth)),
+        |truth| {
+            let (detected, elapsed) = timed(|| candidate(truth));
+
+            (
+                Score::of_notes(truth.annotation().notes(), &detected),
+                elapsed,
+            )
+        },
     )
 }
 
 fn measure_with<S>(
     directory: &Path,
     annotates: impl Fn(&GroundTruth) -> bool,
-    mut score: impl FnMut(&GroundTruth) -> S,
+    mut score: impl FnMut(&GroundTruth) -> (S, Duration),
 ) -> Result<Report<S>, RunError> {
     let set: Vec<GroundTruth> = load(directory)?.into_iter().filter(annotates).collect();
     if set.is_empty() {
@@ -199,13 +243,27 @@ fn measure_with<S>(
 
     let rows = set
         .into_iter()
-        .map(|truth| Row {
-            score: score(&truth),
-            name: truth.name,
+        .map(|truth| {
+            let allowed = deadline(truth.annotation().span());
+            let (score, elapsed) = score(&truth);
+
+            Row {
+                name: truth.name,
+                score,
+                elapsed,
+                deadline: allowed,
+            }
         })
         .collect();
 
     Ok(Report { rows })
+}
+
+fn timed<T>(produce: impl FnOnce() -> T) -> (T, Duration) {
+    let started = Instant::now();
+    let produced = produce();
+
+    (produced, started.elapsed())
 }
 
 fn load(directory: &Path) -> Result<Vec<GroundTruth>, RunError> {
@@ -282,6 +340,19 @@ impl<S: Measured> Report<S> {
 
         self.rows.iter().map(|row| row.score.quoted()).sum::<f64>() / self.rows.len() as f64
     }
+
+    /// The tightest headroom any fixture left against its own deadline.
+    ///
+    /// The smallest rather than the mean: a set where one fixture overran did
+    /// not meet the deadline, however much room the others left. Zero says one
+    /// of them spent everything it had.
+    pub fn headroom(&self) -> Duration {
+        self.rows
+            .iter()
+            .map(Row::headroom)
+            .min()
+            .unwrap_or_default()
+    }
 }
 
 impl<S: Measured> fmt::Display for Report<S> {
@@ -293,25 +364,37 @@ impl<S: Measured> fmt::Display for Report<S> {
             .max()
             .unwrap_or_default();
 
-        for Row { name, score } in &self.rows {
-            writeln!(f, "{name:<width$}  {score}")?;
+        for Row {
+            name,
+            score,
+            elapsed,
+            deadline,
+        } in &self.rows
+        {
+            writeln!(
+                f,
+                "{name:<width$}  {score}  took {elapsed:.1?} of {deadline:.1?}"
+            )?;
         }
 
         write!(
             f,
-            "mean {} {:.3} over {} fixtures",
+            "mean {} {:.3} over {} fixtures, headroom {:.1?}",
             S::QUOTED,
             self.mean(),
-            self.rows.len()
+            self.rows.len(),
+            self.headroom()
         )
     }
 }
 
-/// What a candidate scored on one fixture.
+/// What a candidate scored on one fixture, and what it spent doing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row<S = Score> {
     name: String,
     score: S,
+    elapsed: Duration,
+    deadline: Duration,
 }
 
 impl<S: Measured> Row<S> {
@@ -323,6 +406,21 @@ impl<S: Measured> Row<S> {
     /// What the candidate scored on it.
     pub fn score(&self) -> S {
         self.score
+    }
+
+    /// How long the candidate took over it.
+    pub fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    /// How long it had, which is [`DEADLINE_SHARE`] of this fixture's length.
+    pub fn deadline(&self) -> Duration {
+        self.deadline
+    }
+
+    /// What is left of that deadline, and zero where the candidate spent it.
+    pub fn headroom(&self) -> Duration {
+        self.deadline.saturating_sub(self.elapsed)
     }
 }
 

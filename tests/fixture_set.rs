@@ -1,13 +1,14 @@
 //! The synthetic fixture set: what it covers, what it renders, and that the
 //! files checked in are still the ones its generator produces.
 
+use motif::fixtures::harness::{self, Target};
 use motif::fixtures::synth::{self, Fixture, SAMPLE_RATE, Voice};
 use motif::fixtures::{Annotation, Beat, ChordLabel};
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const CEILING: u64 = 640 * 1024;
+const CEILING: u64 = 576 * 1024;
 
 const HARMONY: &str = "chords-150-4-4";
 const LINE: &str = "line-150-4-4";
@@ -62,10 +63,10 @@ fn read(name: &str) -> Vec<u8> {
     fs::read(directory().join(name)).unwrap_or_else(|error| panic!("{name} is checked in: {error}"))
 }
 
-fn samples(wav: &[u8]) -> Vec<i16> {
+fn samples(wav: &[u8]) -> Vec<i8> {
     wav[44..]
-        .chunks_exact(2)
-        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        .iter()
+        .map(|byte| (i16::from(*byte) - 128) as i8)
         .collect()
 }
 
@@ -74,7 +75,7 @@ fn peak_around(fixture: &Fixture, at: Duration) -> i16 {
     let window = SAMPLE_RATE as usize / 100;
     fixture.samples()[centre..centre + window]
         .iter()
-        .map(|sample| sample.abs())
+        .map(|sample| i16::from(*sample).abs())
         .max()
         .unwrap_or(0)
 }
@@ -127,7 +128,7 @@ fn every_fixture_is_short_enough_to_belong_to_the_set() {
             Duration::from_secs_f64(fixture.samples().len() as f64 / f64::from(SAMPLE_RATE));
 
         assert!(
-            length <= Duration::from_secs(10),
+            length <= Duration::from_secs(12),
             "{} runs {length:?}",
             fixture.name()
         );
@@ -189,6 +190,43 @@ fn the_set_covers_three_four_as_well_as_four_four() {
 
     assert!(metres.contains(&3), "bar lengths: {metres:?}");
     assert!(metres.contains(&4), "bar lengths: {metres:?}");
+}
+
+#[test]
+fn every_fixture_carries_at_least_four_bars() {
+    for fixture in synth::set() {
+        assert!(
+            beats_per_bar(&fixture).len() >= 4,
+            "{} carries {} bars",
+            fixture.name(),
+            beats_per_bar(&fixture).len()
+        );
+    }
+}
+
+const A_BAR_ADRIFT: Duration = Duration::from_millis(500);
+const COARSEST_STEP: f64 = 0.04;
+
+#[test]
+fn misreading_one_bar_moves_the_aggregate_by_under_four_points() {
+    for fixture in synth::set() {
+        let report = harness::measure(&harness::checked_in(), Target::Downbeats, |truth| {
+            let mut downbeats: Vec<Duration> =
+                Target::Downbeats.positions(truth.annotation()).collect();
+            if truth.name() == fixture.name() {
+                downbeats[0] += A_BAR_ADRIFT;
+            }
+            downbeats
+        })
+        .expect("the checked-in set scores");
+        let step = 1.0 - report.mean();
+
+        assert!(
+            step < COARSEST_STEP,
+            "misreading a bar of {} moved the aggregate by {step}",
+            fixture.name()
+        );
+    }
 }
 
 #[test]
@@ -325,7 +363,7 @@ fn an_onset_puts_energy_where_its_timestamp_says() {
     let fixture = named("steady-120-4-4");
     let onset = fixture.onsets()[1].at;
 
-    assert!(peak_around(&fixture, onset) > 8_000);
+    assert!(peak_around(&fixture, onset) > 30);
 }
 
 #[test]
@@ -344,9 +382,18 @@ fn the_audio_falls_quiet_between_onsets() {
 #[test]
 fn no_sample_clips() {
     for fixture in synth::set() {
-        let peak = fixture.samples().iter().map(|s| s.abs()).max().unwrap_or(0);
+        let peak = fixture
+            .samples()
+            .iter()
+            .map(|s| i16::from(*s).abs())
+            .max()
+            .unwrap_or(0);
 
-        assert!(peak < i16::MAX, "{} peaked at {peak}", fixture.name());
+        assert!(
+            peak < i16::from(i8::MAX),
+            "{} peaked at {peak}",
+            fixture.name()
+        );
     }
 }
 
@@ -359,7 +406,7 @@ fn rendering_is_deterministic() {
 }
 
 #[test]
-fn a_wav_declares_sixteen_bit_mono_at_the_documented_sample_rate() {
+fn a_wav_declares_eight_bit_mono_at_the_documented_sample_rate() {
     let wav = named("steady-90-4-4").wav_bytes();
 
     assert_eq!(&wav[0..4], b"RIFF");
@@ -371,7 +418,34 @@ fn a_wav_declares_sixteen_bit_mono_at_the_documented_sample_rate() {
         u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
         SAMPLE_RATE
     );
-    assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16);
+    assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 8);
+}
+
+#[test]
+fn a_wav_carries_one_byte_for_every_frame() {
+    let wav = named("steady-90-4-4").wav_bytes();
+
+    assert_eq!(
+        u32::from_le_bytes([wav[28], wav[29], wav[30], wav[31]]),
+        SAMPLE_RATE
+    );
+    assert_eq!(u16::from_le_bytes([wav[32], wav[33]]), 1);
+}
+
+#[test]
+fn every_stored_byte_decodes_back_to_the_sample_it_came_from() {
+    let fixture = named("steady-90-4-4");
+
+    assert_eq!(samples(&fixture.wav_bytes()), fixture.samples());
+}
+
+#[test]
+fn silence_is_stored_at_the_midpoint_of_the_unsigned_range() {
+    let fixture = named("steady-90-4-4");
+    let wav = fixture.wav_bytes();
+
+    assert_eq!(fixture.samples()[fixture.samples().len() - 1], 0);
+    assert_eq!(wav[wav.len() - 1], 128);
 }
 
 #[test]
@@ -381,7 +455,7 @@ fn a_wav_declares_the_size_of_its_sample_data() {
     let data = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
 
     assert_eq!(&wav[36..40], b"data");
-    assert_eq!(data, fixture.samples().len() * 2);
+    assert_eq!(data, fixture.samples().len());
     assert_eq!(wav.len(), 44 + data);
     assert_eq!(
         u32::from_le_bytes([wav[4], wav[5], wav[6], wav[7]]) as usize,
@@ -447,7 +521,7 @@ fn the_committed_audio_matches_its_generator() {
             .max()
             .unwrap_or(0);
 
-        assert!(furthest <= 2, "{} drifted by {furthest}", fixture.name());
+        assert!(furthest <= 1, "{} drifted by {furthest}", fixture.name());
     }
 }
 
@@ -674,9 +748,14 @@ fn a_note_is_rendered_at_the_pitch_it_annotates() {
     let from = frames(note.onset + Duration::from_millis(50));
     let window = SAMPLE_RATE as usize / 10;
 
-    let crossings = fixture.samples()[from..from + window]
+    let sounding: Vec<i8> = fixture.samples()[from..from + window]
+        .iter()
+        .map(|sample| sample.signum())
+        .filter(|sign| *sign != 0)
+        .collect();
+    let crossings = sounding
         .windows(2)
-        .filter(|pair| pair[0].signum() != pair[1].signum())
+        .filter(|pair| pair[0] != pair[1])
         .count() as f64;
     let sounded = crossings / 2.0 * 10.0;
 

@@ -100,6 +100,15 @@ impl Annotation {
         &self.beats
     }
 
+    /// How long the take runs: from its start to the last beat annotated in it.
+    ///
+    /// The audio may carry on past that beat, so this is at or under the true
+    /// length. That is the safe direction, since a deadline taken as a share of
+    /// it comes out tighter rather than more generous.
+    pub fn span(&self) -> Duration {
+        self.beats.last().map_or(Duration::ZERO, |beat| beat.at)
+    }
+
     /// Where each bar begins.
     pub fn downbeats(&self) -> impl Iterator<Item = Duration> + '_ {
         self.beats
