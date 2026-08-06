@@ -19,6 +19,7 @@ const RAMP_FRAMES: usize = SAMPLE_RATE as usize * Gain::RAMP / 1_000;
 const SETTLED: usize = RAMP_FRAMES * 2;
 const HALF: f32 = 0.5;
 const TOLERANCE: f32 = 1e-6;
+const FAR_ABOVE_THE_CEILING: f32 = 1_000.0;
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -79,6 +80,15 @@ fn a_gain_command_sets_the_level_that_is_played() {
     sent(&mut sender, Command::SetGain(HALF));
 
     assert!((settled(&mut path) - HALF).abs() < TOLERANCE);
+}
+
+#[test]
+fn a_gain_command_above_the_ceiling_plays_at_the_ceiling() {
+    let (mut sender, mut path) = monitoring();
+
+    sent(&mut sender, Command::SetGain(FAR_ABOVE_THE_CEILING));
+
+    assert!((settled(&mut path) - Gain::CEILING).abs() < TOLERANCE);
 }
 
 #[test]
