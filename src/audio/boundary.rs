@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{
-    AudioPath, ChannelSelection, SampleConsumer, SampleProducer, StreamConfig, sample_ring,
+    AudioPath, ChannelSelection, SampleConsumer, SampleProducer, SlackReader, SlackTrim,
+    StreamConfig, Trim, sample_ring, slack_hold,
 };
 
 /// Build the two ends of the boundary for a stream at `config`, carrying
@@ -114,6 +115,7 @@ pub fn boundary<P: AudioPath>(
 
     path.prepare(config);
     let priming = Priming::new();
+    let (trim, holding) = slack_hold(slack, block);
 
     (
         BlockCapture {
@@ -131,6 +133,8 @@ pub fn boundary<P: AudioPath>(
             captured: vec![0.0; block].into_boxed_slice(),
             playing: vec![0.0; block].into_boxed_slice(),
             slack,
+            trim,
+            holding,
             priming,
         },
     )
@@ -301,6 +305,8 @@ pub struct BlockPlayback<P> {
     captured: Box<[f32]>,
     playing: Box<[f32]>,
     slack: usize,
+    trim: SlackTrim,
+    holding: SlackReader,
     priming: Priming,
 }
 
@@ -315,7 +321,7 @@ impl<P: AudioPath> BlockPlayback<P> {
     /// `output` may be any length, and slots outside the selection are silenced.
     ///
     /// Until the ring has risen past its slack, `output` is silence reported
-    /// whole and stale frames are dropped. See [`Priming`].
+    /// whole; so is a block the [`Trim`] padded. See [`Priming`].
     pub fn render(&mut self, output: &mut [f32]) -> usize {
         self.priming.playback_ran();
         if !self.priming.carrying() && !self.takes_up_the_slack() {
@@ -323,14 +329,18 @@ impl<P: AudioPath> BlockPlayback<P> {
             return output.len() / self.channels;
         }
 
+        let mut holding = self.trimmed(output.len() / self.channels);
         let mut supplied = 0;
 
         for chunk in output.chunks_mut(self.captured.len() * self.channels) {
             let frames = chunk.len() / self.channels;
+            let asked = frames - std::mem::take(&mut holding);
 
             let captured = &mut self.captured[..frames];
-            let taken = self.consumer.read(captured);
+            let taken = self.consumer.read(&mut captured[..asked]);
             captured[taken..].fill(0.0);
+            let last = captured[..asked].last().copied().unwrap_or_default();
+            captured[asked..].fill(last);
 
             let playing = &mut self.playing[..frames];
             playing.fill(0.0);
@@ -342,10 +352,30 @@ impl<P: AudioPath> BlockPlayback<P> {
             }
             chunk[frames * self.channels..].fill(0.0);
 
-            supplied += taken;
+            supplied += if taken < asked { taken } else { frames };
         }
 
         supplied
+    }
+
+    /// A handle on the slack the boundary is holding, for whatever reports on
+    /// the stream.
+    ///
+    /// Taken from this end because the trim runs where the ring is read, and
+    /// because a callback owns it once the stream is built.
+    pub fn slack(&self) -> SlackReader {
+        self.holding.clone()
+    }
+
+    fn trimmed(&mut self, wanted: usize) -> usize {
+        match self.trim.trim(self.consumer.available(), wanted) {
+            Trim::Steady => 0,
+            Trim::Drop(frames) => {
+                self.consumer.skip(frames);
+                0
+            }
+            Trim::Insert(frames) => frames,
+        }
     }
 
     fn takes_up_the_slack(&mut self) -> bool {

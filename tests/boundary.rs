@@ -9,8 +9,9 @@
 //! the spread back across channels, that the path in between decides the
 //! samples that are spread, that only the selected channels carry them, that a
 //! ring which is full or dry is reported rather than waited on, that nothing is
-//! due across the boundary until both ends have run once, and that neither
-//! callback allocates.
+//! due across the boundary until both ends have run once, that the slack
+//! outlasts both a clock that will not keep step and a ring that has run dry,
+//! and that neither callback allocates.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -153,6 +154,76 @@ fn played_through(
 
 fn channels(first: u16, count: u16) -> ChannelSelection {
     ChannelSelection { first, count }
+}
+
+/// One channel each way, at a block long enough for a correction to be a
+/// fraction of it rather than the whole thing.
+const BLOCK: usize = 64;
+
+fn mono(block: usize) -> StreamConfig {
+    StreamConfig {
+        sample_rate: 48_000,
+        block_size: block as u32,
+        input_channels: 1,
+        output_channels: 1,
+    }
+}
+
+fn carrying(block: usize) -> (BlockCapture, BlockPlayback<Passthrough>) {
+    whole(mono(block), block)
+}
+
+/// Run `blocks` blocks where the capture end delivers `captured` frames for
+/// every `played` the playback end asks for, and report how many blocks came up
+/// short in each direction.
+///
+/// Two devices on independent clocks differ by a fraction of a frame per block
+/// rather than a whole one, so a whole frame is a drift far steeper than any
+/// hardware's — which is what makes a run of a few hundred blocks stand in for
+/// a listen of several minutes.
+fn drifting(captured: usize, played: usize, blocks: usize) -> (usize, usize) {
+    let (mut input, mut output) = carrying(BLOCK);
+    let source = vec![0.5; captured];
+    let mut sink = vec![0.0; played];
+    let (mut dropped, mut starved) = (0, 0);
+
+    for _ in 0..blocks {
+        dropped += usize::from(input.capture(&source) < captured);
+        starved += usize::from(output.render(&mut sink) < played);
+    }
+
+    (dropped, starved)
+}
+
+fn in_step(ends: &mut (BlockCapture, BlockPlayback<Passthrough>), blocks: usize) {
+    let (input, output) = ends;
+    let source = vec![0.5; BLOCK];
+    let mut sink = vec![0.0; BLOCK];
+
+    for _ in 0..blocks {
+        input.capture(&source);
+        output.render(&mut sink);
+    }
+}
+
+fn drain(ends: &mut (BlockCapture, BlockPlayback<Passthrough>), renders: usize) {
+    let mut sink = vec![0.0; BLOCK];
+
+    for _ in 0..renders {
+        ends.1.render(&mut sink);
+    }
+}
+
+/// Play half a block before the capture that feeds it, and say whether the
+/// playback end came up short — which is the hiccup the slack exists to absorb.
+fn played_early(ends: &mut (BlockCapture, BlockPlayback<Passthrough>)) -> bool {
+    let (input, output) = ends;
+    let source = vec![0.5; BLOCK / 2];
+    let mut sink = vec![0.0; BLOCK / 2];
+
+    let starved = output.render(&mut sink) < BLOCK / 2;
+    input.capture(&source);
+    starved
 }
 
 #[test]
@@ -504,6 +575,77 @@ fn a_restarted_boundary_falls_back_to_its_slack() {
 }
 
 #[test]
+fn a_capture_clock_running_fast_costs_no_frames() {
+    let (dropped, starved) = drifting(BLOCK + 1, BLOCK, 400);
+
+    assert_eq!((dropped, starved), (0, 0));
+}
+
+#[test]
+fn a_capture_clock_running_slow_costs_no_frames() {
+    let (dropped, starved) = drifting(BLOCK - 1, BLOCK, 400);
+
+    assert_eq!((dropped, starved), (0, 0));
+}
+
+#[test]
+fn a_hiccup_is_absorbed_by_the_slack() {
+    let mut ends = carrying(BLOCK);
+    in_step(&mut ends, 4);
+
+    assert!(!played_early(&mut ends));
+}
+
+#[test]
+fn what_the_boundary_holds_is_readable_from_the_playback_end() {
+    let mut ends = carrying(BLOCK);
+    let holding = ends.1.slack();
+    in_step(&mut ends, 4);
+
+    assert_eq!(holding.read().held, BLOCK);
+}
+
+#[test]
+fn a_capture_clock_running_fast_is_paid_for_in_dropped_frames() {
+    let mut ends = carrying(BLOCK);
+    let holding = ends.1.slack();
+    let source = vec![0.5; BLOCK + 1];
+    let mut sink = vec![0.0; BLOCK];
+
+    for _ in 0..200 {
+        ends.0.capture(&source);
+        ends.1.render(&mut sink);
+    }
+
+    assert!(holding.read().dropped > 0, "the drift was never corrected");
+}
+
+#[test]
+fn a_capture_clock_running_slow_is_paid_for_in_inserted_frames() {
+    let mut ends = carrying(BLOCK);
+    let holding = ends.1.slack();
+    let source = vec![0.5; BLOCK - 1];
+    let mut sink = vec![0.0; BLOCK];
+
+    for _ in 0..200 {
+        ends.0.capture(&source);
+        ends.1.render(&mut sink);
+    }
+
+    assert!(holding.read().inserted > 0, "the drift was never corrected");
+}
+
+#[test]
+fn the_slack_comes_back_after_the_ring_has_run_dry() {
+    let mut ends = carrying(BLOCK);
+    in_step(&mut ends, 4);
+    drain(&mut ends, 4);
+    in_step(&mut ends, 200);
+
+    assert!(!played_early(&mut ends));
+}
+
+#[test]
 fn neither_callback_allocates() {
     let profile = DeviceProfile::TARGET.audio;
     let block = profile.block_size as usize;
@@ -542,6 +684,27 @@ fn neither_callback_allocates_while_the_boundary_is_priming() {
     output.render(&mut played);
     input.capture(&captured);
     output.render(&mut played);
+    let after = allocations();
+
+    assert_eq!(after, before);
+}
+
+#[test]
+fn holding_the_slack_against_a_drifting_clock_allocates_nothing() {
+    let (mut input, mut output) = carrying(BLOCK);
+    let long = vec![0.5; BLOCK * 2];
+    let short = vec![0.5; BLOCK / 2];
+    let mut played = vec![0.0; BLOCK];
+
+    let before = allocations();
+    for _ in 0..8 {
+        input.capture(&long);
+        output.render(&mut played);
+    }
+    for _ in 0..8 {
+        input.capture(&short);
+        output.render(&mut played);
+    }
     let after = allocations();
 
     assert_eq!(after, before);

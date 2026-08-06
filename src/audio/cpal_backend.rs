@@ -15,9 +15,10 @@ use cpal::{Data, ErrorKind, SampleFormat, SupportedStreamConfigRange};
 use super::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, ChannelSelection, DeviceError, DeviceId,
     DeviceSelection, DuplexStream, FaultReader, FaultReporter, Grant, Headroom, HeadroomReader,
-    LevelReader, Levels, Placed, Placement, Priming, PriorityReader, PriorityReporter,
-    StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, boundary, fault_channel,
-    headroom_meter, level_meter, opened_width, pinning, priority_latch, xrun_counter,
+    LevelReader, Levels, Placed, Placement, Priming, PriorityReader, PriorityReporter, Slack,
+    SlackReader, StreamConfig, StreamRequest, StreamState, XrunReader, Xruns, boundary,
+    fault_channel, headroom_meter, level_meter, opened_width, pinning, priority_latch,
+    xrun_counter,
 };
 
 /// Audio devices reached through `cpal`.
@@ -310,6 +311,7 @@ impl AudioBackend for CpalBackend {
             path,
         );
         let priming = capture.priming();
+        let holding = playback.slack();
         let (mut level_writer, levels) = level_meter(input_channels, selection.input_channels);
         let (mut overruns, mut underruns, xruns) = xrun_counter();
         let (mut capture_headroom, capture_load) = headroom_meter(request.sample_rate);
@@ -378,6 +380,7 @@ impl AudioBackend for CpalBackend {
             output: output_stream,
             levels,
             xruns,
+            holding,
             capture_load,
             render_load,
             affinity,
@@ -396,6 +399,7 @@ pub struct CpalStream {
     output: cpal::Stream,
     levels: LevelReader,
     xruns: XrunReader,
+    holding: SlackReader,
     capture_load: HeadroomReader,
     render_load: HeadroomReader,
     affinity: Grant,
@@ -433,6 +437,15 @@ impl DuplexStream for CpalStream {
     /// here — the callback is simply not called.
     fn xruns(&self) -> Xruns {
         self.xruns.read()
+    }
+
+    /// Measured on the boundary the two callbacks meet over. The input and the
+    /// output are separate devices with separate clocks and nothing resamples
+    /// between them, so the counts grow for as long as the stream runs — a
+    /// stream holding its slack at no cost at all is one whose two devices
+    /// share a clock.
+    fn slack(&self) -> Slack {
+        self.holding.read()
     }
 
     /// Timed around everything each callback does with the block it was handed,

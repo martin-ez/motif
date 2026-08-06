@@ -20,7 +20,7 @@ use std::rc::Rc;
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
     DeviceId, DeviceSelection, DuplexStream, Headroom, Levels, Passthrough, Placed, SharedLink,
-    StreamConfig, StreamRequest, StreamState, Xruns, sample_clock,
+    Slack, StreamConfig, StreamRequest, StreamState, Xruns, sample_clock,
 };
 use motif::device::{Button, DeviceProfile};
 use motif::looper::LooperPage;
@@ -138,6 +138,10 @@ impl DuplexStream for CountingStream {
 
     fn xruns(&self) -> Xruns {
         Xruns::NONE
+    }
+
+    fn slack(&self) -> Slack {
+        Slack::NONE
     }
 
     fn headroom(&self) -> Headroom {
