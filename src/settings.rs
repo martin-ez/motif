@@ -17,7 +17,7 @@ use crate::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceCatalog,
     DeviceError, DeviceId, DeviceLink, DeviceSelection, SharedLink,
 };
-use crate::closed_set::closed_set;
+use crate::closed_set;
 use crate::device::{Button, Encoder};
 use crate::ui::{Cell, ControlEvent, Legend, Page, Region, Turn};
 
