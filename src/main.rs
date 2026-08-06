@@ -15,8 +15,8 @@
 use std::process::ExitCode;
 
 use motif::audio::{
-    AudioBackend, Counting, CpalBackend, DeviceLink, DeviceSelection, SharedLink, StreamRequest,
-    sample_clock,
+    AudioBackend, Counting, CpalBackend, DeviceLink, DeviceSelection, Escrow, SharedLink,
+    StreamRequest, sample_clock,
 };
 use motif::device::DeviceProfile;
 use motif::looper::LooperPage;
@@ -37,7 +37,7 @@ fn play() -> Result<(), RenderError> {
     let audio = DeviceProfile::TARGET.audio;
     let (frames, elapsed) = sample_clock(audio.sample_rate);
     let (looper, engine) = LooperPage::driving(audio, elapsed);
-    let mut playing = Some(Counting::new(frames, engine));
+    let playing = Escrow::holding(Counting::new(frames, engine));
     let backend = CpalBackend::new();
     let selection = backend
         .defaults(audio.sample_rate)
@@ -46,7 +46,7 @@ fn play() -> Result<(), RenderError> {
         backend,
         requested(),
         selection,
-        move || playing.take(),
+        move || playing.lend(),
     ));
     let settings = AudioPage::listing(link.clone());
     let shell = Shell::navigated_by([Box::new(looper), Box::new(settings)], Scheme::scenes());
