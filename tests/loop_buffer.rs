@@ -347,6 +347,17 @@ fn an_overdub_carries_on_past_the_end_of_the_loop() {
 }
 
 #[test]
+fn an_overdub_ending_on_the_loop_boundary_stays_at_the_end_of_the_loop() {
+    let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
+    buffer.record(&[0.25, 0.5, 0.75, 1.0]);
+
+    buffer.overdub(2);
+    buffer.record(&[0.125, 0.125]);
+
+    assert_eq!(heard(&buffer), [0.25, 0.5, 0.875, 1.125]);
+}
+
+#[test]
 fn an_overdub_that_laps_the_loop_overwrites_what_it_laid_down() {
     let mut buffer = LoopBuffer::for_profile(eight_frame_profile());
     buffer.record(&[0.25, 0.5]);

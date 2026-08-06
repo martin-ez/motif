@@ -125,20 +125,24 @@ impl LoopBuffer {
     }
 
     fn lay_round(&mut self, open: usize, captured: &[f32]) -> usize {
-        let (len, capacity) = (self.len(), self.capacity());
-        let mut laid = 0;
-        while laid < captured.len() {
-            let from = self.cursor[open];
-            let run = (len - from).min(captured.len() - laid);
-            let at = open * capacity + from;
-            self.layers[at..at + run].copy_from_slice(&captured[laid..laid + run]);
-            self.cursor[open] = (from + run) % len;
-            self.written[open] = (self.written[open] + run).min(len);
-            self.summarise(from, run);
-            laid += run;
+        let to_the_boundary = (self.len() - self.cursor[open]).min(captured.len());
+        let (before, after) = captured.split_at(to_the_boundary);
+
+        self.lay(open, before);
+        for repeat in after.chunks(self.len()) {
+            self.lay(open, repeat);
         }
 
-        laid
+        captured.len()
+    }
+
+    fn lay(&mut self, open: usize, captured: &[f32]) {
+        let (len, from) = (self.len(), self.cursor[open]);
+        let at = open * self.capacity() + from;
+        self.layers[at..at + captured.len()].copy_from_slice(captured);
+        self.cursor[open] = (from + captured.len()) % len;
+        self.written[open] = (self.written[open] + captured.len()).min(len);
+        self.summarise(from, captured.len());
     }
 
     fn summarise(&mut self, from: usize, taken: usize) {
