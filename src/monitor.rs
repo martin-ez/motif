@@ -2,11 +2,12 @@
 //!
 //! [`Monitor`] is the half of the composition that holds the device and not the
 //! decision: it starts the link it is lent, keeps it for the run and stops it on
-//! the way out, while what its streams play and what they are opened on are the
-//! caller's to say. It wraps an [`App`] rather than being one, so the pages
-//! under it neither know nor need to know that a device is open — the bottom row
-//! is taken for the state and the input level before the pages are handed the
-//! rest, and every cell they are given stays theirs.
+//! the way out, while what its streams play is the caller's to say. It wraps an
+//! [`App`] rather than being one, so the pages under it need not know a device
+//! is open: the bottom row is taken before they are handed the rest.
+//!
+//! That row carries two levels, not one: a meter on the input alone reads the
+//! converter, which a muted engine and a stopped callback both leave moving.
 //!
 //! A device that is not there is drawn, never fatal. An instrument that quit
 //! because an interface was unplugged would be wrong, and one that drew a
@@ -20,7 +21,11 @@ use crate::ui::{App, ControlEvent, Flow, Legend, LevelMeter, Region};
 
 const LABEL: &str = "audio ";
 const STATUS_ROWS: usize = 1;
-const METER_COLUMNS: usize = 24;
+const METER_COLUMNS: usize = 20;
+const CAPTURED_LABEL: &str = "in ";
+const PLAYED_LABEL: &str = " out ";
+const METERS_COLUMNS: usize =
+    CAPTURED_LABEL.len() + PLAYED_LABEL.len() + METER_COLUMNS + METER_COLUMNS;
 
 /// An application with an audio device held open behind it.
 ///
@@ -73,7 +78,8 @@ const METER_COLUMNS: usize = 24;
 pub struct Monitor<A: App, B: AudioBackend, F> {
     app: A,
     link: Option<SharedLink<B, F>>,
-    meter: LevelMeter,
+    captured: LevelMeter,
+    played: LevelMeter,
 }
 
 impl<A: App, B: AudioBackend, F, P> Monitor<A, B, F>
@@ -103,7 +109,8 @@ where
         Self {
             app,
             link,
-            meter: LevelMeter::new(),
+            captured: LevelMeter::new(),
+            played: LevelMeter::new(),
         }
     }
 }
@@ -142,10 +149,25 @@ impl<A: App, B: AudioBackend, F> Monitor<A, B, F> {
         }
     }
 
-    fn heard(&self) -> Levels {
+    fn metered(&self, of: fn(&B::Stream) -> Levels) -> Levels {
         self.link.as_ref().map_or(Levels::SILENT, |link| {
-            link.read(|held| held.stream().map_or(Levels::SILENT, DuplexStream::levels))
+            link.read(|held| held.stream().map_or(Levels::SILENT, of))
         })
+    }
+
+    fn bars(&mut self, state: AudioState) -> Option<String> {
+        if let AudioState::Lost(_) = state {
+            return None;
+        }
+
+        let captured = self.metered(DuplexStream::captured);
+        let played = self.metered(DuplexStream::played);
+
+        Some(format!(
+            "{CAPTURED_LABEL}{}{PLAYED_LABEL}{}",
+            self.captured.bar(captured, METER_COLUMNS),
+            self.played.bar(played, METER_COLUMNS)
+        ))
     }
 
     fn polled(&mut self) -> AudioState {
@@ -166,21 +188,25 @@ impl<A: App, B: AudioBackend, F> App for Monitor<A, B, F> {
         self.app.legend()
     }
 
-    /// The bottom row is taken for the state and the input level before the
+    /// The bottom row is taken for the state and the two levels before the
     /// wrapped application is handed the rest, so a page filling what it was
     /// given cannot land on it. The application's [`Flow`] is the one that comes
     /// back, so nothing about the audio path can end a run. The device is polled
     /// once here, which is where a fault the callback latched is noticed.
+    ///
+    /// A lost device gets the row to itself: the labelled pair does not fit
+    /// beside why it went, and a stream that is gone has no level to report.
     fn draw(&mut self, region: Region<'_>) -> Flow {
         let (above, mut status) = region.split_bottom(STATUS_ROWS);
 
         let flow = self.app.draw(above);
         let state = self.polled();
-        let heard = self.heard();
-        let margin = status.columns().saturating_sub(METER_COLUMNS);
+        let margin = status.columns().saturating_sub(METERS_COLUMNS);
 
         status.write(0, 0, &format!("{LABEL}{state}"));
-        status.write(margin, 0, &self.meter.bar(heard, METER_COLUMNS));
+        if let Some(bars) = self.bars(state) {
+            status.write(margin, 0, &bars);
+        }
 
         flow
     }

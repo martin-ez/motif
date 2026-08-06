@@ -9,8 +9,9 @@
 //! the spread back across channels, that the path in between decides the
 //! samples that are spread, that only the selected channels carry them, that a
 //! ring which is full or dry is reported rather than waited on, that nothing is
-//! due across the boundary until both ends have run once, and that neither
-//! callback allocates.
+//! due across the boundary until both ends have run once, that the meter on the
+//! playback end reads what the path played and not what the device was handed,
+//! and that neither callback allocates.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -18,8 +19,8 @@ use std::hint::black_box;
 use std::sync::{Arc, Mutex};
 
 use motif::audio::{
-    AudioPath, BlockCapture, BlockPlayback, ChannelSelection, Command, Passthrough, StreamConfig,
-    boundary,
+    AudioPath, BlockCapture, BlockPlayback, ChannelSelection, Command, Levels, Passthrough,
+    StreamConfig, boundary,
 };
 use motif::device::DeviceProfile;
 
@@ -75,6 +76,22 @@ impl AudioPath for Tone {
     fn render(&mut self, _captured: &[f32], playing: &mut [f32]) {
         playing.fill(self.0);
     }
+
+    fn apply(&mut self, _command: Command) -> bool {
+        false
+    }
+}
+
+/// A path that plays nothing, whatever it was handed.
+///
+/// A muted engine as the boundary sees one: frames arrive and none go out,
+/// which is the case a meter on the input alone cannot tell from a live one.
+struct Muted;
+
+impl AudioPath for Muted {
+    fn prepare(&mut self, _config: StreamConfig) {}
+
+    fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
 
     fn apply(&mut self, _command: Command) -> bool {
         false
@@ -561,4 +578,84 @@ fn neither_callback_allocates_when_the_ring_is_full_or_dry() {
     let after = allocations();
 
     assert_eq!(after, before);
+}
+
+#[test]
+fn a_boundary_that_has_played_nothing_meters_silence() {
+    let (_input, output) = unstarted(config(1, 1), 0);
+
+    assert_eq!(output.metering().read(), Levels::SILENT);
+}
+
+#[test]
+fn the_played_meter_reads_what_the_path_played() {
+    let (mut input, mut output) = running(boundary(
+        config(1, 1),
+        ChannelSelection::all(1),
+        ChannelSelection::all(1),
+        0,
+        Tone(0.5),
+    ));
+
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut [0.0; 2]);
+
+    assert_eq!(
+        output.metering().read(),
+        Levels {
+            peak: 0.5,
+            rms: 0.5
+        }
+    );
+}
+
+#[test]
+fn a_path_that_plays_nothing_meters_silence_under_a_loud_input() {
+    let (mut input, mut output) = running(boundary(
+        config(1, 1),
+        ChannelSelection::all(1),
+        ChannelSelection::all(1),
+        0,
+        Muted,
+    ));
+
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut [0.0; 2]);
+
+    assert_eq!(output.metering().read(), Levels::SILENT);
+}
+
+#[test]
+fn the_played_meter_is_taken_before_the_frames_are_spread() {
+    let (mut input, mut output) = running(boundary(
+        config(1, 2),
+        ChannelSelection::all(1),
+        channels(0, 1),
+        0,
+        Tone(1.0),
+    ));
+
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut [0.0; 4]);
+
+    assert_eq!(output.metering().read().rms, 1.0);
+}
+
+#[test]
+fn a_boundary_that_went_back_to_priming_meters_the_silence_it_plays() {
+    let (mut input, mut output) = running(boundary(
+        config(1, 1),
+        ChannelSelection::all(1),
+        ChannelSelection::all(1),
+        0,
+        Tone(1.0),
+    ));
+    let priming = input.priming();
+    input.capture(&[1.0, 1.0]);
+    output.render(&mut [0.0; 2]);
+
+    priming.restart();
+    output.render(&mut [0.0; 2]);
+
+    assert_eq!(output.metering().read(), Levels::SILENT);
 }

@@ -179,6 +179,16 @@ fn a_reader_sees_the_most_recently_published_block() {
 }
 
 #[test]
+fn publishing_silence_replaces_the_block_before_it() {
+    let (mut writer, reader) = whole_block();
+
+    writer.publish(&[1.0; 4]);
+    writer.silence();
+
+    assert_eq!(reader.read(), Levels::SILENT);
+}
+
+#[test]
 fn publishing_reports_what_it_published() {
     let (mut writer, reader) = whole_block();
 
