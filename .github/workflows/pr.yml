@@ -39,6 +39,15 @@ jobs:
             exit 1
           fi
 
+      # The body reaches main as the squashed commit message, so a break an
+      # agent put in for a 72-column diff lands in the history where nothing
+      # will re-flow it.
+      - name: unwrapped body
+        if: ${{ env.REVIEWABLE == 'true' }}
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$BODY" | scripts/check-pr-body.sh
+
       - name: no co-authors
         if: ${{ env.REVIEWABLE == 'true' }}
         env:
