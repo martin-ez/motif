@@ -311,7 +311,7 @@ fn halfway_past(beat: Duration, interval: Duration) -> Duration {
 
 const TAIL: Duration = Duration::from_millis(300);
 const LONGEST: Duration = Duration::from_secs(12);
-const SILENCE: u8 = 128;
+const SIGN_BIT: u8 = 0x80;
 const ACCENT_FREQUENCY: f64 = 60.0;
 const ACCENT_DECAY: f64 = 0.10;
 const ACCENT_LEVEL: f64 = 0.85;
@@ -357,7 +357,7 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
 }
 
 fn unsigned(sample: i8) -> u8 {
-    (i16::from(sample) + i16::from(SILENCE)) as u8
+    (sample as u8) ^ SIGN_BIT
 }
 
 fn frames(at: Duration) -> usize {

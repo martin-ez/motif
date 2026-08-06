@@ -401,6 +401,13 @@ fn a_wav_carries_one_byte_for_every_frame() {
 }
 
 #[test]
+fn every_stored_byte_decodes_back_to_the_sample_it_came_from() {
+    let fixture = named("steady-90-4-4");
+
+    assert_eq!(samples(&fixture.wav_bytes()), fixture.samples());
+}
+
+#[test]
 fn silence_is_stored_at_the_midpoint_of_the_unsigned_range() {
     let fixture = named("steady-90-4-4");
     let wav = fixture.wav_bytes();
