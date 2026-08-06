@@ -41,9 +41,13 @@ pub enum Texture {
         sharpness: f64,
         /// How many onsets a beat's span carries, evenly subdividing it.
         density: usize,
-        /// The share of beats that carry no onset at all.
+        /// Which share of the beats carry no onset at all.
         dropout: f64,
-        /// The share of beats whose onsets fall half a subdivision late.
+        /// Which share of the beats that do sound fall half a subdivision late.
+        ///
+        /// Counted over the beats left sounding rather than over all of them,
+        /// so that raising [`dropout`](Self::Percussion::dropout) does not
+        /// quietly take the syncopation away with it.
         syncopation: f64,
     },
     /// A chord to the bar, struck on every beat.

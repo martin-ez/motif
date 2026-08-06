@@ -179,17 +179,59 @@ fn dropping_every_beat_leaves_only_the_accents_that_mark_the_bars() {
     assert_eq!(accents(&fixture).len(), 4);
 }
 
-#[test]
-fn dropout_leaves_some_beats_carrying_no_onset_at_all() {
-    let fixture = synth::rendered("thinned", clicks(1, 0.5, 0.0));
-    let unsounded = fixture
+fn unsounded(fixture: &Fixture) -> usize {
+    fixture
         .beats()
         .iter()
         .filter(|beat| !fixture.onsets().iter().any(|onset| onset.at == beat.at))
-        .count();
+        .count()
+}
 
-    assert!(unsounded > 0, "every beat was sounded");
-    assert!(unsounded < fixture.beats().len(), "no beat was sounded");
+fn displaced(fixture: &Fixture) -> usize {
+    let beats: Vec<Duration> = fixture.beats().iter().map(|beat| beat.at).collect();
+
+    ticks(fixture)
+        .iter()
+        .filter(|at| !beats.contains(at))
+        .count()
+}
+
+#[test]
+fn a_dropout_of_a_half_silences_half_the_beats() {
+    let fixture = synth::rendered("half-quiet", clicks(1, 0.5, 0.0));
+
+    assert_eq!(unsounded(&fixture), fixture.beats().len() / 2);
+}
+
+#[test]
+fn a_syncopation_of_a_half_displaces_half_the_beats() {
+    let fixture = synth::rendered("half-late", clicks(1, 0.0, 0.5));
+
+    assert_eq!(displaced(&fixture), fixture.beats().len() / 2);
+}
+
+#[test]
+fn a_syncopation_of_a_quarter_displaces_a_quarter_of_them() {
+    let fixture = synth::rendered("quarter-late", clicks(1, 0.0, 0.25));
+
+    assert_eq!(displaced(&fixture), fixture.beats().len() / 4);
+}
+
+#[test]
+fn syncopation_is_counted_over_the_beats_that_still_sound() {
+    let fixture = synth::rendered("late-of-what-is-left", clicks(1, 0.5, 1.0));
+
+    assert_eq!(ticks(&fixture).len(), fixture.beats().len() / 2);
+    assert_eq!(displaced(&fixture), ticks(&fixture).len());
+}
+
+#[test]
+fn a_share_of_none_and_a_share_of_all_are_the_ends_of_the_same_scale() {
+    let none = synth::rendered("none-late", clicks(1, 0.0, 0.0));
+    let all = synth::rendered("all-late", clicks(1, 0.0, 1.0));
+
+    assert_eq!(displaced(&none), 0);
+    assert_eq!(displaced(&all), all.beats().len());
 }
 
 #[test]
@@ -339,6 +381,45 @@ fn no_drawn_sample_clips() {
             fixture.name()
         );
     }
+}
+
+const RAMP_GAIN: f64 = 1.4;
+
+#[test]
+fn a_drawn_ramp_reaches_a_tempo_a_fixed_share_above_the_one_it_leaves() {
+    let mut ramps = 0;
+
+    for fixture in synth::drawn(A_SEED, 24) {
+        let Drift::Ramp { to } = fixture.recipe().drift else {
+            continue;
+        };
+        ramps += 1;
+
+        assert!(
+            (to - fixture.recipe().tempo * RAMP_GAIN).abs() < 1e-9,
+            "{} ramps from {} to {to}",
+            fixture.name(),
+            fixture.recipe().tempo
+        );
+    }
+
+    assert!(ramps > 0, "no drawn fixture ramped");
+}
+
+#[test]
+fn a_drawn_rubato_strays_far_enough_to_be_scored_wrong() {
+    let mut strayed = 0;
+
+    for fixture in synth::drawn(A_SEED, 24) {
+        let Drift::Rubato { pull } = fixture.recipe().drift else {
+            continue;
+        };
+        strayed += 1;
+
+        assert!(pull > 0.070, "{} pulls only {pull}", fixture.name());
+    }
+
+    assert!(strayed > 0, "no drawn fixture strayed");
 }
 
 const LEVELS: [(Axis, usize); 7] = [

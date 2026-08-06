@@ -304,7 +304,7 @@ fn built(name: &str, description: &str, recipe: Recipe) -> Fixture {
         chords,
         notes,
         onsets,
-    } = sounded(&recipe, &beats, &mut Noise::from(seed));
+    } = sounded(&recipe, &beats);
     let samples = render(&onsets, seed, sharpness_of(&recipe.texture));
 
     Fixture {
@@ -338,14 +338,14 @@ fn grid_of(recipe: &Recipe) -> Vec<Beat> {
     }
 }
 
-fn sounded(recipe: &Recipe, beats: &[Beat], draw: &mut Noise) -> Content {
+fn sounded(recipe: &Recipe, beats: &[Beat]) -> Content {
     match recipe.texture {
         Texture::Percussion {
             density,
             dropout,
             syncopation,
             ..
-        } => percussive(struck_over(beats, density, dropout, syncopation, draw)),
+        } => percussive(struck_over(beats, density, dropout, syncopation)),
         Texture::Chords => one_chord_per_bar(beats),
         Texture::Line => a_monophonic_line(beats),
     }
@@ -642,14 +642,12 @@ fn on_the_sample_grid(seconds: f64) -> Duration {
     Duration::from_nanos(frame * 1_000_000_000 / u64::from(SAMPLE_RATE))
 }
 
-fn struck_over(
-    beats: &[Beat],
-    density: usize,
-    dropout: f64,
-    syncopation: f64,
-    draw: &mut Noise,
-) -> Vec<Onset> {
+fn struck_over(beats: &[Beat], density: usize, dropout: f64, syncopation: f64) -> Vec<Onset> {
     let spans = lasting(beats);
+    let unsounded = every_so_often(beats.len(), dropout);
+    let sounding = unsounded.iter().filter(|dropped| !**dropped).count();
+    let late = every_so_often(sounding, syncopation);
+    let mut struck = 0;
     let mut onsets = Vec::new();
 
     for (index, beat) in beats.iter().enumerate() {
@@ -659,15 +657,13 @@ fn struck_over(
                 voice: Voice::Accent,
             });
         }
-
-        let unsounded = draw.unit() < dropout;
-        let late = draw.unit() < syncopation;
-        if unsounded {
+        if unsounded[index] {
             continue;
         }
 
         let step = spans[index].as_secs_f64() / density as f64;
-        let shift = if late { step / 2.0 } else { 0.0 };
+        let shift = if late[struck] { step / 2.0 } else { 0.0 };
+        struck += 1;
         for subdivision in 0..density {
             let at = on_the_sample_grid(beat.at.as_secs_f64() + step * subdivision as f64 + shift);
             if beat.is_downbeat && at == beat.at {
@@ -681,6 +677,22 @@ fn struck_over(
     }
 
     onsets
+}
+
+fn every_so_often(count: usize, share: f64) -> Vec<bool> {
+    let mut due = Vec::with_capacity(count);
+    let mut accumulated = 0.0;
+
+    for _ in 0..count {
+        accumulated += share;
+        let now = accumulated >= 1.0;
+        if now {
+            accumulated -= 1.0;
+        }
+        due.push(now);
+    }
+
+    due
 }
 
 const TAIL: Duration = Duration::from_millis(300);
