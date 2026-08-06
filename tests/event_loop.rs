@@ -5,15 +5,24 @@
 
 use std::time::{Duration, Instant};
 
-use motif::device::{Button, DeviceProfile};
+use motif::device::{Button, DeviceProfile, Encoder};
 use motif::ui::{
     App, Cell, ControlEvent, Controls, EVENTS_PER_FRAME, EventLoop, Flow, Frame, Legend,
-    NullRenderer, Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls,
+    NullRenderer, Panel, Region, RenderError, Renderer, ScriptedClock, ScriptedControls, Turn,
 };
 
 /// The edge of a key, which is drawn for every control whether the page answers
 /// it or not, so a picture of the panel can be told from anything else drawn.
 const KEY_EDGE: char = '┌';
+
+/// The edge of a key whose event has just been delivered, drawn nowhere on a
+/// panel every control of which is at rest.
+const MARKED_EDGE: char = '┃';
+
+/// How many frames that mark lasts, written out rather than read from the crate
+/// so that a change to the decay fails a test instead of retuning the frames
+/// these walk.
+const MARKED_FRAMES: usize = 3;
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
 
@@ -153,6 +162,46 @@ impl Renderer for Patient {
 
     fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
         self.screen.show_panel(panel)
+    }
+}
+
+/// A screen keeping every panel it is shown rather than only the last, so a
+/// test can watch a mark arrive and settle instead of seeing where it ended up.
+struct Recording {
+    panels: Vec<Panel>,
+    accepts: usize,
+}
+
+impl Recording {
+    fn accepting(frames: usize) -> Self {
+        Self {
+            panels: Vec::new(),
+            accepts: frames,
+        }
+    }
+
+    /// Whether anything on the panel shown on `frame` is marked, counting from
+    /// zero at the first frame of the run.
+    fn marked_on(&self, frame: usize) -> bool {
+        let shown = self.panels.get(frame).expect("the run drew this frame");
+
+        picture_of(shown).contains(MARKED_EDGE)
+    }
+}
+
+impl Renderer for Recording {
+    fn render(&mut self, _frame: &Frame) -> Result<(), RenderError> {
+        self.accepts = self
+            .accepts
+            .checked_sub(1)
+            .ok_or(RenderError::Unavailable)?;
+
+        Ok(())
+    }
+
+    fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
+        self.panels.push(panel.clone());
+        Ok(())
     }
 }
 
@@ -556,6 +605,72 @@ fn the_last_row_of_the_screen_is_the_page_s_to_draw_in() {
 
     let drawn = screen.rendered().expect("a frame was drawn");
     assert!(text_of(drawn).contains('#'));
+}
+
+fn recorded(events: impl IntoIterator<Item = ControlEvent>, frames: usize) -> Recording {
+    let mut app = Page::lasting(frames);
+    let mut controls = ScriptedControls::new(events);
+    let mut screen = Recording::accepting(FRAMES_ACCEPTED);
+
+    still()
+        .run(&mut app, &mut controls, &mut screen)
+        .expect("the screen accepts the frames this run draws");
+
+    screen
+}
+
+#[test]
+fn a_control_marks_its_key_on_the_frame_its_event_is_delivered() {
+    let screen = recorded([pressed(Button::Play)], MARKED_FRAMES + 2);
+
+    assert!(screen.marked_on(0));
+}
+
+#[test]
+fn a_mark_stays_up_for_every_frame_of_the_decay() {
+    let screen = recorded([pressed(Button::Play)], MARKED_FRAMES + 2);
+
+    for frame in 0..MARKED_FRAMES {
+        assert!(screen.marked_on(frame), "settled on frame {frame}");
+    }
+}
+
+#[test]
+fn a_mark_settles_back_the_stated_number_of_frames_later() {
+    let screen = recorded([pressed(Button::Play)], MARKED_FRAMES + 2);
+
+    assert!(!screen.marked_on(MARKED_FRAMES));
+}
+
+#[test]
+fn a_control_the_page_does_not_answer_marks_all_the_same() {
+    let screen = recorded([pressed(Button::Record)], MARKED_FRAMES + 2);
+
+    assert!(screen.marked_on(0));
+}
+
+#[test]
+fn an_encoder_turned_marks_the_panel_as_a_press_does() {
+    let screen = recorded(
+        [ControlEvent::Turned {
+            encoder: Encoder::Main,
+            turn: Turn::Clockwise,
+            shifted: false,
+        }],
+        MARKED_FRAMES + 2,
+    );
+
+    assert!(screen.marked_on(0));
+    assert!(!screen.marked_on(MARKED_FRAMES));
+}
+
+#[test]
+fn a_run_nobody_touches_marks_nothing() {
+    let screen = recorded([], MARKED_FRAMES + 2);
+
+    for frame in 0..MARKED_FRAMES {
+        assert!(!screen.marked_on(frame), "marked on frame {frame}");
+    }
 }
 
 #[test]
