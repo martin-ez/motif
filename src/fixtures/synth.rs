@@ -58,7 +58,7 @@ pub struct Fixture {
     description: &'static str,
     beats: Vec<Beat>,
     onsets: Vec<Onset>,
-    samples: Vec<i16>,
+    samples: Vec<i8>,
 }
 
 impl Fixture {
@@ -83,13 +83,22 @@ impl Fixture {
     }
 
     /// The rendered audio, one mono sample per frame at [`SAMPLE_RATE`].
-    pub fn samples(&self) -> &[i16] {
+    ///
+    /// Eight bits: quantisation noise lands around -42 dBFS against these
+    /// near-full-scale clicks, far under what an onset envelope resolves. At
+    /// the 8 KB per second that leaves, the 512 KiB the set is held under is
+    /// about a minute of audio, so rendering refuses a fixture over twelve
+    /// seconds long.
+    pub fn samples(&self) -> &[i8] {
         &self.samples
     }
 
-    /// The audio as a canonical 16-bit mono PCM WAV file.
+    /// The audio as a canonical 8-bit mono PCM WAV file.
+    ///
+    /// Eight-bit RIFF samples are unsigned, so silence is stored at 128 rather
+    /// than at zero.
     pub fn wav_bytes(&self) -> Vec<u8> {
-        let data = self.samples.len() * size_of::<i16>();
+        let data = self.samples.len();
         let mut wav = Vec::with_capacity(44 + data);
 
         wav.extend_from_slice(b"RIFF");
@@ -99,13 +108,13 @@ impl Fixture {
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
-        wav.extend_from_slice(&(SAMPLE_RATE * 2).to_le_bytes());
-        wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&(data as u32).to_le_bytes());
         for sample in &self.samples {
-            wav.extend_from_slice(&sample.to_le_bytes());
+            wav.push(unsigned(*sample));
         }
 
         wav
@@ -135,29 +144,29 @@ impl Fixture {
 /// the waltz denies that a bar is four beats, the ramp and rubato passage deny
 /// that a tempo is a number, the syncopated case that a sound implies a beat.
 ///
-/// The rubato passage pulls 130 ms against its pulse — more than the +/-70 ms
+/// The rubato passage pulls 130 ms against its pulse — past the +/-70 ms
 /// scoring window — so a steady-tempo tracker is measurably wrong, not lucky.
 ///
-/// At 16 KB of PCM per second, the 512 KiB the set is held under is about half
-/// a minute of audio, so rendering rejects a fixture over ten seconds long.
+/// Four bars each is what the harness's resolution rests on: one misread bar
+/// moves its aggregate by a twenty-eighth rather than a fourteenth.
 pub fn set() -> Vec<Fixture> {
     vec![
         rendered(
             "steady-90-4-4",
             "4/4 at 90 BPM",
-            steady(90.0, 4, 2),
+            steady(90.0, 4, 4),
             on_every_beat,
         ),
         rendered(
             "steady-120-4-4",
             "4/4 at 120 BPM",
-            steady(120.0, 4, 2),
+            steady(120.0, 4, 4),
             on_every_beat,
         ),
         rendered(
             "steady-150-4-4",
             "4/4 at 150 BPM",
-            steady(150.0, 4, 2),
+            steady(150.0, 4, 4),
             on_every_beat,
         ),
         rendered(
@@ -169,19 +178,19 @@ pub fn set() -> Vec<Fixture> {
         rendered(
             "ramp-100-140-4-4",
             "4/4 accelerating from 100 to 140 BPM",
-            ramp(100.0, 140.0, 4, 2),
+            ramp(100.0, 140.0, 4, 4),
             on_every_beat,
         ),
         rendered(
             "rubato-110-4-4",
             "4/4 around 110 BPM, pushing and pulling against the pulse",
-            rubato(110.0, 4, 2),
+            rubato(110.0, 4, 4),
             on_every_beat,
         ),
         rendered(
             "syncopated-120-4-4",
             "4/4 at 120 BPM with the sounds mostly between the beats",
-            steady(120.0, 4, 2),
+            steady(120.0, 4, 4),
             off_the_beat,
         ),
     ]
@@ -301,7 +310,8 @@ fn halfway_past(beat: Duration, interval: Duration) -> Duration {
 }
 
 const TAIL: Duration = Duration::from_millis(300);
-const LONGEST: Duration = Duration::from_secs(10);
+const LONGEST: Duration = Duration::from_secs(12);
+const SILENCE: u8 = 128;
 const ACCENT_FREQUENCY: f64 = 60.0;
 const ACCENT_DECAY: f64 = 0.10;
 const ACCENT_LEVEL: f64 = 0.85;
@@ -310,7 +320,7 @@ const TRANSIENT_LEVEL: f64 = 0.30;
 const TICK_DECAY: f64 = 0.030;
 const TICK_LEVEL: f64 = 0.55;
 
-fn render(onsets: &[Onset], seed: u32) -> Vec<i16> {
+fn render(onsets: &[Onset], seed: u32) -> Vec<i8> {
     let last = onsets
         .iter()
         .map(|onset| onset.at)
@@ -342,8 +352,12 @@ fn render(onsets: &[Onset], seed: u32) -> Vec<i16> {
 
     signal
         .into_iter()
-        .map(|frame| (frame.clamp(-1.0, 1.0) * f64::from(i16::MAX)) as i16)
+        .map(|frame| (frame.clamp(-1.0, 1.0) * f64::from(i8::MAX)) as i8)
         .collect()
+}
+
+fn unsigned(sample: i8) -> u8 {
+    (i16::from(sample) + i16::from(SILENCE)) as u8
 }
 
 fn frames(at: Duration) -> usize {
