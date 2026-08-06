@@ -23,11 +23,11 @@ wrapped_lines() {
 		function opens_block(s) {
 			return s ~ /^[[:space:]]*(#|>|\||<)/ ||
 			       s ~ /^[[:space:]]*([-*+]|[0-9]+[.)])[[:space:]]/ ||
-			       s ~ /^[[:space:]]*([-*_][[:space:]]*){3,}$/
+			       s ~ /^[[:space:]]*(-[[:space:]]*-|\*[[:space:]]*\*|_[[:space:]]*_)[-*_[:space:]]*$/
 		}
 		function ends_block(s) {
 			return s ~ /^[[:space:]]*(#|\||<)/ ||
-			       s ~ /^[[:space:]]*([-*_][[:space:]]*){3,}$/
+			       s ~ /^[[:space:]]*(-[[:space:]]*-|\*[[:space:]]*\*|_[[:space:]]*_)[-*_[:space:]]*$/
 		}
 		{
 			sub(/\r$/, "")
