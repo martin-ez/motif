@@ -1709,17 +1709,25 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # `dep <n> --child C` parents C under n, so n is the number that has to be
   # open -- not the one the flag names.
-  rc=0; out="$(cmd_dep "$A" --child "$K" 2>&1 >/dev/null)" || rc=$?
+  rc=0; out="$( ( cmd_dep "$A" --child "$K" ) 2>&1 >/dev/null )" || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "dep refuses closed #$A as a parent (got $rc)"
   rc=0; printf '%s' "$out" | grep -q "#$A is CLOSED" || rc=1
   st_assert "$rc" "dep's refusal says #$A is closed"
   rc=0; AS_JSON=1 cmd_show "$K" | jq -e --argjson z "$Z" '.parent.num == $z' >/dev/null || rc=1
   st_assert "$rc" "dep writes nothing when the parent is closed: #$K still under #$Z"
 
-  rc=0; cmd_dep "$J" --child "$K" >/dev/null || rc=$?
+  rc=0; ( cmd_dep "$J" --child "$K" ) >/dev/null || rc=$?
   st_assert "$rc" "dep still moves #$K under open #$J"
   rc=0; AS_JSON=1 cmd_show "$K" | jq -e --argjson j "$J" '.parent.num == $j' >/dev/null || rc=1
   st_assert "$rc" "show reports #$K under its new parent #$J"
+
+  # The half that must NOT fire. A closed issue is a legitimate blocker -- that
+  # is what finished work looks like -- so the check is on `--child` alone, not
+  # on `n`. Hoisted above the argument loop, or keyed on `n` whatever the flag,
+  # it would refuse every closed blocker and every assertion above would still
+  # pass.
+  rc=0; ( cmd_dep "$K" --needs "$C" ) >/dev/null || rc=$?
+  st_assert "$rc" "dep still takes closed #$C as a blocker for #$K"
 
   # Between a draft pull request going up and a human merging it, the work is
   # finished and the issue is still held. "Leave it alone" and "there is nothing

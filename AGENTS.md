@@ -266,9 +266,9 @@ it, wire it, and go back to the task in hand.
 without one is gated by nothing and is startable ahead of the whole chain it
 belongs to. `add` refuses that and prints the chain, marking which epics are
 startable, so the work goes where it belongs rather than where it can start
-soonest. It must also be open — a closed parent gates nothing either — and
-`add` and `dep --child` both refuse one. An epic is where a chain starts, so
-it is the one thing filed as a root; that is what `--size l` means.
+soonest. The parent must also be open — a closed one gates nothing either —
+and `add` and `dep --child` both refuse it. An epic is where a chain starts,
+so it is the one thing filed as a root; that is what `--size l` means.
 
 The `next`, `epic`, `refine` and `file` skills in `.claude/skills/` carry the
 full procedure for taking one issue, running a whole epic, grooming and filing
