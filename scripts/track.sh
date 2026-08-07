@@ -191,30 +191,52 @@ state_init() {
   return 0
 }
 
+# Whether a recorded holder is one this run left behind, and so has to be broken
+# rather than waited on.
+#
+# What the lock records is the run, not the shell holding it: `$$` is the
+# invoking shell's pid inside a subshell, BASHPID is bash 4 and unset on the
+# macOS /bin/bash this is written for, and every tracker command reaches the
+# lock through a `$( )` or a `( )`. So a lock a subshell orphans names a process
+# that is still alive -- this one -- and the wait below would sit on it forever.
+# Nothing in a run holds the lock concurrently with anything else in it, so a
+# hold recorded against this pid is one no shell is still inside: reaching here
+# at all means LOCK_HELD is 0 and this shell is not the holder.
+lock_is_ours_to_break() { [ "$1" = "$$" ]; }
+
 lock_acquire() {
   [ "$LOCK_HELD" = 1 ] && return 0
   state_init
   mkdir -p "$STATE_DIR"
   local tries=0 holder=""
   until mkdir "$LOCK" 2>/dev/null; do
-    tries=$((tries + 1))
-    if [ "$tries" -gt 300 ]; then
-      # A long hold is normal: labels-init and selftest legitimately keep the
-      # lock for a minute across paced writes. Only break it once the recorded
-      # holder is gone, and reset the counter afterwards -- breaking on every
-      # subsequent tick would delete a live lock and let two callers hold it.
-      holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-      if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
-        note "waiting on live lock holder pid $holder …"
-      else
-        note "WARNING: breaking a lock whose holder (${holder:-unknown}) is gone"
-        rm -rf "$LOCK"
+    holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+    if lock_is_ours_to_break "$holder"; then
+      note "WARNING: breaking a lock this run left behind (pid $holder)"
+      rm -rf "$LOCK"
+    else
+      tries=$((tries + 1))
+      if [ "$tries" -gt 300 ]; then
+        # A long hold is normal: labels-init and selftest legitimately keep the
+        # lock for a minute across paced writes. Only break it once the recorded
+        # holder is gone, and reset the counter afterwards -- breaking on every
+        # subsequent tick would delete a live lock and let two callers hold it.
+        # An unreadable holder belongs here rather than above: it is most often
+        # the window between another run's mkdir and its stamp.
+        if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+          note "waiting on live lock holder pid $holder …"
+        else
+          note "WARNING: breaking a lock whose holder (${holder:-unknown}) is gone"
+          rm -rf "$LOCK"
+        fi
+        tries=0
       fi
-      tries=0
     fi
     sleep 0.2
   done
   LOCK_HELD=1
+  # The run's pid, which is all `$$` has ever been able to say -- see
+  # lock_is_ours_to_break for what reads it and why that is the useful identity.
   printf '%s' "$$" > "$LOCK/pid" 2>/dev/null || true
   return 0
 }
@@ -1641,6 +1663,34 @@ st_add() {
   return 0
 }
 
+# Whether lock_acquire takes a lock this run left behind rather than waiting on
+# it, against a scratch state directory so a parallel run's lock is never touched.
+#
+# Bounded, because the failure it asserts against is an endless wait: called
+# straight, a regression would hang the run this is meant to record one FAIL in.
+st_lock_recovers() {
+  local held_state="$STATE_DIR" held_lock="$LOCK" held_stamp="$STAMP"
+  local scratch watched waited=0 rc=0
+  scratch="$(mktemp -d)"
+  STATE_DIR="$scratch"; LOCK="$scratch/lock"; STAMP="$scratch/last-write"
+  mkdir -p "$LOCK"
+  printf '%s' "$$" > "$LOCK/pid"
+  ( LOCK_HELD=0; lock_acquire ) >/dev/null 2>&1 &
+  watched=$!
+  while kill -0 "$watched" 2>/dev/null && [ "$waited" -lt 50 ]; do
+    sleep 0.2
+    waited=$((waited + 1))
+  done
+  if kill -0 "$watched" 2>/dev/null; then
+    kill -9 "$watched" 2>/dev/null || true
+    rc=1
+  fi
+  wait "$watched" 2>/dev/null || true
+  STATE_DIR="$held_state"; LOCK="$held_lock"; STAMP="$held_stamp"
+  rm -rf "$scratch"
+  return "$rc"
+}
+
 # Files one throwaway issue under the marker of a second, imaginary run. What
 # cleanup has to leave alone is another run's work, and the only way to have any
 # without starting a second run is to file it under a second marker.
@@ -1720,6 +1770,19 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   # Without an explicit exit, bash runs the handler and then RESUMES, so a Ctrl-C
   # would delete the throwaway issues and carry on asserting against them.
   trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release; exit 130' INT TERM
+
+  # The write lock, before anything that takes it. These need no issues and no
+  # network: what they assert is the reading of a pid the lock has always
+  # recorded, and a run that waits on that pid waits on itself.
+  note "  lock recovery …"
+  rc=0; lock_is_ours_to_break "$$" || rc=$?
+  st_assert "$rc" "a lock recorded against this run is one to break, not wait on"
+  rc=0; if lock_is_ours_to_break 1; then rc=1; fi
+  st_assert "$rc" "a lock recorded against another live process is waited on"
+  rc=0; if lock_is_ours_to_break ""; then rc=1; fi
+  st_assert "$rc" "a lock with no readable holder is left to the delayed path"
+  rc=0; st_lock_recovers || rc=$?
+  st_assert "$rc" "lock_acquire takes a lock this run left behind"
 
   note "  creating throwaway issues …"
   head="$(st_chain_head)"
