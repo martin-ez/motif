@@ -213,9 +213,17 @@ scripts/track.sh show 7           # one issue in full, before you write any code
 scripts/track.sh start 7          # claims it, then branches onto it; exit 2 = taken
 scripts/track.sh mine             # claims under this checkout's id, yours or not
 scripts/track.sh find spsc        # match titles, open and closed, before filing
+scripts/track.sh submit 7         # built; now waiting on a human merge
 scripts/track.sh done 7 -m "..."  # closes it, prints what that unblocked
 scripts/track.sh --help           # add, dep, note, claim, release, blocked, graph, doctor
 ```
+
+**Say when the draft goes up.** `submit <n>` is what separates work waiting on a
+person from work an agent is still writing, and those want opposite responses.
+The claim stays either way — finished work must not be offered back to `ready`
+for a second agent to build again — so nothing downstream moves, and `show`,
+`plan`, `mine` and `doctor` stop reading a queued merge as a session that
+stalled. Merging or closing the pull request clears it.
 
 Take the top row of `ready`; it sorts by how much each item unblocks, so the top
 row is the one that frees the most work. **Claim it before you write any code** —

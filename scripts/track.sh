@@ -41,6 +41,7 @@ scripts/track.sh <command> [args] [--json]
   start <n>                   claim, then branch from main onto it
   claim <n> [--force]         take an issue (adds wip + a claim marker)
   mine                        issues this agent currently holds
+  submit <n> [--pr N] [--force]  built, now waiting on a human merge
   release <n> [--force]       give it back
   done <n> [-m MSG] [--force] close it, report what it unblocked
   add -t TITLE --area A --kind K --size S [-b BODY|-F FILE]
@@ -70,6 +71,7 @@ size:s|ededed|Well under one agent session
 size:m|d0d7de|About one agent session
 size:l|afb8c1|Too big to claim — split into sub-issues first
 wip|fbca04|Claimed by an agent. Set by track.sh claim only.
+review|d4c5f9|Built and waiting on a human merge. Set by track.sh submit only.
 track:selftest|c5def5|Throwaway issue from track.sh selftest. Safe to delete.'
 
 label_names() { printf '%s\n' "$LABEL_SPEC" | awk -F'|' 'NF{print $1}'; }
@@ -258,6 +260,7 @@ def shape: {
   kind:      _lbl("kind:"),
   size:      _lbl("size:"),
   wip:       _has("wip"),
+  review:    _has("review"),
   blockers:  (_openblk  | map(.number)),
   done_deps: (_doneblk  | map(.number)),
   unblocks:  (_openbing | map(.number)),
@@ -318,6 +321,13 @@ def top_blockers:
   [.[] | select(is_blocked) | .blockers[]]
   | group_by(.) | map({num: .[0], n: length}) | sort_by(-.n, .num);
 
+# A reader brings one question to an epic: what do I do about this? Its children
+# answer in the order the answers apply -- take it, someone is on it, someone has
+# to merge it, nothing to do here yet. Number order answers nothing and buries
+# the only startable row among the ones nobody can act on.
+def board_order:
+  sort_by({"ready": 0, "claimed": 1, "review": 2, "waiting": 3}[.stance] // 4, .num);
+
 # The plan is a chain, not a forest: epics come off each other in one order, so
 # peeling the ones nothing holds up, over and over, is the order to read them
 # in. Only edges between epics count -- an epic waiting on a loose bug is still
@@ -352,6 +362,21 @@ def holder:
   (markers | last) as $m
   | if $m == null or $m.ev != "claim" then null
     else {agent: $m.agent, since: $m.at} end;
+
+# Read only under the label, which is what a release or a merge clears. A marker
+# outlives the claim cycle that wrote it, so an issue released and taken again
+# would otherwise come back already in review.
+def submitted:
+  (((.labels // []) | map(.name) | index("review")) != null) as $lbl
+  | ( [ (.comments // [])[]
+        | (.body | capture("<!-- track:submit agent=(?<agent>[^ ]+)( pr=(?<pr>[0-9]+))? -->")?)
+          as $m
+        | select($m != null)
+        | {agent: $m.agent, pr: $m.pr, at: .createdAt} ] | last ) as $s
+  | if ($lbl | not) or $s == null then null
+    else {agent: $s.agent,
+          pr: (if $s.pr == null then null else ($s.pr | tonumber) end),
+          since: $s.at} end;
 '
 
 # ------------------------------------------------------------ read paths ----
@@ -391,7 +416,7 @@ claimed_issues() {
   local nums n
   nums="$(fetch_open | jq -r '.[] | select((.labels // []) | map(.name) | index("wip")) | .number')"
   for n in $nums; do
-    fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder}'
+    fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder, submit: submitted}'
   done
   return 0
 }
@@ -502,23 +527,27 @@ cmd_plan() {
     . as $open
     | epic_order
     | map(. as $e
+        | ( [ $open[] | select((.parent != null) and (.parent.num == $e.num)) ]
+            | sort_by(.num) ) as $kids
         | { num: $e.num, title: $e.title, area: $e.area,
             done: $e.subs.completed, of: $e.subs.total,
+            review: ([ $kids[] | select(.review) ] | length),
             waits: $e.blockers,
             current: ((($e.blockers | length) == 0) and ($e.gated_by == null)),
             children:
-              ( [ $open[] | select((.parent != null) and (.parent.num == $e.num)) ]
-                | sort_by(.num)
+              ( $kids
                 | map(. as $c
                       | { num: $c.num, size: $c.size, title: $c.title,
-                          stance: (if $c.wip then "claimed"
+                          stance: (if $c.review then "review"
+                                   elif $c.wip then "claimed"
                                    elif ($c | is_ready) then "ready"
                                    else "waiting" end),
                           waits: ((($c.blockers | map("#\(.)"))
                                    + (if ($c.gated_by != null)
                                          and (($c.blockers | index($c.gated_by)) == null)
                                       then ["via #\($c.gated_by)"] else [] end))
-                                  | join(" ")) }) ) })')"
+                                  | join(" ")) })
+                | board_order ) })')"
 
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
 
@@ -529,7 +558,8 @@ cmd_plan() {
          (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
          (.done | tostring), (.of | tostring),
          (.waits | map("#\(.)") | join(" ")),
-         (if .current then "yes" else "no" end) ] | @tsv),
+         (if .current then "yes" else "no" end),
+         (.review | tostring) ] | @tsv),
       ( if (.current or ($all == 1))
         then (.children[]
               | [ "C", (.num | tostring), (.size // "-"), .stance,
@@ -541,6 +571,8 @@ cmd_plan() {
         open_here = ($7 == "yes" || all == 1);
         mark = ($7 == "yes") ? "\342\226\270" : " ";
         prog = ($5 + 0 > 0) ? sprintf("%s/%s done", $4, $5) : "";
+        if ($8 + 0 > 0)
+          prog = prog ((prog == "") ? "" : ", ") $8 " in review";
         waits = ($6 == "") ? "" : sprintf("  waits on %s", $6);
         line = sprintf("%s #%-4s %-44s %-9s%s", mark, $2, $3, prog, waits);
         sub(/[ \t]+$/, "", line);
@@ -590,10 +622,12 @@ cmd_mine() {
   printf 'mine %s held in %s\n' "$n" "${where:-this checkout}"
   printf '%s' "$held" | jq -r --argjson m "$TITLE_MAX" '
     .[] | [ .num, (.size // ""), (.area // ""), .claim.since,
-            (if (.title | length) > $m then (.title[0:$m] + "…") else .title end) ]
+            (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
+            (if .review then "review" else "building" end),
+            (if (.submit.pr // null) != null then "  pr #\(.submit.pr)" else "" end) ]
         | @tsv' \
-  | awk -F'\t' '{ printf "  #%-4s %-1s  %-7s %s  since %s\n",
-                  $1, ($2 == "" ? "-" : $2), ($3 == "" ? "-" : $3), $5, $4 }'
+  | awk -F'\t' '{ printf "  #%-4s %-1s  %-7s %-8s %s  since %s%s\n",
+                  $1, ($2 == "" ? "-" : $2), ($3 == "" ? "-" : $3), $6, $5, $4, $7 }'
 
   # A claim held from another worktree looks exactly like one held by an agent
   # that crashed there, and nothing local can tell them apart. Saying where they
@@ -663,7 +697,7 @@ cmd_show() {
   [ $# -ge 1 ] || die "usage: track.sh show <n>"
   local payload
   payload="$(fetch_issue "${1#\#}" | jq "$JQ_LIB$JQ_CLAIM"'
-    shape + {body: (.body // ""), claim: holder}')"
+    shape + {body: (.body // ""), claim: holder, submit: submitted}')"
 
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
 
@@ -674,6 +708,11 @@ cmd_show() {
     line("title"; .title),
     line("url";   .url),
     (if .claim != null then "claim   \(.claim.agent)  since \(.claim.since)" else empty end),
+    (if .submit != null
+       then "review  built, waiting on a human merge" +
+            (if .submit.pr != null then " of #\(.submit.pr)" else "" end) +
+            "  since \(.submit.since)"
+       else empty end),
     (if .parent != null then "parent  #\(.parent.num) \(.parent.title)" else empty end),
     (if .subs.total > 0
        then "subs    \(.subs.completed)/\(.subs.total) done" +
@@ -791,12 +830,84 @@ Work on a branch, or set MOTIF_AGENT."
   # Not `|| true`: a silently failed removal leaves wip set forever, which
   # drops the issue out of `ready` with nothing anywhere reporting why.
   rc=0
-  gh_write issue edit "$n" --remove-label wip >/dev/null || rc=$?
+  gh_write issue edit "$n" --remove-label wip --remove-label review >/dev/null || rc=$?
   [ "$rc" -eq 0 ] || { lock_release; die "could not clear wip on #$n — it is still claimed."; }
   gh_write issue comment "$n" --body "<!-- track:release agent=$me -->
 Released by \`$me\`." >/dev/null || true
   lock_release
   printf 'released #%s\n' "$n"
+  return 0
+}
+
+# The state between a draft pull request going up and a human merging it. The
+# claim deliberately stays: dropping it would hand finished work back to `ready`
+# for a second agent to build again, and readiness is the one thing that must
+# not move here. What changes is *why* the issue is held -- the part nothing
+# outside the session holding it could see before.
+cmd_submit() {
+  local force=0 n="" pr="" me holder ids info state branch rc=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --pr)    [ $# -ge 2 ] || die "--pr needs a pull request number"; pr="${2#\#}"; shift 2 ;;
+      -*)      die "unknown flag for submit: $1" ;;
+      *)       n="${1#\#}"; shift ;;
+    esac
+  done
+  [ -n "$n" ] || die "usage: track.sh submit <n> [--pr N] [--force]"
+  if [ -n "$pr" ]; then
+    case "$pr" in *[!0-9]*) die "--pr takes a pull request number, not '$pr'." ;; esac
+  fi
+  ids="$(held_agent_ids)"
+
+  # `start` derives the branch and the claim marker from one string, so the
+  # branch is the agent id and the open pull request off it is the one whose
+  # merge settles this issue. Finding none is not an error: the state is the
+  # point, and the number only says where a human has to go.
+  if [ -z "$pr" ]; then
+    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [ -n "$branch" ] && [ "$branch" != "HEAD" ]; then
+      pr="$(gh pr list --head "$branch" --state open --limit 1 --json number \
+            --jq '.[0].number // ""' 2>/dev/null || true)"
+    fi
+  fi
+
+  lock_acquire
+  info="$(fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder}')"
+  state="$( printf '%s' "$info" | jq -r '.state')"
+  holder="$(printf '%s' "$info" | jq -r '.claim.agent // ""')"
+
+  me="$(acting_agent "$holder" "$ids")"
+  if [ -z "$me" ]; then
+    lock_release
+    die "#$n is held by ${holder:-nobody}, and no branch here carries that claim.
+Work on a branch, or set MOTIF_AGENT."
+  fi
+  [ "$state" = "OPEN" ] \
+    || { lock_release; die "#$n is $state — a merge has already settled it."; }
+  if [ "$holder" != "$me" ] && [ "$force" = 0 ]; then
+    lock_release
+    die "#$n is held by ${holder:-nobody}, not $me. Claim it first, or --force."
+  fi
+
+  rc=0
+  gh_write issue edit "$n" --add-label review >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] \
+    || { lock_release; die "could not label #$n — it still reads as work in progress."; }
+
+  # Rolled back the way `claim` rolls back a missing claim marker: a label with
+  # no marker behind it is a state nothing can attribute or explain.
+  gh_write issue comment "$n" --body "<!-- track:submit agent=$me${pr:+ pr=$pr} -->
+Built by \`$me\`, waiting on a human merge${pr:+ of #$pr}." >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    gh_write issue edit "$n" --remove-label review >/dev/null 2>&1 || true
+    lock_release
+    die "could not record the submit marker on #$n — the label has been rolled back."
+  fi
+  lock_release
+
+  printf 'submitted #%s%s\n' "$n" "${pr:+  waiting on a merge of #$pr}"
+  [ -n "$pr" ] || note "note: no open pull request off this branch — recorded without one."
   return 0
 }
 
@@ -836,7 +947,7 @@ Work on a branch, or set MOTIF_AGENT."
     die "#$n is held by ${holder:-nobody}, not $me. Claim it first, or --force."
   fi
 
-  gh_write issue edit "$n" --remove-label wip >/dev/null 2>&1 || true
+  gh_write issue edit "$n" --remove-label wip --remove-label review >/dev/null 2>&1 || true
   gh_write issue comment "$n" --body "<!-- track:done agent=$me -->
 ${msg:-Completed by \`$me\`.}" >/dev/null || true
   rc=0
@@ -1101,7 +1212,7 @@ ver_ge() {   # ver_ge 2.97.0 2.94.0  — `sort -V` is not reliable on BSD
 
 cmd_doctor() {
   local ghv st who scopes repo nwo issues have missing L me cyc total
-  local stale c num who2 since at age
+  local stale waiting c num who2 since at age
   [ "$AS_JSON" = 1 ] || printf 'doctor\n'
 
   if command -v jq >/dev/null 2>&1; then chk ok jq "$(jq --version)"
@@ -1162,11 +1273,16 @@ cmd_doctor() {
   # It is a warning and never a failure: a slow task and a dead one look
   # identical from here, and only a human can tell them apart.
   stale=""
+  waiting=""
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     num="$(  printf '%s' "$c" | jq -r '.num')"
     who2="$( printf '%s' "$c" | jq -r '.claim.agent // ""')"
     since="$(printf '%s' "$c" | jq -r '.claim.since // ""')"
+    if [ "$(printf '%s' "$c" | jq -r '.review')" = "true" ]; then
+      waiting="$waiting #$num"
+      continue
+    fi
     [ -n "$since" ] || continue
     at="$(iso_epoch "$since")"
     [ "$at" -gt 0 ] || continue
@@ -1176,6 +1292,10 @@ cmd_doctor() {
   if [ -n "$stale" ]; then
     chk warn claims "stale:$stale — release with: scripts/track.sh release <n> --force"
   else chk ok claims "no claim older than ${STALE_HOURS}h"; fi
+
+  if [ -n "$waiting" ]; then
+    chk ok merges "built, waiting on a human merge:$waiting"
+  else chk ok merges "nothing waiting on a merge"; fi
 
   if [ "$AS_JSON" = 1 ]; then
     printf '%s' "$DOC_JSON" | jq -c --argjson f "$DOC_FAIL" '{checks: ., failed: $f}'
@@ -1238,7 +1358,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M N R out rc loc adv dt bn ob scratch ids
+  local t0 A B C D E F G H I J K L M N P R S T U V out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1459,6 +1579,74 @@ Re-run with:  scripts/track.sh selftest --yes"
     any(.num == $n and (.children | any(.num == $r and .stance == "waiting")))' >/dev/null || rc=1
   st_assert "$rc" "plan carries #$R under #$N as waiting on its gated epic"
 
+  # Between a draft pull request going up and a human merging it, the work is
+  # finished and the issue is still held. "Leave it alone" and "there is nothing
+  # left to do here" are opposite answers, so they must not read the same.
+  P="$(st_num "$(AS_JSON=0 cmd_add -t "selftest review epic" --area infra --kind chore --size l --selftest)")"
+  S="$(st_num "$(AS_JSON=0 cmd_add -t "selftest submitted child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
+  T="$(st_num "$(AS_JSON=0 cmd_add -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$P" --blocked-by "$S" --selftest)")"
+  U="$(st_num "$(AS_JSON=0 cmd_add -t "selftest ready child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
+  V="$(st_num "$(AS_JSON=0 cmd_add -t "selftest claimed child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
+  MOTIF_AGENT=selftest-1 cmd_claim "$S" >/dev/null
+  MOTIF_AGENT=selftest-2 cmd_claim "$V" >/dev/null
+  rc=0; MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 >/dev/null || rc=$?
+  st_assert "$rc" "submit puts #$S into review"
+
+  rc=0; AS_JSON=1 cmd_show "$S" \
+    | jq -e '.review and .wip and .submit.pr == 4242' >/dev/null || rc=1
+  st_assert "$rc" "show reports #$S in review on #4242, and still claimed"
+
+  # Work is unblocked when its blocker reaches main, not when a draft exists.
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$T" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "ready still excludes #$T behind submitted #$S"
+
+  rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$T" --argjson s "$S" \
+      'any(.num == $n and (.blockers | index($s) != null))' >/dev/null || rc=1
+  st_assert "$rc" "blocked still lists #$T <- #$S"
+
+  out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)"
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$S" \
+      'any(.num == $n and .review)' >/dev/null || rc=1
+  st_assert "$rc" "mine separates submitted #$S from work still being built"
+
+  out="$(AS_JSON=1 cmd_plan)"
+  rc=0; printf '%s' "$out" | jq -e --argjson p "$P" --argjson s "$S" '
+    any(.num == $p and (.children | any(.num == $s and .stance == "review")))' >/dev/null || rc=1
+  st_assert "$rc" "plan carries #$S under #$P as in review"
+
+  rc=0; printf '%s' "$out" \
+    | jq -e --argjson p "$P" --argjson s "$S" --argjson t "$T" \
+           --argjson u "$U" --argjson v "$V" '
+        any(.num == $p and ([.children[].num] == [$u, $v, $s, $t]))' >/dev/null || rc=1
+  st_assert "$rc" "plan boards #$P ready, claimed, review, waiting — not by number"
+
+  # An epic reading n/n done while nothing has reached main is the tracker
+  # asserting exactly what `next` forbids an agent from asserting.
+  rc=0; printf '%s' "$out" | jq -e --argjson p "$P" \
+      'any(.num == $p and .review == 1 and .done == 0)' >/dev/null || rc=1
+  st_assert "$rc" "plan counts #$S in review rather than done"
+
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_submit "$T" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "submit refuses #$T, which nobody holds (got $rc)"
+
+  MOTIF_AGENT=selftest-1 cmd_release "$S" >/dev/null
+  rc=0; AS_JSON=1 cmd_show "$S" | jq -e '(.review | not) and (.wip | not)' >/dev/null || rc=1
+  st_assert "$rc" "release clears review from #$S"
+
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$S" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "release returns submitted #$S to ready"
+
+  MOTIF_AGENT=selftest-1 cmd_claim  "$S" >/dev/null
+  MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 >/dev/null
+  MOTIF_AGENT=selftest-1 cmd_done   "$S" >/dev/null
+  rc=0; AS_JSON=1 cmd_show "$S" \
+    | jq -e '.state == "CLOSED" and (.review | not)' >/dev/null || rc=1
+  st_assert "$rc" "done clears review and closes #$S"
+
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "submit refuses closed #$S (got $rc)"
+
   # A whitespace agent id would produce an unmatchable claim marker.
   rc=0; ( MOTIF_AGENT="bad id" cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "claim rejects a whitespace agent id (got $rc)"
@@ -1578,6 +1766,7 @@ case "$CMD" in
   start)        cmd_start "$@" ;;
   claim)        cmd_claim "$@" ;;
   mine)         cmd_mine "$@" ;;
+  submit)       cmd_submit "$@" ;;
   release)      cmd_release "$@" ;;
   done)         cmd_done "$@" ;;
   add)          cmd_add "$@" ;;
