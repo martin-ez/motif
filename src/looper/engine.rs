@@ -12,18 +12,16 @@
 //! into are both allocated in setup, and a block is a fixed number of passes
 //! over buffers that are already there.
 
-use crate::audio::{AudioPath, Command, StreamConfig};
+use crate::audio::{AudioPath, Command, Gain, StreamConfig};
 use crate::device::AudioProfile;
 
 use super::{LoopBuffer, LoopPosition, PositionWriter, TakeWriter, Transport, WaveformWriter};
-
-const UNITY_GAIN: f32 = 1.0;
 
 /// The loop, and what a block of input makes of it.
 ///
 /// Record captures the input, overdub layers over what is there, and play runs
 /// the loop under the live input; a player reaches all three over the command
-/// queue. Gain scales the input ahead of all of it, and mute silences the
+/// queue. A [`Gain`] ramps the input ahead of all of it, and mute silences the
 /// output alone — a muted take is still recorded.
 ///
 /// A layer is recorded after the loop is played, so the input is heard once
@@ -62,7 +60,7 @@ pub struct LoopEngine {
     transport: Transport,
     playhead: usize,
     layer_open: bool,
-    gain: f32,
+    gain: Gain,
     muted: bool,
 }
 
@@ -85,6 +83,8 @@ impl LoopEngine {
     ) -> Self {
         let block = profile.block_size as usize;
         assert!(block > 0, "an engine renders nothing block by block");
+        let mut gain = Gain::unity();
+        gain.prepare(profile.sample_rate);
 
         Self {
             buffer: LoopBuffer::for_profile(profile),
@@ -95,7 +95,7 @@ impl LoopEngine {
             transport: Transport::default(),
             playhead: 0,
             layer_open: true,
-            gain: UNITY_GAIN,
+            gain,
             muted: false,
         }
     }
@@ -132,9 +132,8 @@ impl LoopEngine {
 
     fn mix_block(&mut self, captured: &[f32], playing: &mut [f32]) {
         let frames = captured.len();
-        for (level, sample) in self.gained[..frames].iter_mut().zip(captured) {
-            *level = sample * self.gain;
-        }
+        self.gained[..frames].copy_from_slice(captured);
+        self.gain.apply(&mut self.gained[..frames]);
         let gained = &self.gained[..frames];
 
         if self.transport.plays_loop() {
@@ -172,7 +171,8 @@ fn frame_count(frames: usize) -> u32 {
 }
 
 impl AudioPath for LoopEngine {
-    /// Nothing to prepare: the loop and the scratch are sized from the profile
+    /// Spreads the gain's ramp over the rate the device granted, which is all
+    /// there is to prepare: the loop and the scratch are sized from the profile
     /// the engine was built with, and what the device granted reaches the block
     /// as the frames it was handed rather than as a number stated up front.
     ///
@@ -180,7 +180,9 @@ impl AudioPath for LoopEngine {
     /// [`StreamConfig`] states is not a bound on the block a callback gets. A
     /// longer one is worked in chunks, and a shorter one takes a smaller share
     /// of the take crossing.
-    fn prepare(&mut self, _config: StreamConfig) {}
+    fn prepare(&mut self, config: StreamConfig) {
+        self.gain.prepare(config.sample_rate);
+    }
 
     /// Plays the loop under the player's input, and publishes the playhead the
     /// block ended on.
@@ -211,7 +213,7 @@ impl AudioPath for LoopEngine {
         match command {
             Command::SetTransport(transport) => self.move_to(transport),
             Command::SetMuted(muted) => self.muted = muted,
-            Command::SetGain(gain) => self.gain = gain,
+            Command::SetGain(gain) => self.gain.set_target(gain),
             Command::Undo => {
                 if self.buffer.undo() {
                     self.layer_open = false;

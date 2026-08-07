@@ -16,7 +16,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
-use motif::audio::{AudioPath, Command, CommandSender, Commanded, command_channel};
+use motif::audio::{
+    AudioPath, Command, CommandSender, Commanded, Gain, StreamConfig, command_channel,
+};
 use motif::device::AudioProfile;
 use motif::looper::{
     LoopBuffer, LoopEngine, PositionReader, TakeReader, TakeWriter, Transport, WaveformReader,
@@ -90,6 +92,42 @@ fn eight_frame_profile() -> AudioProfile {
 ///
 /// A share of one frame is the floor, so a loop any shorter than this crosses
 /// in the same blocks whatever it was handed.
+/// A profile whose ten milliseconds of ramp is forty frames, where the
+/// eight-frame profile's is under one and a level change arrives in a single
+/// frame.
+fn ramping_profile() -> AudioProfile {
+    AudioProfile {
+        sample_rate: 4_000,
+        block_size: 16,
+        max_loop_seconds: 1,
+    }
+}
+
+/// Frames to hold a level change over: longer than `ramping_profile`'s ramp, so
+/// the change has arrived by the last of them, and several blocks' worth, so a
+/// ramp that restarted at a block boundary would not reach it.
+const RAMPING_FRAMES: usize = 64;
+
+/// The largest step `ramping_profile`'s ramp may take between two frames, with
+/// room for what a linear walk accumulates.
+///
+/// Pinned rather than derived from `Gain::RAMP` and the profile's rate, which a
+/// mutant is free to move. The change the level makes is twenty-five times this
+/// if nothing spreads it.
+const LARGEST_STEP: f32 = 0.03;
+
+/// The stream a device granting `ramping_profile` would report.
+fn ramping_config() -> StreamConfig {
+    let profile = ramping_profile();
+
+    StreamConfig {
+        sample_rate: profile.sample_rate,
+        block_size: profile.block_size,
+        input_channels: 1,
+        output_channels: 1,
+    }
+}
+
 fn scaling_profile() -> AudioProfile {
     AudioProfile {
         sample_rate: 128,
@@ -106,18 +144,19 @@ fn crossing() -> TakeWriter {
 /// An engine over an eight-frame loop, with the two ends a player reaches it
 /// through.
 fn engine() -> (Commanded<LoopEngine>, CommandSender, PositionReader) {
+    engine_at(eight_frame_profile())
+}
+
+/// An engine over `profile`'s longest loop, with the two ends a player reaches
+/// it through.
+fn engine_at(profile: AudioProfile) -> (Commanded<LoopEngine>, CommandSender, PositionReader) {
     let (sender, receiver) = command_channel(8);
     let (writer, reader) = position_meter();
 
     (
         Commanded::new(
             receiver,
-            LoopEngine::new(
-                eight_frame_profile(),
-                writer,
-                waveform_meter().0,
-                crossing(),
-            ),
+            LoopEngine::new(profile, writer, waveform_meter().0, take_handoff(profile).0),
         ),
         sender,
         reader,
@@ -183,6 +222,38 @@ fn played(engine: &mut Commanded<LoopEngine>, captured: &[f32]) -> Vec<f32> {
 /// Render one block of silence `frames` long and return what the engine played.
 fn heard(engine: &mut Commanded<LoopEngine>, frames: usize) -> Vec<f32> {
     played(engine, &vec![0.0; frames])
+}
+
+/// Render the frame a queued level change is walked over.
+///
+/// Ten milliseconds of ramp is under a frame at `eight_frame_profile`'s rate,
+/// so one frame is the whole of it. A level read off the block that queued it
+/// would be the ramp rather than the level.
+fn settle(engine: &mut Commanded<LoopEngine>) {
+    heard(engine, 1);
+}
+
+/// Hold unity over a frame, ask for `target`, and return every frame mixed
+/// across the two blocks — the seam between them, where a level that does not
+/// ramp lands in one step, included.
+fn across_a_level_change(
+    engine: &mut Commanded<LoopEngine>,
+    sender: &mut CommandSender,
+    target: f32,
+) -> Vec<f32> {
+    let held = played(engine, &[1.0]);
+    press(sender, Command::SetGain(target));
+    let changed = played(engine, &[1.0; RAMPING_FRAMES]);
+
+    held.into_iter().chain(changed).collect()
+}
+
+/// The largest a level moved between two frames of `mixed`.
+fn largest_step(mixed: &[f32]) -> f32 {
+    mixed
+        .windows(2)
+        .map(|pair| (pair[0] - pair[1]).abs())
+        .fold(0.0, f32::max)
 }
 
 /// Play on the odd block and stop on the even one, as a player flicking
@@ -666,9 +737,59 @@ fn gain_scales_the_input_that_reaches_the_loop() {
     let (mut engine, mut sender, _position) = engine();
 
     press(&mut sender, Command::SetGain(0.5));
+    settle(&mut engine);
     press(&mut sender, Command::SetTransport(Transport::Recording));
 
     assert_eq!(played(&mut engine, &[0.5, 1.0]), [0.25, 0.5]);
+}
+
+#[test]
+fn a_level_change_reaches_the_mixed_block_a_step_at_a_time() {
+    let (mut engine, mut sender, _position) = engine_at(ramping_profile());
+
+    let mixed = across_a_level_change(&mut engine, &mut sender, 0.25);
+
+    assert!(
+        largest_step(&mixed) <= LARGEST_STEP,
+        "the level stepped by {}",
+        largest_step(&mixed)
+    );
+    assert_eq!(mixed[RAMPING_FRAMES], 0.25);
+}
+
+#[test]
+fn a_level_change_walks_the_ramp_the_device_granted() {
+    let (mut engine, mut sender, _position) = engine();
+    engine.prepare(ramping_config());
+
+    let mixed = across_a_level_change(&mut engine, &mut sender, 0.25);
+
+    assert!(
+        largest_step(&mixed) <= LARGEST_STEP,
+        "the level stepped by {}",
+        largest_step(&mixed)
+    );
+    assert_eq!(mixed[RAMPING_FRAMES], 0.25);
+}
+
+#[test]
+fn a_gain_that_is_not_a_number_leaves_the_level_alone() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetGain(f32::NAN));
+    settle(&mut engine);
+
+    assert_eq!(played(&mut engine, &[0.25, 0.5]), [0.25, 0.5]);
+}
+
+#[test]
+fn a_gain_past_the_ceiling_is_held_at_it() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetGain(Gain::CEILING + 1.0));
+    settle(&mut engine);
+
+    assert_eq!(played(&mut engine, &[1.0]), [Gain::CEILING]);
 }
 
 #[test]
@@ -794,6 +915,7 @@ fn the_engine_publishes_the_shape_of_what_it_recorded() {
 fn the_published_shape_is_of_the_input_the_gain_let_through() {
     let (mut engine, mut sender, shape) = engine_drawing();
     press(&mut sender, Command::SetGain(0.5));
+    settle(&mut engine);
     press(&mut sender, Command::SetTransport(Transport::Recording));
 
     played(&mut engine, &[1.0]);
