@@ -108,8 +108,8 @@ fn taken_whole(device: &AudioDevice) -> ChannelSelection {
 ///
 /// Five settings drawn as rows: the arrows move between them, and the arrows
 /// across or the encoder move the selected row's value. A value that moves is
-/// drawn at once and opened once it stands still, so walking a list opens only
-/// the device it comes to rest on.
+/// drawn at once, becomes a choice once it stands still, and is opened on the
+/// frame after that — so walking a list opens only what it comes to rest on.
 ///
 /// A choice the backend refuses leaves the previous one running and draws why,
 /// an interface unplugged since the list was drawn being ordinary rather than
@@ -144,6 +144,7 @@ pub struct AudioPage<B: AudioBackend, F> {
     row: usize,
     refused: Option<DeviceError>,
     settling: Option<Settling>,
+    replacing: Option<DeviceSelection>,
 }
 
 struct Settling {
@@ -173,6 +174,7 @@ where
             row: 0,
             refused: None,
             settling: None,
+            replacing: None,
         }
     }
 
@@ -237,14 +239,14 @@ where
         self.refused
     }
 
-    fn running(&self) -> DeviceSelection {
+    fn selection(&self) -> DeviceSelection {
         self.link.read(|held| held.selection().clone())
     }
 
     fn choice(&self) -> DeviceSelection {
         match &self.settling {
             Some(settling) => settling.chosen.clone(),
-            None => self.running(),
+            None => self.selection(),
         }
     }
 
@@ -266,9 +268,28 @@ where
         let Some(chosen) = self.stood_still() else {
             return;
         };
+        let replaced = self.selection();
 
-        if chosen != self.running() {
-            self.apply(chosen);
+        if chosen == replaced {
+            return;
+        }
+
+        self.replacing = Some(replaced);
+        self.link.change(|held| held.choose(chosen));
+    }
+
+    fn open(&mut self) {
+        let Some(replaced) = self.replacing.take() else {
+            return;
+        };
+        let chosen = self.selection();
+
+        match self.serve(chosen) {
+            Ok(()) => self.refused = None,
+            Err(error) => {
+                self.refused = Some(error);
+                let _restored = self.serve(replaced);
+            }
         }
     }
 
@@ -365,18 +386,6 @@ where
         })
     }
 
-    fn apply(&mut self, chosen: DeviceSelection) {
-        let running = self.running();
-
-        match self.serve(chosen) {
-            Ok(()) => self.refused = None,
-            Err(error) => {
-                self.refused = Some(error);
-                let _restored = self.serve(running);
-            }
-        }
-    }
-
     fn serve(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
         self.link.change(|held| held.select(selection))?;
         self.link.change(DeviceLink::start)
@@ -419,13 +428,18 @@ where
         }
     }
 
-    /// Draw the rows, opening a value that has stood still long enough.
+    /// Draw the rows, opening the choice the frame before settled on.
     ///
-    /// The settle is counted in frames because a page is reached once a frame
-    /// and has no clock. Three of them: an arrow held down repeats at about a
-    /// frame's interval, so a page that opened on the first still frame would
-    /// open every device the player walks past.
+    /// Two phases, never both for one choice in one frame: a value that stood
+    /// still becomes a choice the link reports as opening, and the next frame
+    /// opens it. A page cannot draw and then block, so the frame that says so
+    /// is the one before the stall rather than after it.
+    ///
+    /// Three still frames, counted rather than timed because a page has no
+    /// clock: an arrow held down repeats at about a frame's interval, so a page
+    /// settling on the first would open every device the player walks past.
     fn draw(&mut self, mut region: Region<'_>) {
+        self.open();
         self.settle();
 
         for (row, setting) in AudioSetting::ALL.into_iter().enumerate() {

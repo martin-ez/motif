@@ -59,21 +59,34 @@ fn device(name: &str) -> AudioDevice {
     }
 }
 
-/// How many streams are open, shared by the backend and every stream it opened.
+/// How many streams are open and how many have ever been, shared by the backend
+/// and every stream it opened.
+///
+/// Two counts rather than one, because a replacement is invisible in the first:
+/// a stream that closes as another opens leaves one open either way, and what
+/// says a device was not replaced is that none was ever built.
 #[derive(Clone, Default)]
-struct Live(Rc<Cell<usize>>);
+struct Live {
+    open: Rc<Cell<usize>>,
+    ever: Rc<Cell<usize>>,
+}
 
 impl Live {
     fn count(&self) -> usize {
-        self.0.get()
+        self.open.get()
+    }
+
+    fn ever(&self) -> usize {
+        self.ever.get()
     }
 
     fn opened(&self) {
-        self.0.set(self.0.get() + 1);
+        self.open.set(self.open.get() + 1);
+        self.ever.set(self.ever.get() + 1);
     }
 
     fn closed(&self) {
-        self.0.set(self.0.get().saturating_sub(1));
+        self.open.set(self.open.get().saturating_sub(1));
     }
 }
 
@@ -204,16 +217,28 @@ fn onto_the_looper(monitor: &mut Composed) {
 }
 
 fn onto_the_second_input(monitor: &mut Composed) {
-    onto_the_settings(monitor);
-    monitor.control(pressed(Button::Down));
-    monitor.control(pressed(Button::Right));
+    choosing_the_second_input(monitor);
     settled(monitor);
 }
 
-fn settled(monitor: &mut Composed) {
+fn choosing_the_second_input(monitor: &mut Composed) {
+    onto_the_settings(monitor);
+    monitor.control(pressed(Button::Down));
+    monitor.control(pressed(Button::Right));
+}
+
+fn chosen(monitor: &mut Composed) -> Frame {
+    let mut frame = Frame::blank();
     for _ in 0..SETTLING_FRAMES {
-        let _frame = drawn(monitor);
+        frame = drawn(monitor);
     }
+
+    frame
+}
+
+fn settled(monitor: &mut Composed) {
+    let _chosen = chosen(monitor);
+    let _opened = drawn(monitor);
 }
 
 fn drawn(monitor: &mut Composed) -> Frame {
@@ -281,6 +306,33 @@ fn the_status_row_draws_what_the_page_is_showing() {
 
     assert!(status(&frame).starts_with("audio playing"));
     assert!(row(&frame, AudioSetting::Input as usize).ends_with(SECOND_INPUT));
+}
+
+#[test]
+fn the_status_row_says_the_device_is_opening() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    choosing_the_second_input(&mut monitor);
+    let frame = chosen(&mut monitor);
+
+    assert!(
+        status(&frame).starts_with("audio opening"),
+        "{}",
+        status(&frame)
+    );
+}
+
+#[test]
+fn the_stream_that_is_running_is_the_only_one_while_the_next_is_chosen() {
+    let live = Live::default();
+    let mut monitor = composed(&live);
+
+    choosing_the_second_input(&mut monitor);
+    let _frame = chosen(&mut monitor);
+
+    assert_eq!(live.ever(), 1);
+    assert_eq!(live.count(), 1);
 }
 
 #[test]

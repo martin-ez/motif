@@ -38,6 +38,12 @@ pub enum AudioState {
     Idle,
     /// A stream is open and calling back.
     Playing,
+    /// A stream is being opened, and whatever was playing still is.
+    ///
+    /// [`DeviceLink::choose`] is what reaches this state and
+    /// [`DeviceLink::open`] is what leaves it, so a link resting here is one
+    /// whose holder has not opened the choice yet.
+    Opening,
     /// The device failed, and this is what it failed with.
     ///
     /// The stream is gone. [`DeviceLink::open`] is the way out of this state,
@@ -51,6 +57,7 @@ impl fmt::Display for AudioState {
             Self::Closed => f.write_str("closed"),
             Self::Idle => f.write_str("idle"),
             Self::Playing => f.write_str("playing"),
+            Self::Opening => f.write_str("opening"),
             Self::Lost(why) => write!(f, "lost: {why}"),
         }
     }
@@ -138,8 +145,7 @@ where
     /// As [`open`](Self::open). The refused selection is kept, so a link left
     /// in [`AudioState::Lost`] reports what was asked for, not what came before.
     pub fn select(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
-        self.selection = selection;
-        self.chosen = true;
+        self.choose(selection);
         self.open()
     }
 }
@@ -177,6 +183,18 @@ impl<B: AudioBackend, F> DeviceLink<B, F> {
     /// choice is still one, and reopening the same selection is not.
     pub fn opening_level(&self) -> f32 {
         if self.chosen { UNITY } else { GUARDED_LEVEL }
+    }
+
+    /// Take `selection` as the choice to serve, without opening it.
+    ///
+    /// The link reports [`AudioState::Opening`] and whatever is running keeps
+    /// running, because choosing a device is not what silences the one before
+    /// it. [`open`](Self::open) is what serves the choice, and
+    /// [`select`](Self::select) is the two of them together.
+    pub fn choose(&mut self, selection: DeviceSelection) {
+        self.selection = selection;
+        self.chosen = true;
+        self.state = AudioState::Opening;
     }
 
     /// The devices and channels the link is opening, or last tried to.
