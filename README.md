@@ -88,16 +88,13 @@ cargo run
 Before opening a pull request:
 
 ```sh
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-scripts/check-style.sh
-scripts/check-mutants.sh
-cargo check --target aarch64-unknown-linux-gnu
+scripts/gate.sh
 ```
 
-The mutation sweep is scoped to the diff and is the one check that can fail a
-change the others approved. CI runs it on every pull request either way.
+That runs every check CI can fail a pull request on, in the configuration CI
+uses, and reports all of them rather than stopping at the first. The mutation
+sweep runs last and is the one check that can fail a change the others
+approved; CI runs it on every pull request either way.
 
 Debug builds compile dependencies at `opt-level = 2` and this crate at `1`.
 Audio code is unusable at `opt-level = 0` — the DSP path underruns the callback

@@ -69,9 +69,9 @@ reviewed pull request.
 ## 5. Build
 
 The approved plan, test first, in `tests/`, and watch it fail for the right
-reason. Then the full gate from AGENTS.md — all six, including the aarch64
-cross-check. If the build shows the plan was wrong, say so and re-plan rather
-than quietly taking another route.
+reason. Then `scripts/gate.sh`, which is the whole gate from AGENTS.md — not a
+subset of it you picked. If the build shows the plan was wrong, say so and
+re-plan rather than quietly taking another route.
 
 ## 6. Stop at a draft pull request
 

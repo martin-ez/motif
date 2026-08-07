@@ -77,6 +77,8 @@ jobs:
         run: scripts/check-pr-body.sh --selftest
       - if: ${{ !cancelled() }}
         run: scripts/check-mutants.sh --selftest
+      - if: ${{ !cancelled() }}
+        run: scripts/gate.sh --selftest
 
   test:
     name: test (${{ matrix.os }})

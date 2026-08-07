@@ -10,19 +10,24 @@ tracker, not here.
 ## Commands
 
 ```sh
-cargo build
-cargo test
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-scripts/check-style.sh
-scripts/check-mutants.sh
-cargo check --target aarch64-unknown-linux-gnu
+cargo test                # while you work
+scripts/gate.sh           # before you push
 ```
 
-Run all of them before opening a pull request. The sweep is the slow one and
-the one most often skipped, which is why it is on the list: it is scoped to the
-diff, it is the only check that can fail a change the other six approved, and
-CI runs it on every pull request whether or not you did.
+The gate is every check CI can fail a pull request on, in the configuration CI
+uses: clippy in all three feature configurations, `cargo doc` and the tests and
+the aarch64 cross-check under `-D warnings`, the house-style and script checks,
+and the mutation sweep last. It keeps going after a failure and reports them
+all, so one run says everything. A check that is missing from it is a bug in
+the gate, not a command to run beside it.
+
+Two of CI's checks are not in it, because neither is knowable from a working
+tree: the pull request title and body belong to a request that does not exist
+yet. Draft the body and run `scripts/check-pr-body.sh -F body.md`.
+
+The sweep is the slow one and the one most often skipped. `--no-sweep` exists
+for iterating and says so in red, because an agent who skips it silently leaves
+nothing behind to say the gate was not the gate.
 
 ## Design invariants
 
