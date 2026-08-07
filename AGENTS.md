@@ -3,9 +3,17 @@
 How this project is built. It applies to agents and humans alike.
 
 `motif` is a terminal groovebox: it captures a loop of what you play, infers its
-musical structure, and uses that to help build a song sketch. The crate is a
-skeleton and nothing works yet — what is ready to pick up is in the issue
-tracker, not here.
+musical structure, and uses that to help build a song sketch. That is what it is
+for. What it does today is the looper — `cargo run` opens a duplex stream on the
+default devices, or ones the player picks on the settings page, and records a
+take, layers over it, undoes a layer, empties it, moves the input gain and
+meters what it hears.
+
+So a feature extends a substrate rather than starting beside one. `LoopEngine`
+owns the loop on the thread that plays it, `boundary` is how a block of audio
+reaches that thread, `take_handoff` carries a finished take back off it,
+`DeviceLink` outlives a fault and is what opens the device again, and `BeatGrid`
+is where beats go. What is ready to pick up is in the issue tracker, not here.
 
 ## Commands
 
@@ -223,7 +231,9 @@ scripts/track.sh mine             # claims under this checkout's id, yours or no
 scripts/track.sh find spsc        # match titles, open and closed, before filing
 scripts/track.sh submit 7         # built; now waiting on a human merge
 scripts/track.sh done 7 -m "..."  # closes it, prints what that unblocked
-scripts/track.sh --help           # add, dep, note, claim, release, blocked, graph, doctor
+scripts/track.sh plan             # the epic chain in order, the current ones opened
+scripts/track.sh --help           # refs, blocked, claim, release, add, dep,
+                                  # note, graph, labels-init, doctor, selftest
 ```
 
 **Say when the draft goes up.** `submit <n>` is what separates work waiting on a
