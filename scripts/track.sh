@@ -354,6 +354,12 @@ def cycle_nodes:
   | map(.num) | sort;
 def has_cycle: ((cycle_nodes | length) > 0);
 
+# The graph the repository owns. A selftest run opens a real 3-cycle to prove
+# cycle_nodes finds one and holds it open until cleanup, so a check that fails
+# on any cycle anywhere fails every other run started inside that window.
+# Throwaway issues carry a label saying whose they are, and are nobody elses.
+def repo_own: map(select(_has("track:selftest") | not));
+
 def top_blockers:
   [.[] | select(is_blocked) | .blockers[]]
   | group_by(.) | map({num: .[0], n: length}) | sort_by(-.n, .num);
@@ -1478,6 +1484,14 @@ ver_ge() {   # ver_ge 2.97.0 2.94.0  — `sort -V` is not reliable on BSD
   [ "${h3:-0}" -ge "${w3:-0}" ]
 }
 
+# Whether the repository's own graph holds a cycle, over `gh issue list` JSON on
+# stdin. `graph` and `ready` report every cycle they can see, throwaway ones
+# included, because a run wants its own fixtures diagnosed. This is the narrower
+# question a gate asks, where another run's open fixture is not an answer.
+own_cycle() {
+  jq "$JQ_LIB"'repo_own | [.[] | shape] | has_cycle' 2>/dev/null || printf 'false\n'
+}
+
 cmd_doctor() {
   local ghv st who scopes repo nwo issues have missing L me cyc total
   local stale waiting c num who2 since at age
@@ -1533,7 +1547,7 @@ cmd_doctor() {
     else chk FAIL lockdir "$STATE_DIR not writable"; fi
   else chk FAIL lockdir "not inside a git repository"; fi
 
-  cyc="$(fetch_open | jq "$JQ_LIB"'[.[] | shape] | has_cycle' 2>/dev/null || echo false)"
+  cyc="$(fetch_open | own_cycle)"
   if [ "$cyc" = "true" ]; then chk FAIL graph "dependency cycle — run: scripts/track.sh graph"
   else chk ok graph "no dependency cycle"; fi
 
@@ -1695,6 +1709,22 @@ st_lock_recovers() {
   STATE_DIR="$held_state"; LOCK="$held_lock"; STAMP="$held_stamp"
   rm -rf "$scratch"
   return "$rc"
+}
+
+# Three issues in a 3-cycle, shaped as `gh issue list` returns them and carrying
+# the labels given as JSON. A cycle among the repository's own issues has to stay
+# a doctor failure, and filing one to prove it would leave a real fault in a real
+# graph for every other run to read.
+st_cycle_fixture() {   # st_cycle_fixture <labels-json>
+  jq -cn --argjson l "$1" '
+    [ {number: 9000, blk: null, lbl: []},
+      {number: 9001, blk: 9003, lbl: $l},
+      {number: 9002, blk: 9001, lbl: $l},
+      {number: 9003, blk: 9002, lbl: $l} ]
+    | map({ number: .number, title: "selftest cycle fixture", state: "OPEN",
+            url: "", labels: .lbl,
+            blockedBy: (if .blk == null then {totalCount: 0, nodes: []}
+                        else {totalCount: 1, nodes: [{number: .blk, state: "OPEN"}]} end) })'
 }
 
 # Files one throwaway issue under the marker of a second, imaginary run. What
@@ -2423,6 +2453,20 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
 
   rc=0; printf '%s' "$out" | grep -q "^  #$B " || rc=1
   st_assert "$rc" "#$B still listed as ready despite the cycle"
+
+  # This run's 3-cycle is open from here until cleanup, the last quarter of the
+  # run. A gate that fails on any cycle anywhere fails every run started inside
+  # that window, over a fault it did not create and cannot see.
+  rc=0; ( AS_JSON=0 cmd_doctor >/dev/null ) || rc=$?
+  st_assert "$rc" "doctor passes while this run's own 3-cycle is open"
+
+  rc=0; out="$(st_cycle_fixture '[]' | own_cycle)" || rc=1
+  [ "$out" = true ] || rc=1
+  st_assert "$rc" "a cycle among the repository's own issues still fails doctor"
+
+  rc=0; out="$(st_cycle_fixture '[{"name":"track:selftest"}]' | own_cycle)" || rc=1
+  [ "$out" = false ] || rc=1
+  st_assert "$rc" "a cycle among throwaway issues is not the repository's"
 
   # A direct 2-cycle is refused by the server; the wrapper must surface that.
   rc=0; ( cmd_dep "$E" --needs "$F" ) >/dev/null 2>&1 || rc=$?
