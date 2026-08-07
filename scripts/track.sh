@@ -45,7 +45,8 @@ scripts/track.sh <command> [args] [--json]
   release <n> [--force]       give it back
   done <n> [-m MSG] [--force] close it, report what it unblocked
   add -t TITLE --area A --kind K --size S --parent N [-b BODY|-F FILE]
-      [--blocked-by N,...] [--blocking N,...]  (an epic is --size l, and a root)
+      [--blocked-by N,...] [--blocking N,...]
+      (an epic is --size l: no --parent, but --blocked-by the chain's open end)
   dep <n> [--needs N] [--drop-needs N] [--parent N] [--child N] [--drop-child N]
   note <n> -m MSG             leave a comment on an issue
   graph                       dependency forest of open issues
@@ -303,6 +304,17 @@ def is_container: (.state == "OPEN") and ((.subs_open | length) > 0);
 def is_blocked: (.state == "OPEN") and ((.blockers | length) > 0);
 def epic_is_current: ((.blockers | length) == 0) and (.gated_by == null);
 
+# An open end is an epic no other open epic comes off: the chain stops there, so
+# a new epic extends it from one of these. Being startable has nothing to do with
+# it -- a new epic follows the last one filed, not the last one anybody can pick
+# up. Which epic is an end is a fact about what points at it, so like with_gates
+# it is computed over the set rather than read off the epic.
+def with_ends:
+  ([ .[] | select(.size == "l") | .blockers[] ]) as $taken
+  | map(.num as $n
+        | . + {chain_end: ((.size == "l") and (($taken | index($n)) == null))});
+def epic_is_end: (.chain_end // false);
+
 # Kahn peeling: repeatedly drop nodes whose remaining blockers are all satisfied.
 # Whatever survives is in a cycle or downstream of one. Blockers are first
 # restricted to issues we actually fetched, so an out-of-window blocker cannot
@@ -479,15 +491,37 @@ Re-point it instead, which moves it in one write and never leaves it loose:
 }
 
 # The chain `plan` reads, rendered for a refusal: every open epic in the order
-# they come off each other, the startable ones marked. Marked rather than
-# filtered, because a caller shown only what is startable parents the work under
-# whichever epic happens to be unblocked — which is the queue jump the refusal
-# exists to stop, wearing a legitimate parent. Non-zero means the read failed,
-# which is a different answer from a chain that has no head yet.
+# they come off each other, marked by whichever predicate the refusal is about —
+# startable for one missing --parent, an open end for one missing --blocked-by.
+# Marked rather than filtered, because a caller shown only the marked rows hangs
+# the work off whichever epic happens to carry the mark — which is the queue jump
+# the refusal exists to stop, wearing a legitimate edge. Non-zero means the read
+# failed, which is a different answer from a chain that has no head yet.
 epic_chain() {
+  local mark="${1:-epic_is_current}"
   fetch_open | jq -r "$JQ_LIB"'
-    [.[] | shape] | with_gates | epic_order
-    | .[] | "  \(if epic_is_current then "▸" else " " end) #\(.num)  \(.title)"'
+    [.[] | shape] | with_gates | with_ends | epic_order
+    | .[] | "  \(if '"$mark"' then "▸" else " " end) #\(.num)  \(.title)"'
+}
+
+# The refusal an epic filed with no --blocked-by earns, given that chain with its
+# open ends marked. Returned rather than died on, so the decision can be reached
+# with a chain this repository cannot be put into: no open end at all is an empty
+# tracker, where the first root is the one epic that does come off nothing.
+epic_head_refusal() {
+  local title="$1" ends="$2"
+  [ -n "$ends" ] || return 0
+  cat <<REFUSAL
+add: '$title' is an epic, so it needs --blocked-by.
+The chain is the ordering mechanism: an epic that names nothing it comes off is
+gated by nothing, and neither is anything filed under it.
+The chain, in the order the epics come off each other — ▸ is an open end:
+$ends
+Re-run with --blocked-by <n> for the epic this one follows, an open end unless it
+belongs mid-chain.
+  scripts/track.sh plan   the same chain, with the work under each epic
+REFUSAL
+  return 1
 }
 
 # GNU date takes -d, BSD date takes -j -f. A timestamp that parses under neither
@@ -1106,7 +1140,7 @@ add_flag_list() {   # $1 = flag, $2 = comma list; appends to GH_ARGS
 
 cmd_add() {
   local title="" body="" bodyfile="" area="" kind="" size=""
-  local bby="" bing="" parent="" selftest=0 url num rc=0 chains guide
+  local bby="" bing="" parent="" selftest=0 url num rc=0 chains ends guide
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--title)     [ $# -ge 2 ] || die "-t needs a value"; title="$2"; shift 2 ;;
@@ -1157,6 +1191,17 @@ Re-run with --parent <n> for the one this work belongs under."
 Readiness is inherited through the parent: without one this is gated by nothing,
 and startable ahead of the whole chain it belongs to.
 $guide"
+  fi
+
+  # A chain has to start somewhere, which is the whole of why an epic is exempt
+  # from --parent. Left there the exemption is one command wide: an epic naming
+  # nothing it comes off is gated by nothing, and so is everything filed under
+  # it — the same queue jump, reached in two commands instead of one.
+  if [ "$size" = l ] && [ -z "$bby" ]; then
+    ends="$(epic_chain epic_is_end)" || die "add: the open chains could not be read just now.
+  scripts/track.sh plan   the chain this epic has to come off
+Re-run with --blocked-by <n> for the epic this one follows."
+    guide="$(epic_head_refusal "$title" "$ends")" || die "$guide"
   fi
 
   [ -z "$parent" ] || require_open_parent "$parent" "add --parent"
@@ -1465,6 +1510,14 @@ st_cleanup() {
 
 st_num() { printf '%s' "$1" | awk '{print $2}' | tr -d '#'; }
 
+# What the throwaway chain comes off. An epic names the epic it follows, and for
+# the selftest that one has to be CLOSED: an open blocker would gate every issue
+# filed under the root, and half the run would fail on a queue it never meant to
+# test.
+st_chain_head() {
+  gh issue list --state closed --limit 1 --json number --jq '.[0].number // empty'
+}
+
 # main checked out, one branch held by a second worktree, one held by nothing.
 st_scratch_repo() {
   local d="$1"
@@ -1482,7 +1535,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M N P R S T U V Z out rc loc adv dt bn ob scratch ids
+  local t0 A B C D E F G H I J K L M N P R S T U V Z out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1494,9 +1547,11 @@ Re-run with:  scripts/track.sh selftest --yes"
   trap 'st_cleanup; lock_release; exit 130' INT TERM
 
   note "  creating throwaway issues …"
-  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest root epic" --area infra --kind chore --size l --selftest)" || rc=$?
+  head="$(st_chain_head)"
+  [ -n "$head" ] || die "selftest: no closed issue for the throwaway chain to come off."
+  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest root epic" --area infra --kind chore --size l --blocked-by "$head" --selftest)" || rc=$?
   Z="$(st_num "$out")"
-  st_assert "$rc" "add files size:l epic #$Z as a root, with no parent"
+  st_assert "$rc" "add files size:l epic #$Z off closed #$head, with no parent"
   # Every issue below hangs off $Z. Empty, they would all be refused for the
   # want of a parent, and one real failure would read as forty.
   [ -n "$Z" ] || die "selftest: the root epic was not created — nothing below can run."
@@ -1513,6 +1568,29 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$rc" "add's refusal says how to look the chain up"
   rc=0; AS_JSON=1 cmd_find "selftest parentless" | jq -e 'length == 0' >/dev/null || rc=1
   st_assert "$rc" "add creates nothing when it refuses"
+
+  # An epic exempt from --parent and naming nothing it comes off is the same
+  # queue jump reached in two commands: nothing gates it, so nothing gates the
+  # work filed under it either. #$Z is open, so the chain has an end to come off.
+  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest second root" --area infra --kind chore --size l --selftest 2>&1 >/dev/null)" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "add refuses an epic with no --blocked-by (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q -- "--blocked-by" || rc=1
+  st_assert "$rc" "add's refusal names the flag the epic is missing"
+  rc=0; AS_JSON=1 cmd_find "selftest second root" | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "add creates nothing when it refuses an epic"
+
+  # The decision, apart from the read that feeds it. A tracker with no open epic
+  # is the one this repository cannot be put into, and it is the case the whole
+  # exemption exists for: the first root does come off nothing.
+  rc=0; out="$(epic_head_refusal "selftest first root" "")" || rc=$?
+  st_assert "$([ "$rc" = 0 ] && [ -z "$out" ] && echo 0 || echo 1)" \
+    "the first root in an empty tracker is still filable (got $rc)"
+
+  rc=0; out="$(epic_head_refusal "selftest second root" "  ▸ #$Z  selftest root epic")" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "an epic is refused once the chain has an open end (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "#$Z" || rc=1
+  st_assert "$rc" "the refusal names open end #$Z"
 
   A="$(st_num "$(AS_JSON=0 cmd_add -t "selftest parent" --area infra --kind chore --size s --parent "$Z" --selftest)")"
   C="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of $A" --area infra --kind chore --size s --parent "$A" --selftest)")"
@@ -1691,7 +1769,7 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$rc" "done #$H reports #$I once its last blocker closes"
 
   # size:l is refused by claim, so it must not be offered by ready.
-  J="$(st_num "$(AS_JSON=0 cmd_add -t "selftest oversized" --area infra --kind chore --size l --selftest)")"
+  J="$(st_num "$(AS_JSON=0 cmd_add -t "selftest oversized" --area infra --kind chore --size l --blocked-by "$head" --selftest)")"
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$J" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes size:l #$J"
   out="$(AS_JSON=0 cmd_ready)"
@@ -1722,6 +1800,15 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$N" --argjson r "$R" '
     any(.num == $n and (.children | any(.num == $r and .stance == "waiting")))' >/dev/null || rc=1
   st_assert "$rc" "plan carries #$R under #$N as waiting on its gated epic"
+
+  # An open end is where the chain stops, so #$N is one and #$J stopped being
+  # one the moment #$N came off it. Being blocked has nothing to do with it: a
+  # new epic follows the last epic filed, not the last one startable.
+  out="$(epic_chain epic_is_end)"
+  rc=0; printf '%s' "$out" | grep -q "▸ #$N  " || rc=1
+  st_assert "$rc" "the chain marks blocked epic #$N as an open end"
+  rc=0; printf '%s' "$out" | grep -q "▸ #$J  " && rc=1
+  st_assert "$rc" "the chain unmarks #$J once #$N comes off it"
 
   # #$N is an epic behind a blocker, so it is real work with a real place in the
   # chain that nobody can start yet. A refusal listing only the startable epics
@@ -1815,7 +1902,7 @@ Re-run with:  scripts/track.sh selftest --yes"
   # Between a draft pull request going up and a human merging it, the work is
   # finished and the issue is still held. "Leave it alone" and "there is nothing
   # left to do here" are opposite answers, so they must not read the same.
-  P="$(st_num "$(AS_JSON=0 cmd_add -t "selftest review epic" --area infra --kind chore --size l --selftest)")"
+  P="$(st_num "$(AS_JSON=0 cmd_add -t "selftest review epic" --area infra --kind chore --size l --blocked-by "$head" --selftest)")"
   S="$(st_num "$(AS_JSON=0 cmd_add -t "selftest submitted child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
   T="$(st_num "$(AS_JSON=0 cmd_add -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$P" --blocked-by "$S" --selftest)")"
   U="$(st_num "$(AS_JSON=0 cmd_add -t "selftest ready child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
