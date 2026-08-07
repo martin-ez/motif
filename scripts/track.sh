@@ -1543,6 +1543,8 @@ ST_FAIL=0
 ST_SCRATCH=""
 ST_ORPHAN_BRANCH=""
 ST_NUM=""
+ST_RUN=""
+ST_FOREIGN_RUN="stcrashed0"
 st_ok()   { ST_PASS=$((ST_PASS + 1)); note "  ok    $*"; return 0; }
 st_bad()  { ST_FAIL=$((ST_FAIL + 1)); note "  FAIL  $*"; return 0; }
 st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
@@ -1575,6 +1577,12 @@ st_cleanup() {
   st_delete_run
   lock_release
   return 0
+}
+
+# A marker unique to one run, on the same shasum idiom as repo_key.
+st_run_id() {
+  printf 'st%s' \
+    "$(printf '%s %s %s' "$(date -u +%s)" "$$" "$RANDOM" | shasum | cut -c1-8)"
 }
 
 st_num() { printf '%s' "$1" | awk '{print $2}' | tr -d '#'; }
@@ -1630,16 +1638,18 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M N P Q R S T U V Z out rc loc adv dt bn ob scratch ids head
+  local t0 A B C D E F G H I J K L M N P Q R S T U V X1 X2 Y Z
+  local out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
-  note "selftest"
+  ST_RUN="$(st_run_id)"
+  note "selftest $ST_RUN"
   note "  preflight: doctor"
   ( AS_JSON=0 cmd_doctor >/dev/null ) || die "doctor failed — fix that first."
 
-  trap 'st_cleanup; lock_release' EXIT
+  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN"; lock_release' EXIT
   # Without an explicit exit, bash runs the handler and then RESUMES, so a Ctrl-C
   # would delete the throwaway issues and carry on asserting against them.
-  trap 'st_cleanup; lock_release; exit 130' INT TERM
+  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN"; lock_release; exit 130' INT TERM
 
   note "  creating throwaway issues …"
   head="$(st_chain_head)"
@@ -2239,6 +2249,51 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; ( cmd_dep "$E" --needs "$F" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "server rejects a direct 2-cycle, wrapper exits non-zero (got $rc)"
 
+  # ---------------------------------------------------------- run scoping ---
+  # Cleanup used to delete every issue carrying track:selftest, repo-wide, so
+  # two runs at once destroyed each other's fixtures and the loser died on a
+  # number that no longer resolved. A marker on the issue is what makes a run's
+  # own work nameable: a snapshot of the label taken before the run cannot tell
+  # two runs apart, and refusing to start while any exist would let one crashed
+  # run's litter block every run after it.
+  #
+  # Every call below is wrapped, because `die` calls `exit` and `||` does not
+  # catch an exit: an unwrapped positive-path call ends the run instead of
+  # recording one FAIL.
+  rc=0; ( AS_JSON=1 cmd_show "$A" ) \
+    | jq -e --arg m "$ST_RUN" '.title | contains($m)' >/dev/null || rc=1
+  st_assert "$rc" "add stamps this run's marker on #$A"
+
+  rc=0; ( ST_RUN="" cmd_add -t "selftest unmarked" --area infra --kind chore \
+          --size s --parent "$Z" --selftest ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "add --selftest refuses to file with no run marker (got $rc)"
+  rc=0; ( AS_JSON=1 cmd_find "selftest unmarked" ) | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "add creates nothing when it has no run marker"
+
+  # A second run, simulated: filed through the same path under another marker.
+  X1="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest crashed litter one" --area infra --kind chore --size s --parent "$Z" --selftest )")"
+  X2="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest crashed litter two" --area infra --kind chore --size s --parent "$Z" --selftest )")"
+  st_ok "created #$X1 #$X2 under another run's marker"
+
+  out="$(st_delete_run "$ST_FOREIGN_RUN" 2>&1)" || true
+  rc=0; printf '%s' "$out" | grep -q "removed 2 throwaway" || rc=1
+  st_assert "$rc" "cleanup counts only the run it names"
+  rc=0; ( AS_JSON=1 cmd_find "selftest crashed litter" ) | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "cleanup removes every issue of the run it names"
+  rc=0; ( AS_JSON=1 cmd_find "selftest root epic" ) \
+    | jq -e --argjson n "$Z" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "cleanup leaves a concurrent run's fixtures alone"
+
+  # A run closes five of its own issues before it ends, so the newest closed
+  # issue in the repository is very often a live run's — and hanging this run's
+  # whole chain off one is the same death by a second route.
+  Q="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest closed litter" --area infra --kind chore --size s --parent "$Z" --selftest )")"
+  ( MOTIF_AGENT=selftest-1 cmd_claim "$Q" ) >/dev/null 2>&1 || true
+  ( MOTIF_AGENT=selftest-1 cmd_done  "$Q" ) >/dev/null 2>&1 || true
+  rc=0; [ "$( st_chain_head )" != "$Q" ] || rc=1
+  st_assert "$rc" "the chain head skips a concurrent run's closed throwaway #$Q"
+
   # Informational canary: the search index is expected to disagree (it lags writes).
   # This documents WHY local derivation is the primary path. Never fails the run.
   loc="$(AS_JSON=1 cmd_ready | jq -r '[.[].num] | sort | join(",")' 2>/dev/null || echo 'n/a')"
@@ -2253,8 +2308,25 @@ Re-run with:  scripts/track.sh selftest --yes"
     note "  note  advanced-search agrees with local derivation"
   fi
 
+  Y="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest surviving litter" --area infra --kind chore --size s --parent "$Z" --selftest )")"
+
   trap - EXIT INT TERM
   st_cleanup
+  rc=0; ( AS_JSON=1 cmd_find "selftest surviving litter" ) \
+    | jq -e --argjson n "$Y" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "cleanup leaves a crashed run's litter behind"
+
+  rc=0; out="$( cmd_selftest --clean 2>&1 )" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "selftest --clean refuses without --yes (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "every run" || rc=1
+  st_assert "$rc" "the refusal says --clean takes every run's issues"
+
+  ( cmd_selftest --clean --yes ) >/dev/null 2>&1 || true
+  rc=0; [ -z "$(gh issue list --state all --label track:selftest \
+                --limit "$LIST_LIMIT" --json number --jq '.[].number' 2>/dev/null)" ] || rc=1
+  st_assert "$rc" "the explicit clean removes litter from every run"
+
   dt=$(( $(date +%s) - t0 ))
   if [ "$ST_FAIL" -eq 0 ]; then
     printf 'selftest passed %s/%s in %ss\n' "$ST_PASS" "$((ST_PASS + ST_FAIL))" "$dt"
