@@ -321,6 +321,13 @@ def top_blockers:
   [.[] | select(is_blocked) | .blockers[]]
   | group_by(.) | map({num: .[0], n: length}) | sort_by(-.n, .num);
 
+# A reader brings one question to an epic: what do I do about this? Its children
+# answer in the order the answers apply -- take it, someone is on it, someone has
+# to merge it, nothing to do here yet. Number order answers nothing and buries
+# the only startable row among the ones nobody can act on.
+def board_order:
+  sort_by({"ready": 0, "claimed": 1, "review": 2, "waiting": 3}[.stance] // 4, .num);
+
 # The plan is a chain, not a forest: epics come off each other in one order, so
 # peeling the ones nothing holds up, over and over, is the order to read them
 # in. Only edges between epics count -- an epic waiting on a loose bug is still
@@ -539,7 +546,8 @@ cmd_plan() {
                                    + (if ($c.gated_by != null)
                                          and (($c.blockers | index($c.gated_by)) == null)
                                       then ["via #\($c.gated_by)"] else [] end))
-                                  | join(" ")) }) ) })')"
+                                  | join(" ")) })
+                | board_order ) })')"
 
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
 
@@ -1350,7 +1358,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M N P R S T out rc loc adv dt bn ob scratch ids
+  local t0 A B C D E F G H I J K L M N P R S T U V out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1576,8 +1584,11 @@ Re-run with:  scripts/track.sh selftest --yes"
   # left to do here" are opposite answers, so they must not read the same.
   P="$(st_num "$(AS_JSON=0 cmd_add -t "selftest review epic" --area infra --kind chore --size l --selftest)")"
   S="$(st_num "$(AS_JSON=0 cmd_add -t "selftest submitted child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
-  T="$(st_num "$(AS_JSON=0 cmd_add -t "selftest behind submitted $S" --area infra --kind chore --size s --blocked-by "$S" --selftest)")"
+  T="$(st_num "$(AS_JSON=0 cmd_add -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$P" --blocked-by "$S" --selftest)")"
+  U="$(st_num "$(AS_JSON=0 cmd_add -t "selftest ready child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
+  V="$(st_num "$(AS_JSON=0 cmd_add -t "selftest claimed child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
   MOTIF_AGENT=selftest-1 cmd_claim "$S" >/dev/null
+  MOTIF_AGENT=selftest-2 cmd_claim "$V" >/dev/null
   rc=0; MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 >/dev/null || rc=$?
   st_assert "$rc" "submit puts #$S into review"
 
@@ -1602,6 +1613,12 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; printf '%s' "$out" | jq -e --argjson p "$P" --argjson s "$S" '
     any(.num == $p and (.children | any(.num == $s and .stance == "review")))' >/dev/null || rc=1
   st_assert "$rc" "plan carries #$S under #$P as in review"
+
+  rc=0; printf '%s' "$out" \
+    | jq -e --argjson p "$P" --argjson s "$S" --argjson t "$T" \
+           --argjson u "$U" --argjson v "$V" '
+        any(.num == $p and ([.children[].num] == [$u, $v, $s, $t]))' >/dev/null || rc=1
+  st_assert "$rc" "plan boards #$P ready, claimed, review, waiting — not by number"
 
   # An epic reading n/n done while nothing has reached main is the tracker
   # asserting exactly what `next` forbids an agent from asserting.
