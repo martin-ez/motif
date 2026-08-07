@@ -232,8 +232,8 @@ scripts/track.sh find spsc        # match titles, open and closed, before filing
 scripts/track.sh submit 7         # built; now waiting on a human merge
 scripts/track.sh done 7 -m "..."  # closes it, prints what that unblocked
 scripts/track.sh plan             # the epic chain in order, the current ones opened
-scripts/track.sh --help           # refs, blocked, claim, release, add, dep,
-                                  # note, graph, labels-init, doctor, selftest
+scripts/track.sh --help           # refs, blocked, claim, release, reopen, add,
+                                  # dep, note, graph, labels-init, doctor, selftest
 ```
 
 **Say when the draft goes up.** `submit <n>` is what separates work waiting on a
