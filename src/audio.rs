@@ -17,6 +17,7 @@ use std::fmt;
 
 mod boundary;
 mod catalog;
+mod ceiling;
 mod clock;
 mod command;
 mod cpal_backend;
@@ -35,6 +36,7 @@ mod xrun;
 
 pub use boundary::{BlockCapture, BlockPlayback, Priming, boundary};
 pub use catalog::DeviceCatalog;
+pub use ceiling::{HELD_ABOVE, held};
 pub use clock::{Counting, SampleClockReader, SampleClockWriter, sample_clock};
 pub use command::{Command, CommandReceiver, CommandSender, SendError, command_channel};
 pub use cpal_backend::{CpalBackend, CpalStream};
