@@ -12,7 +12,7 @@
 //! into are both allocated in setup, and a block is a fixed number of passes
 //! over buffers that are already there.
 
-use crate::audio::{AudioPath, Command, Gain, StreamConfig};
+use crate::audio::{AudioPath, Command, Gain, StreamConfig, held};
 use crate::device::AudioProfile;
 
 use super::{LoopBuffer, LoopPosition, PositionWriter, TakeWriter, Transport, WaveformWriter};
@@ -149,7 +149,7 @@ impl LoopEngine {
         self.takes.advance(&self.buffer, frames);
 
         for (played, level) in playing.iter_mut().zip(gained) {
-            *played += level;
+            *played = held(*played + level);
         }
         if self.muted {
             playing.fill(0.0);
@@ -184,13 +184,15 @@ impl AudioPath for LoopEngine {
         self.gain.prepare(config.sample_rate);
     }
 
-    /// Plays the loop under the player's input, and publishes the playhead the
-    /// block ended on.
+    /// Plays the loop under the player's input, holds the sum inside full
+    /// scale, and publishes the playhead the block ended on.
+    ///
+    /// The ceiling is on the whole block, not the loop alone, so a gained
+    /// input over [`HELD_ABOVE`](crate::audio::HELD_ABOVE) is curved too.
     ///
     /// Two lengths become the shorter of them, and a block longer than the
-    /// scratch is worked in chunks: neither is a panic on the audio thread.
-    ///
-    /// A block also carries the loop's summary forward where an undo left it
+    /// scratch is worked in chunks: neither is a panic on the audio thread. A
+    /// block also carries the loop's summary forward where an undo left it
     /// behind, so the shape heals within a lap.
     fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
         let frames = captured.len().min(playing.len());
