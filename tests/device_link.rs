@@ -98,7 +98,9 @@ struct Latch {
 
 impl Latch {
     fn inside(&self) {
-        self.entered.recv().expect("the device is being opened");
+        self.entered
+            .recv_timeout(ABANDONED)
+            .expect("the device is being opened");
     }
 
     fn let_go(&self) {

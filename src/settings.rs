@@ -267,7 +267,7 @@ where
     }
 
     fn settle(&mut self) {
-        if self.changing() {
+        if self.restoring.is_some() {
             return;
         }
 
@@ -282,10 +282,6 @@ where
 
         self.replacing = Some(replaced);
         self.link.change(|held| held.choose(chosen));
-    }
-
-    fn changing(&self) -> bool {
-        self.replacing.is_some() || self.restoring.is_some()
     }
 
     fn dispatch(&mut self) {

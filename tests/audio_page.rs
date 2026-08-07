@@ -74,7 +74,9 @@ struct Latch {
 
 impl Latch {
     fn inside(&self) {
-        self.entered.recv().expect("the device is being opened");
+        self.entered
+            .recv_timeout(ABANDONED)
+            .expect("the device is being opened");
     }
 
     fn let_go(&self) {
@@ -657,6 +659,22 @@ fn frames_are_drawn_while_the_device_is_opening() {
             .all(|(row, state)| row.ends_with(SECOND) && *state == AudioState::Opening),
         "{waiting:?}"
     );
+
+    latch.let_go();
+}
+
+#[test]
+fn walking_on_while_the_device_opens_queues_no_second_open() {
+    let mut page = page();
+    let latch = opening_the_second_host(&mut page);
+    let asked = opens(&page);
+
+    driven_by(&mut page, [pressed(Button::Right)]);
+    for _ in 0..SETTLING_FRAMES + 1 {
+        let _waiting = drawn(&mut page);
+    }
+
+    assert_eq!(opens(&page), asked);
 
     latch.let_go();
 }
