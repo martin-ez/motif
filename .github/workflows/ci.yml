@@ -138,10 +138,16 @@ jobs:
       # One job per core: a standard runner has four, and the sweep is the
       # longest job in this workflow, so it sets the wall clock for the whole
       # pull request.
+      #
+      # --cap-lints=true because this workflow denies warnings for every job,
+      # and a mutant that trips a lint under that is reported unviable rather
+      # than tested — which does not count it. Measured on src/ui/hold.rs: 10
+      # of 11 mutants caught with the flag, 5 of 11 without. scripts/gate.sh
+      # --selftest fails if this and check-mutants.sh stop agreeing.
       - if: ${{ env.SWEEP == 'true' && steps.changed.outputs.rust != 'false' }}
         run: |
           git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
-          cargo mutants --in-diff /tmp/pr.diff --no-shuffle -j 4
+          cargo mutants --in-diff /tmp/pr.diff --no-shuffle --cap-lints=true -j 4
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

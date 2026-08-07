@@ -144,6 +144,30 @@ sweep_state() {
 	fi
 }
 
+# The sweep is invoked in two places that must agree — ci.yml runs it and
+# scripts/check-mutants.sh runs it — and nothing else compares them. Both jobs
+# inherit -D warnings, under which a mutant that trips a lint is reported
+# unviable rather than tested: measured on src/ui/hold.rs, 10 of 11 mutants
+# were caught with --cap-lints=true and 5 of 11 without. A flag present at one
+# call site and not the other silently halves the sweep on whichever side lost
+# it, which is the drift that produced it in the first place.
+unpinned_sweeps() {
+	local file line found=""
+	for file in "$@"; do
+		while IFS= read -r line; do
+			[ -n "$line" ] || continue
+			case "$line" in
+			*--cap-lints=true*) ;;
+			*) found="$found$file: $line
+" ;;
+			esac
+		done <<EOF
+$(grep -h -e 'cargo mutants --in-diff' "$file" 2>/dev/null || true)
+EOF
+	done
+	printf '%s' "$found"
+}
+
 # cpal's Linux backend links against ALSA, and alsa-sys resolves it through
 # pkg-config from a build script, which runs even under `cargo check`. macOS
 # uses CoreAudio and needs nothing installed.
@@ -355,6 +379,22 @@ cross-compile guard${TAB}cargo check --target aarch64-unknown-linux-gnu --all-fe
 
 	st_is yes "$(needs_alsa Linux)" "a Linux host needs the ALSA headers"
 	st_is no "$(needs_alsa Darwin)" "macOS uses CoreAudio and needs nothing"
+
+	st_is "" "$(unpinned_sweeps .github/workflows/ci.yml scripts/check-mutants.sh)" \
+		"both sweeps pin --cap-lints"
+
+	local pinned unpinned
+	pinned="$(mktemp "${TMPDIR:-/tmp}/motif-gate.XXXXXX")"
+	unpinned="$(mktemp "${TMPDIR:-/tmp}/motif-gate.XXXXXX")"
+	printf 'cargo mutants --in-diff "$d" --no-shuffle --cap-lints=true -j 4\n' >"$pinned"
+	printf 'cargo mutants --in-diff "$d" --no-shuffle -j 4\n' >"$unpinned"
+
+	st_is "" "$(unpinned_sweeps "$pinned")" "a pinned invocation is not reported"
+	st_has "$(unpinned_sweeps "$unpinned")" "$unpinned" \
+		"an invocation that dropped the flag is named"
+	st_has "$(unpinned_sweeps "$pinned" "$unpinned")" "$unpinned" \
+		"one call site dropping it is caught beside one that kept it"
+	rm -f "$pinned" "$unpinned"
 
 	if [ "$st_status" = 0 ]; then
 		printf '\033[32mok\033[0m    every rule the gate runs on holds\n'
