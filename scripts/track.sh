@@ -1717,10 +1717,14 @@ st_lock_recovers() {
 # graph for every other run to read.
 st_cycle_fixture() {   # st_cycle_fixture <labels-json>
   jq -cn --argjson l "$1" '
-    [ {number: 9001, blk: 9003}, {number: 9002, blk: 9001}, {number: 9003, blk: 9002} ]
+    [ {number: 9000, blk: null, lbl: []},
+      {number: 9001, blk: 9003, lbl: $l},
+      {number: 9002, blk: 9001, lbl: $l},
+      {number: 9003, blk: 9002, lbl: $l} ]
     | map({ number: .number, title: "selftest cycle fixture", state: "OPEN",
-            url: "", labels: $l,
-            blockedBy: {totalCount: 1, nodes: [{number: .blk, state: "OPEN"}]} })'
+            url: "", labels: .lbl,
+            blockedBy: (if .blk == null then {totalCount: 0, nodes: []}
+                        else {totalCount: 1, nodes: [{number: .blk, state: "OPEN"}]} end) })'
 }
 
 # Files one throwaway issue under the marker of a second, imaginary run. What
