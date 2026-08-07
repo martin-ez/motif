@@ -54,6 +54,7 @@ scripts/track.sh <command> [args] [--json]
   labels-init                 create/update the label taxonomy (idempotent)
   doctor                      check preconditions
   selftest --yes              full lifecycle smoke test on throwaway issues
+  selftest --clean [<marker>] --yes  delete throwaway issues, one run's or all
 USAGE
   exit 1
 }
@@ -1269,6 +1270,13 @@ Re-run with --blocked-by <n> for the epic this one follows."
 
   [ -z "$parent" ] || require_open_parent "$parent" "add --parent"
 
+  if [ "$selftest" = 1 ]; then
+    [ -n "${ST_RUN:-}" ] || die "add --selftest needs a run marker.
+Without one the issue carries no sign of which run filed it, and cleanup cannot
+tell it from a concurrent run's."
+    title="$title [$ST_RUN]"
+  fi
+
   GH_ARGS=(issue create --title "$title"
            --label "area:$area" --label "kind:$kind" --label "size:$size")
   [ "$selftest" = 1 ] && GH_ARGS[${#GH_ARGS[@]}]="--label" && GH_ARGS[${#GH_ARGS[@]}]="track:selftest"
@@ -1543,12 +1551,57 @@ ST_FAIL=0
 ST_SCRATCH=""
 ST_ORPHAN_BRANCH=""
 ST_NUM=""
+ST_RUN=""
+ST_FOREIGN_RUN=""
 st_ok()   { ST_PASS=$((ST_PASS + 1)); note "  ok    $*"; return 0; }
 st_bad()  { ST_FAIL=$((ST_FAIL + 1)); note "  FAIL  $*"; return 0; }
 st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
 
+# The throwaway issues of one run, or of every run. The marker lives on the
+# issue rather than in a list held here: a run that dies between the write and
+# the assignment would leave one that nothing could attribute, and a snapshot of
+# the label taken before a run cannot tell two runs apart at all.
+#
+# There is deliberately no empty-means-everything. An unset marker reaching here
+# would delete a live run's fixtures, which is the fault this scoping removes.
+st_delete_run() {   # st_delete_run <marker>|--all
+  local marker="${1:-}" scope rows nums n deleted=0 held="$LOCK_HELD"
+  if [ -z "$marker" ]; then
+    note "  cleanup: no run marker — nothing removed"
+    printf '0\n'
+    return 0
+  fi
+  scope="run $marker"
+  [ "$marker" = "--all" ] && scope="every run"
+  rows="$(gh issue list --state all --label track:selftest --limit "$LIST_LIMIT" \
+          --json number,title 2>/dev/null \
+          | jq -r '.[] | "\(.number)\t\(.title | gsub("[\t\r\n]"; " "))"' || true)"
+  if [ "$marker" = "--all" ]; then
+    nums="$(printf '%s\n' "$rows" | awk -F'\t' 'NF{print $1}')"
+  else
+    nums="$(printf '%s\n' "$rows" | grep -F "$marker" | awk -F'\t' 'NF{print $1}' || true)"
+  fi
+  # Paired here rather than left to the caller: gh_write acquires and does not
+  # release, so this running inside a $( ) would set LOCK_HELD in the subshell
+  # only and leave the lock directory behind — recorded as held by a pid that is
+  # the parent's, which then waits on itself for ever.
+  lock_acquire
+  for n in $nums; do
+    if gh_write issue delete "$n" --yes >/dev/null 2>&1; then
+      deleted=$((deleted + 1))
+    else
+      gh_write issue close "$n" --reason "not planned" >/dev/null 2>&1 || true
+      deleted=$((deleted + 1))
+      note "  (could not delete #$n — closed instead; needs admin to delete)"
+    fi
+  done
+  [ "$held" = 1 ] || lock_release
+  note "  cleanup: removed $deleted throwaway issue(s) from $scope"
+  printf '%s\n' "$deleted"
+  return 0
+}
+
 st_cleanup() {
-  local nums n deleted=0
   note "  cleaning up …"
   # Both outlive a failed assertion, and an abandoned orphan branch is one this
   # very change would then read as work this checkout holds.
@@ -1557,19 +1610,15 @@ st_cleanup() {
     git branch -D "$ST_ORPHAN_BRANCH" >/dev/null 2>&1 || true
     ST_ORPHAN_BRANCH=""
   fi
-  nums="$(gh issue list --state all --label track:selftest --limit 100 \
-          --json number --jq '.[].number' 2>/dev/null || true)"
-  for n in $nums; do
-    if gh_write issue delete "$n" --yes >/dev/null 2>&1; then
-      deleted=$((deleted + 1))
-    else
-      gh_write issue close "$n" --reason "not planned" >/dev/null 2>&1 || true
-      note "  (could not delete #$n — closed instead; needs admin to delete)"
-    fi
-  done
+  st_delete_run "$ST_RUN" >/dev/null
   lock_release
-  note "  cleanup: removed $deleted throwaway issue(s)"
   return 0
+}
+
+# A marker unique to one run, on the same shasum idiom as repo_key.
+st_run_id() {
+  printf 'st%s' \
+    "$(printf '%s %s %s' "$(date -u +%s)" "$$" "$RANDOM$RANDOM$RANDOM" | shasum | cut -c1-8)"
 }
 
 st_num() { printf '%s' "$1" | awk '{print $2}' | tr -d '#'; }
@@ -1592,12 +1641,27 @@ st_add() {
   return 0
 }
 
+# Files one throwaway issue under the marker of a second, imaginary run. What
+# cleanup has to leave alone is another run's work, and the only way to have any
+# without starting a second run is to file it under a second marker.
+st_add_foreign() {
+  local keep="$ST_RUN"
+  ST_RUN="$ST_FOREIGN_RUN"
+  st_add "$@"
+  ST_RUN="$keep"
+  return 0
+}
+
 # What the throwaway chain comes off. An epic names the epic it follows, and for
 # the selftest that one has to be CLOSED: an open blocker would gate every issue
 # filed under the root, and half the run would fail on a queue it never meant to
-# test.
+# test. A run closes throwaway issues as it goes, so the newest closed issue in
+# the repository is often one a concurrent run is about to delete — and a chain
+# hung off that is the same death by a second route.
 st_chain_head() {
-  gh issue list --state closed --limit 1 --json number --jq '.[0].number // empty'
+  gh issue list --state closed --limit "$LIST_LIMIT" --json number,labels \
+    | jq -r '[.[] | select((.labels | map(.name) | index("track:selftest")) == null)]
+             | .[0].number // empty'
 }
 
 # main checked out, one branch held by a second worktree, one held by nothing.
@@ -1622,19 +1686,40 @@ st_scratch_repo() {
 # What makes the subshell safe is that a command takes and drops the write lock
 # inside its own body, refusal included, so neither outlives the containment.
 cmd_selftest() {
-  [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
-Re-run with:  scripts/track.sh selftest --yes"
+  local clean="--all"
+  case "${1:-}" in
+    --clean)
+      shift
+      case "${1:-}" in --yes|'') ;; *) clean="$1"; shift ;; esac
+      [ "${1:-}" = "--yes" ] || die "selftest --clean deletes throwaway issues for real — every run's by
+default, including a run in progress somewhere else.
+Re-run with:  scripts/track.sh selftest --clean --yes
+Or name one run's marker:  scripts/track.sh selftest --clean <marker> --yes"
+      printf 'cleaned %s throwaway issue(s)\n' "$(st_delete_run "$clean")"
+      return 0
+      ;;
+    --yes) ;;
+    *) die "selftest creates and deletes real issues in this repo.
+Re-run with:  scripts/track.sh selftest --yes" ;;
+  esac
 
-  local t0 A B C D E F G H I J K L M N P Q R S T U V Z out rc loc adv dt bn ob scratch ids head
+  local t0 A B C D E F G H I J K L M N P Q R S T U V X1 X2 Y Z
+  local out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
-  note "selftest"
+  ST_RUN="$(st_run_id)"
+  # Drawn fresh rather than derived from $ST_RUN: anything sharing a prefix with
+  # it would be matched by the grep that scopes a delete, silently re-merging
+  # the two sets. A constant would be worse still — every run would file its
+  # stand-in under it and delete every other run's, which is this bug.
+  ST_FOREIGN_RUN="$(st_run_id)"
+  note "selftest $ST_RUN"
   note "  preflight: doctor"
   ( AS_JSON=0 cmd_doctor >/dev/null ) || die "doctor failed — fix that first."
 
-  trap 'st_cleanup; lock_release' EXIT
+  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release' EXIT
   # Without an explicit exit, bash runs the handler and then RESUMES, so a Ctrl-C
   # would delete the throwaway issues and carry on asserting against them.
-  trap 'st_cleanup; lock_release; exit 130' INT TERM
+  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release; exit 130' INT TERM
 
   note "  creating throwaway issues …"
   head="$(st_chain_head)"
@@ -1691,6 +1776,17 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_add "add files an issue blocked by #$A" \
     -t "selftest blocked by $A" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z"
   B="$ST_NUM"
+
+  # A second run, simulated: filed through the same path under another marker,
+  # and filed here rather than beside the assertions that read them — the label
+  # listing lags a write by a second or two, and a run that cannot see its own
+  # issues yet reports the wrong count.
+  st_add_foreign "add files a stand-in for another run" \
+    -t "selftest crashed litter one" --area infra --kind chore --size s --parent "$Z"
+  X1="$ST_NUM"
+  st_add_foreign "add files a second stand-in for that run" \
+    -t "selftest crashed litter two" --area infra --kind chore --size s --parent "$Z"
+  X2="$ST_NUM"
 
   rc=0; out="$(AS_JSON=1 cmd_ready)" || rc=$?
   st_assert "$rc" "ready runs with #$A, #$C and #$B filed"
@@ -2004,7 +2100,8 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # `done` cleared wip on the way past, so what comes back is open, unheld work
   # -- reopening restores the issue, not the claim that was on it.
-  out="$(cmd_reopen "$A")"
+  rc=0; out="$(cmd_reopen "$A")" || rc=$?
+  st_assert "$rc" "reopen runs on closed #$A"
   rc=0; AS_JSON=1 cmd_show "$A" | jq -e '.state == "OPEN" and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "reopen returns #$A to open, unheld work"
 
@@ -2026,9 +2123,9 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # What the refusal sent the caller here to do. A reopen that leaves the parent
   # still unusable has restored the state and not the capability.
-  Q="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of reopened $A" --area infra --kind chore --size s --parent "$A" --selftest)")"
-  rc=0; [ -n "$Q" ] || rc=1
-  st_assert "$rc" "add takes reopened #$A as a parent"
+  st_add "add takes reopened #$A as a parent" \
+    -t "selftest child of reopened $A" --area infra --kind chore --size s --parent "$A"
+  Q="$ST_NUM"
 
   # #$A is borrowed from the block above, and assertions further down still read
   # #$B as ready. Handing it back closed is what keeps that true -- left open,
@@ -2234,6 +2331,46 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; ( cmd_dep "$E" --needs "$F" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "server rejects a direct 2-cycle, wrapper exits non-zero (got $rc)"
 
+  # ---------------------------------------------------------- run scoping ---
+  # Cleanup used to delete every issue carrying track:selftest, repo-wide, so
+  # two runs at once destroyed each other's fixtures and the loser died on a
+  # number that no longer resolved. A marker on the issue is what makes a run's
+  # own work nameable: a snapshot of the label taken before the run cannot tell
+  # two runs apart, and refusing to start while any exist would let one crashed
+  # run's litter block every run after it.
+  #
+  # Every call below is wrapped, because `die` calls `exit` and `||` does not
+  # catch an exit: an unwrapped positive-path call ends the run instead of
+  # recording one FAIL.
+  rc=0; ( AS_JSON=1 cmd_show "$A" ) \
+    | jq -e --arg m "$ST_RUN" '.title | contains($m)' >/dev/null || rc=1
+  st_assert "$rc" "add stamps this run's marker on #$A"
+
+  rc=0; ( ST_RUN="" cmd_add -t "selftest unmarked" --area infra --kind chore \
+          --size s --parent "$Z" --selftest ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "add --selftest refuses to file with no run marker (got $rc)"
+  rc=0; ( AS_JSON=1 cmd_find "selftest unmarked" ) | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "add creates nothing when it has no run marker"
+
+  out="$(st_delete_run "$ST_FOREIGN_RUN" 2>&1)" || true
+  rc=0; printf '%s' "$out" | grep -q "removed 2 throwaway" || rc=1
+  st_assert "$rc" "cleanup counts only the run it names"
+  rc=0; ( AS_JSON=1 cmd_find "$ST_FOREIGN_RUN" ) \
+    | jq -e '[.[] | select(.state == "OPEN")] | length == 0' >/dev/null || rc=1
+  st_assert "$rc" "cleanup removes every issue of the run it names"
+  rc=0; ( AS_JSON=1 cmd_find "$ST_RUN" ) \
+    | jq -e --argjson n "$Z" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "cleanup leaves a concurrent run's fixtures alone"
+
+  # A run closes throwaway issues as it goes, so by now the newest closed issue
+  # in the repository is one — and a run that hangs its whole chain off it dies
+  # when the run that owns it cleans up.
+  head="$( st_chain_head )"
+  rc=0; ( AS_JSON=1 cmd_show "$head" ) \
+    | jq -e '.title | startswith("selftest ") | not' >/dev/null || rc=1
+  st_assert "$rc" "the chain head is not a throwaway issue (#$head)"
+
   # Informational canary: the search index is expected to disagree (it lags writes).
   # This documents WHY local derivation is the primary path. Never fails the run.
   loc="$(AS_JSON=1 cmd_ready | jq -r '[.[].num] | sort | join(",")' 2>/dev/null || echo 'n/a')"
@@ -2248,8 +2385,38 @@ Re-run with:  scripts/track.sh selftest --yes"
     note "  note  advanced-search agrees with local derivation"
   fi
 
-  trap - EXIT INT TERM
+  st_add_foreign "add files what a crashed run would leave behind" \
+    -t "selftest surviving litter" --area infra --kind chore --size s --parent "$Z"
+  Y="$ST_NUM"
+
+  # Re-armed rather than cleared: a live stand-in fixture and the lock both
+  # outlive this point, so a Ctrl-C here would leak one and strand the other.
+  # They come off after the last delete.
+  trap 'st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release' EXIT
+  trap 'st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release; exit 130' INT TERM
   st_cleanup
+  rc=0; ( AS_JSON=1 cmd_find "$ST_FOREIGN_RUN" ) \
+    | jq -e --argjson n "$Y" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "cleanup leaves a crashed run's litter behind"
+
+  rc=0; out="$( cmd_selftest --clean 2>&1 )" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "selftest --clean refuses without --yes (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "every run" || rc=1
+  st_assert "$rc" "the refusal says --clean takes every run's issues"
+
+  # The command itself, against the one set it can take without reaching a
+  # concurrent run's live fixtures. Naming a marker is also what lets a person
+  # clear a crashed run without stopping the run beside it.
+  rc=0; out="$( cmd_selftest --clean "$ST_FOREIGN_RUN" --yes )" || rc=$?
+  st_assert "$rc" "selftest --clean <marker> --yes clears that run (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "^cleaned 1 throwaway" || rc=1
+  st_assert "$rc" "the explicit clean reports what it removed"
+  rc=0; ( AS_JSON=1 cmd_find "$ST_FOREIGN_RUN" ) \
+    | jq -e '[.[] | select(.state == "OPEN")] | length == 0' >/dev/null || rc=1
+  st_assert "$rc" "clearing a crashed run's litter is an explicit action"
+  trap - EXIT INT TERM
+
   dt=$(( $(date +%s) - t0 ))
   if [ "$ST_FAIL" -eq 0 ]; then
     printf 'selftest passed %s/%s in %ss\n' "$ST_PASS" "$((ST_PASS + ST_FAIL))" "$dt"
