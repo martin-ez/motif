@@ -276,10 +276,12 @@ it, wire it, and go back to the task in hand.
 without one is gated by nothing and is startable ahead of the whole chain it
 belongs to. `add` refuses that and prints the chain, marking which epics are
 startable, so the work goes where it belongs rather than where it can start
-soonest. An epic takes `--blocked-by` instead, naming the epic it comes off: the
-chain is the order, so one that comes off nothing is a second root, and nothing
-gates it or the work filed under it. Only the first epic in an empty tracker
-comes off nothing.
+soonest. The parent must also be open — a closed one gates nothing either —
+and `add`, `dep --child` and `dep --parent` all refuse it. An epic takes
+`--blocked-by` instead, naming the epic it comes off: the chain is the order,
+so one that comes off nothing is a second root, and nothing gates it or the
+work filed under it. Only the first epic in an empty tracker comes off
+nothing.
 
 The `next`, `epic`, `refine` and `file` skills in `.claude/skills/` carry the
 full procedure for taking one issue, running a whole epic, grooming and filing

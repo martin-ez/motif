@@ -53,9 +53,12 @@ scripts/track.sh add -t 'Report the block size after negotiation' \
 `--parent` is required and is a different question from `--blocked-by`: it says
 which chain the work belongs to, not what it waits on. Readiness is inherited
 through it, so work filed without one is gated by nothing and jumps the queue —
-`add` refuses it and lists the open chain heads. An epic takes `--blocked-by`
-instead, naming the epic it comes off — `add` refuses that too, marking the open
-ends of the chain. Only the first epic in an empty tracker comes off nothing.
+`add` refuses it and lists the open chain heads. It has to name an issue that
+is still open, for the same reason: a closed parent gates nothing either, so
+the work would be startable ahead of its chain and would sit under no epic in
+`plan`. An epic takes `--blocked-by` instead, naming the epic it comes off —
+`add` refuses that too, marking the open ends of the chain. Only the first
+epic in an empty tracker comes off nothing.
 
 ## 5. Confirm, then go back
 
