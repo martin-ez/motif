@@ -2365,10 +2365,14 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   rc=0; printf '%s' "$out" | grep -q "every run" || rc=1
   st_assert "$rc" "the refusal says --clean takes every run's issues"
 
-  ( cmd_selftest --clean --yes ) >/dev/null 2>&1 || true
-  rc=0; [ -z "$(gh issue list --state all --label track:selftest \
-                --limit "$LIST_LIMIT" --json number --jq '.[].number' 2>/dev/null)" ] || rc=1
-  st_assert "$rc" "the explicit clean removes litter from every run"
+  # Asserted by marker rather than by running --clean, which would take a
+  # concurrent run's live fixtures with it — the fault this scoping removes,
+  # reintroduced from the test. What --clean does beyond this is one substitution
+  # of the set, and its blast radius is why it is confirmed rather than automatic.
+  out="$(st_delete_run "$ST_FOREIGN_RUN" 2>&1)" || true
+  rc=0; ( AS_JSON=1 cmd_find "selftest surviving litter" ) \
+    | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "clearing a crashed run's litter is an explicit action"
 
   dt=$(( $(date +%s) - t0 ))
   if [ "$ST_FAIL" -eq 0 ]; then
