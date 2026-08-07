@@ -135,6 +135,9 @@ st_omits() {
 	esac
 }
 
+# Both of sweep_jobs' inputs are ambient — an exported override and the host's
+# core count — so a case that reads either reports the shell it ran in rather
+# than the script. Every case names its own inputs.
 selftest() {
 	st_status=0
 
@@ -146,7 +149,12 @@ selftest() {
 	st_is 8 "$(jobs_for 64)" "the cap holds above it"
 
 	st_is 5 "$(MOTIF_MUTANTS_JOBS=5 sweep_jobs)" "an override beats the rule"
-	st_is "$(jobs_for "$(cores)")" "$(sweep_jobs)" "no override leaves the rule"
+	st_is 3 "$(unset MOTIF_MUTANTS_JOBS; cores() { echo 12; }; sweep_jobs)" \
+		"no override leaves the rule"
+	st_is 8 "$(unset MOTIF_MUTANTS_JOBS; cores() { echo 32; }; sweep_jobs)" \
+		"a large host still hits the cap"
+	st_is 3 "$(MOTIF_MUTANTS_JOBS=; cores() { echo 12; }; sweep_jobs)" \
+		"an empty override leaves it too"
 
 	st_says 2 "a mutant survived" "a survivor is named as one"
 	st_says 3 "timed out" "a timeout is named as one"
