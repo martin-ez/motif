@@ -10,11 +10,12 @@
 //! [`latency_probe`] for how loud it was, how close the deadline came, how many
 //! frames went by and what the round trip cost, [`priority_latch`] for its
 //! priority class, and [`xrun_counter`] and [`fault_channel`] for the two ways
-//! the boundary fails. A fault outlives its stream, so [`DeviceLink`] holds
-//! what it takes to open another and is what the application talks to.
+//! the boundary fails. A fault outlives its stream, so [`DeviceLink`] holds what
+//! it takes to open another, and opens it on a [`Bench`] off the frame.
 
 use std::fmt;
 
+mod bench;
 mod boundary;
 mod catalog;
 mod ceiling;
@@ -34,6 +35,7 @@ mod ring;
 mod slack;
 mod xrun;
 
+pub use bench::Bench;
 pub use boundary::{BlockCapture, BlockPlayback, Priming, boundary};
 pub use catalog::DeviceCatalog;
 pub use ceiling::{HELD_ABOVE, held};
@@ -290,7 +292,11 @@ impl std::error::Error for DeviceError {}
 
 /// A source of duplex audio streams, a description of what there is to open,
 /// and what it would open if nobody chose.
-pub trait AudioBackend {
+///
+/// Shareable across threads, because opening a device is what a [`Bench`] does
+/// and the backend has to reach it there while whatever holds it keeps reading
+/// the listing.
+pub trait AudioBackend: Send + Sync + 'static {
     /// The stream this backend opens.
     type Stream: DuplexStream;
 
@@ -354,7 +360,10 @@ fn opened_width(offered: &[u16], selection: ChannelSelection, natural: u16) -> O
 }
 
 /// An input and an output stream running together on one device.
-pub trait DuplexStream {
+///
+/// Sendable, because a [`Bench`] is where one is built and where the one it
+/// replaces is torn down; the thread that reads its meters is another.
+pub trait DuplexStream: Send {
     /// The configuration the device granted, which may differ from the request.
     fn config(&self) -> StreamConfig;
 

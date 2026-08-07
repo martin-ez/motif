@@ -5,7 +5,8 @@
 //! report a different listing, which is how a device going busy is modelled
 //! where there is no hardware to make busy.
 
-use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, ChannelSelection, DeviceCatalog, DeviceError,
@@ -13,30 +14,34 @@ use motif::audio::{
 };
 
 struct CountingBackend {
-    listing: RefCell<Vec<AudioHost>>,
-    enumerations: Cell<usize>,
-    asked_at: Cell<u32>,
+    listing: Mutex<Vec<AudioHost>>,
+    enumerations: AtomicUsize,
+    asked_at: AtomicU32,
 }
 
 impl CountingBackend {
     fn new(listing: Vec<AudioHost>) -> Self {
         Self {
-            listing: RefCell::new(listing),
-            enumerations: Cell::new(0),
-            asked_at: Cell::new(0),
+            listing: Mutex::new(listing),
+            enumerations: AtomicUsize::new(0),
+            asked_at: AtomicU32::new(0),
         }
     }
 
     fn now_lists(&self, listing: Vec<AudioHost>) {
-        self.listing.replace(listing);
+        *self.held() = listing;
     }
 
     fn enumerations(&self) -> usize {
-        self.enumerations.get()
+        self.enumerations.load(Ordering::Relaxed)
     }
 
     fn asked_at(&self) -> u32 {
-        self.asked_at.get()
+        self.asked_at.load(Ordering::Relaxed)
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<AudioHost>> {
+        self.listing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -44,9 +49,9 @@ impl AudioBackend for CountingBackend {
     type Stream = NullStream;
 
     fn hosts(&self, sample_rate: u32) -> Vec<AudioHost> {
-        self.enumerations.set(self.enumerations.get() + 1);
-        self.asked_at.set(sample_rate);
-        self.listing.borrow().clone()
+        self.enumerations.fetch_add(1, Ordering::Relaxed);
+        self.asked_at.store(sample_rate, Ordering::Relaxed);
+        self.held().clone()
     }
 
     fn defaults(&self, _sample_rate: u32) -> Option<DeviceSelection> {

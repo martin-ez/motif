@@ -13,7 +13,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, Command,
@@ -193,15 +193,19 @@ impl AudioPath for Heard {
 
 /// What a stream was asked to do, readable after the stream is gone.
 #[derive(Clone, Default)]
-struct Asked(Rc<RefCell<Vec<&'static str>>>);
+struct Asked(Arc<Mutex<Vec<&'static str>>>);
 
 impl Asked {
     fn of(&self) -> Vec<&'static str> {
-        self.0.borrow().clone()
+        self.held().clone()
     }
 
     fn record(&self, what: &'static str) {
-        self.0.borrow_mut().push(what);
+        self.held().push(what);
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<&'static str>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

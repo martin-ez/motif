@@ -80,7 +80,7 @@ pub struct Monitor<A: App, B: AudioBackend, F> {
 
 impl<A: App, B: AudioBackend, F, P> Monitor<A, B, F>
 where
-    F: FnMut() -> P,
+    F: Fn() -> P + Send + Sync + 'static,
     P: AudioPath,
 {
     /// Open `link`, start it playing, and hold it for the run behind `app`.
@@ -88,17 +88,17 @@ where
     /// The link belongs to the run rather than to the monitor, so whatever else
     /// configures it holds a handle of its own and a composition with no device
     /// to open passes `None`. Opening happens here rather than where the link
-    /// was built, so that a page listing what it could be opened on has done so
-    /// before any stream holds the device.
+    /// was built, so a page listing what it could be opened on has listed first,
+    /// and it is the one open a run waits for: no frame is drawn to give back.
     ///
     /// This cannot fail. A device that refuses the request or will not start
     /// leaves the monitor in [`AudioState::Lost`] carrying why.
     pub fn watching(app: A, mut link: Option<SharedLink<B, F>>) -> Self {
         if let Some(link) = link.as_mut() {
             link.change(|held| {
-                if held.open().is_ok() {
-                    let _started = held.start();
-                }
+                held.open();
+                held.settled();
+                let _started = held.start();
             });
         }
 

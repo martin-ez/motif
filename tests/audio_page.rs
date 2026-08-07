@@ -8,6 +8,9 @@
 //! page drew.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
@@ -20,6 +23,12 @@ use motif::ui::{ControlEvent, Controls, Frame, Page, ScriptedControls, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const SETTLING_FRAMES: usize = 3;
+const ANSWERING_FRAMES: usize = 2_000;
+const WAITING_FRAMES: usize = 12;
+
+/// How long a held device waits before opening itself, where the test that
+/// held it has gone without letting it out.
+const ABANDONED: Duration = Duration::from_secs(5);
 const RATE: u32 = 48_000;
 const FIRST: &str = "first";
 const SECOND: &str = "second";
@@ -48,6 +57,31 @@ struct Studio {
     arrived: AtomicBool,
     departed: AtomicBool,
     opens: AtomicUsize,
+    gate: Mutex<Option<Gate>>,
+}
+
+/// What holds one open inside the backend, and is spent by holding it.
+struct Gate {
+    entering: SyncSender<()>,
+    release: Receiver<()>,
+}
+
+/// The end of a gate a test drives it from.
+struct Latch {
+    entered: Receiver<()>,
+    release: SyncSender<()>,
+}
+
+impl Latch {
+    fn inside(&self) {
+        self.entered
+            .recv_timeout(ABANDONED)
+            .expect("the device is being opened");
+    }
+
+    fn let_go(&self) {
+        self.release.send(()).expect("the device is waiting");
+    }
 }
 
 impl Studio {
@@ -56,11 +90,37 @@ impl Studio {
             arrived: AtomicBool::new(false),
             departed: AtomicBool::new(false),
             opens: AtomicUsize::new(0),
+            gate: Mutex::new(None),
         }
     }
 
     fn opens(&self) -> usize {
         self.opens.load(Ordering::Relaxed)
+    }
+
+    fn hold_the_next_open(&self) -> Latch {
+        let (entering, entered) = sync_channel(1);
+        let (release, waiting) = sync_channel(1);
+
+        *self.gate.lock().unwrap_or_else(PoisonError::into_inner) = Some(Gate {
+            entering,
+            release: waiting,
+        });
+
+        Latch { entered, release }
+    }
+
+    fn wait_where_held(&self) {
+        let held = self
+            .gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+
+        if let Some(gate) = held {
+            let _entered = gate.entering.try_send(());
+            let _released = gate.release.recv_timeout(ABANDONED);
+        }
     }
 
     fn arrive(&self) {
@@ -154,6 +214,7 @@ impl AudioBackend for Studio {
         path: P,
     ) -> Result<Self::Stream, DeviceError> {
         self.opens.fetch_add(1, Ordering::Relaxed);
+        self.wait_where_held();
 
         let host = self
             .hosts(RATE)
@@ -200,9 +261,9 @@ fn listed_at(request: StreamRequest) -> StudioPage {
     ));
 
     let page = AudioPage::listing(link.clone());
-    if link.change(DeviceLink::open).is_ok() {
-        let _started = link.change(DeviceLink::start);
-    }
+    link.change(DeviceLink::open);
+    link.change(DeviceLink::settled);
+    let _started = link.change(DeviceLink::start);
 
     page
 }
@@ -274,9 +335,25 @@ fn chosen(page: &mut StudioPage) {
     }
 }
 
-fn settled(page: &mut StudioPage) {
+fn dispatched(page: &mut StudioPage) {
     chosen(page);
     let _rows = drawn(page);
+}
+
+fn answered(page: &mut StudioPage) {
+    for _ in 0..ANSWERING_FRAMES {
+        if page.state() != AudioState::Opening {
+            return;
+        }
+        let _rows = drawn(page);
+    }
+
+    panic!("the device never answered");
+}
+
+fn settled(page: &mut StudioPage) {
+    dispatched(page);
+    answered(page);
 }
 
 fn opens(page: &StudioPage) -> usize {
@@ -530,9 +607,89 @@ fn a_burst_opens_on_the_frame_after_it_settles() {
     chosen(&mut page);
     let waiting = opens(&page) - before;
     let _rows = drawn(&mut page);
+    answered(&mut page);
 
     assert_eq!(waiting, 0);
     assert_eq!(opens(&page) - before, 1);
+}
+
+fn holding(page: &StudioPage) -> Latch {
+    page.link().read(|held| held.backend().hold_the_next_open())
+}
+
+/// A page whose choice of the second host is with a device that has not
+/// answered, as a frame drawn during a slow open finds it.
+fn opening_the_second_host(page: &mut StudioPage) -> Latch {
+    let latch = holding(page);
+    driven_by(page, on(AudioSetting::Host));
+    driven_by(page, [pressed(Button::Right)]);
+    dispatched(page);
+    latch.inside();
+
+    latch
+}
+
+#[test]
+fn the_frame_that_starts_an_open_does_not_wait_for_the_device() {
+    let mut page = page();
+
+    let latch = opening_the_second_host(&mut page);
+
+    assert_eq!(page.state(), AudioState::Opening);
+
+    latch.let_go();
+}
+
+#[test]
+fn frames_are_drawn_while_the_device_is_opening() {
+    let mut page = page();
+    let latch = opening_the_second_host(&mut page);
+
+    let waiting: Vec<(String, AudioState)> = (0..WAITING_FRAMES)
+        .map(|_| {
+            let row = drawn(&mut page)[AudioSetting::Host as usize].clone();
+            (row, page.state())
+        })
+        .collect();
+
+    assert_eq!(waiting.len(), WAITING_FRAMES);
+    assert!(
+        waiting
+            .iter()
+            .all(|(row, state)| row.ends_with(SECOND) && *state == AudioState::Opening),
+        "{waiting:?}"
+    );
+
+    latch.let_go();
+}
+
+#[test]
+fn walking_on_while_the_device_opens_queues_no_second_open() {
+    let mut page = page();
+    let latch = opening_the_second_host(&mut page);
+    let asked = opens(&page);
+
+    driven_by(&mut page, [pressed(Button::Right)]);
+    for _ in 0..SETTLING_FRAMES + 1 {
+        let _waiting = drawn(&mut page);
+    }
+
+    assert_eq!(opens(&page), asked);
+
+    latch.let_go();
+}
+
+#[test]
+fn the_device_kept_opening_lands_once_it_answers() {
+    let mut page = page();
+    let latch = opening_the_second_host(&mut page);
+    let _waiting = drawn(&mut page);
+
+    latch.let_go();
+    answered(&mut page);
+
+    assert_eq!(page.state(), AudioState::Playing);
+    assert_eq!(host_of(&page), SECOND);
 }
 
 #[test]
@@ -562,6 +719,7 @@ fn the_frame_after_a_settle_opens_the_choice() {
 
     chosen(&mut page);
     let _rows = drawn(&mut page);
+    answered(&mut page);
 
     assert_eq!(page.state(), AudioState::Playing);
     assert_eq!(host_of(&page), SECOND);

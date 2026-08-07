@@ -6,9 +6,10 @@
 //! one to build. [`Escrow`] is where such a path lives between streams — lent
 //! to one, back home when that one is dropped, and lent again to the next.
 //!
-//! Both sides of the loan are the application thread's. Lending happens where a
-//! stream is opened, and the return happens where one is dropped, which is
-//! already where the buffers behind it are freed. No callback reaches either.
+//! Neither side of the loan is a callback's. Lending happens where a stream is
+//! opened and the return where one is dropped, and both of those are the
+//! [`Bench`](super::Bench)'s rather than the application thread's — which is
+//! why the home is shared across threads and not merely across owners.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
