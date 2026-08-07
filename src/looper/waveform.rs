@@ -154,6 +154,23 @@ impl LoopWaveform {
             .collect()
     }
 
+    /// The column of `columns` that frame `frame` of the loop is drawn in.
+    ///
+    /// [`drawn`](Self::drawn)'s mapping answered the other way round, so that
+    /// anything laid over a loop lands on the column carrying that frame's own
+    /// signal rather than on its share of the length, which is up to a bucket
+    /// away. `None` past the end of the loop, which is where a mark found in an
+    /// earlier take ends up, and on a region with no columns to draw in.
+    pub fn column_of(&self, frame: usize, columns: usize) -> Option<usize> {
+        let buckets = self.buckets().len();
+        let bucket = frame / self.width;
+        if bucket >= buckets {
+            return None;
+        }
+
+        Some(((bucket + 1) * columns).checked_sub(1)? / buckets)
+    }
+
     fn folding(&mut self, frame: usize, sample: f32) {
         let bucket = frame / self.width;
         if frame.is_multiple_of(self.width) {
