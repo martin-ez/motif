@@ -10,13 +10,14 @@
 # inherits them. A warning that only denies in CI is the drift this exists to
 # close, and it costs a rebuild the first time the gate runs over ad-hoc work.
 #
-# Three of CI's assertions are absent because a working tree cannot answer
-# them: the title's length and its `type(scope): summary` shape, and the scan
-# for tool attribution in the body. All three belong to a request that does
-# not exist while this runs. `scripts/check-pr-body.sh -F body.md` checks a
-# drafted body for hard wrapping and nothing else, so it closes one of the
-# four and the other three are yours to hold as you write them (4.2, 4.4, 4.5).
-# The commit half of the attribution scan is here, because commits do exist.
+# Four of pr.yml's assertions are outside this gate, because a working tree
+# cannot answer them: the title's length, its `type(scope): summary` shape,
+# the body's wrapping, and the scan for tool attribution in the body. All four
+# belong to a request that does not exist while this runs.
+# `scripts/check-pr-body.sh -F body.md` answers the wrapping one against a
+# drafted body and nothing else; the other three are yours to hold as you
+# write them (4.2, 4.4, 4.5). The commit half of the attribution scan is here,
+# because commits do exist.
 #
 # Every check runs even after an earlier one fails, as `!cancelled()` makes
 # them in CI, so one run says everything rather than the first thing. The
