@@ -19,6 +19,12 @@
 # write them (4.2, 4.4, 4.5). The commit half of the attribution scan is here,
 # because commits do exist.
 #
+# --selftest holds CI to that list rather than trusting it to hold still: it
+# reads the workflows and fails on a command CI runs that this gate neither
+# runs nor names in `ci_exceptions`. The body's wrapping is the one of the four
+# that reaches a workflow as a command, so it is the one entry in that table;
+# the other three are inline shell that no extraction can see.
+#
 # Every check runs even after an earlier one fails, as `!cancelled()` makes
 # them in CI, so one run says everything rather than the first thing. The
 # mutation sweep is last and is the exception: it decides nothing on a tree
@@ -165,6 +171,91 @@ unpinned_sweeps() {
 $(grep -h -e 'cargo mutants --in-diff' "$file" 2>/dev/null || true)
 EOF
 	done
+	printf '%s' "$found"
+}
+
+# A command reduced to its shape: every word after the first that names a path,
+# an expansion or a count becomes a placeholder. CI writes the sweep's diff to a
+# file it names and passes a job count it fixes, where scripts/check-mutants.sh
+# derives both, so the two invocations agree in their flags and differ in their
+# operands. Comparing shapes is what lets the wrapper account for the command it
+# wraps, while a flag only one side carries still reads as a difference.
+command_shapes() {
+	awk '
+		{
+			sub(/^[[:space:]]+/, "")
+			sub(/[[:space:]][0-9]*>.*$/, "")
+		}
+		$1 == "cargo" || $1 ~ /^scripts\// {
+			$1 = $1
+			for (i = 2; i <= NF; i++)
+				if (index($i, "/") || index($i, "$") || $i ~ /^[0-9]+$/)
+					$i = "_"
+			print
+		}
+	'
+}
+
+# Every command a workflow runs. A line's content — after a leading `- ` and
+# `run: `, and one pipeline segment at a time — is a command when it begins
+# `cargo ` or `scripts/`, which reads a step inside a `run: |` block as well as
+# a one-line `run:`. `uses:`, `sudo apt-get` and `git diff` steps fall out on
+# their own, because they begin with something else.
+ci_commands() {
+	local file
+	for file in "$@"; do
+		tr '|' '\n' <"$file" | sed -e 's/^[[:space:]]*//' -e 's/^- //' \
+			-e 's/^run: //' | command_shapes
+	done
+}
+
+# The commands the gate runs, read out of the calls that run them. A check the
+# gate spells as a shell function has no command line and announces the line
+# that reproduces it instead, so a `run_check` call yields both its command and
+# that line. Reading the calls, and a bare invocation at the top level or one
+# level inside it, is what stops a command named in a comment or in a fixture
+# below from accounting for one the gate stopped running.
+gate_commands() {
+	local file calls
+	for file in "$@"; do
+		calls="$(grep '^run_check ' "$file" || true)"
+		{
+			printf '%s\n' "$calls" | sed 's/^run_check "[^"]*" "[^"]*" //'
+			printf '%s\n' "$calls" |
+				sed -n 's/^run_check "[^"]*" "\([^"]*\)".*/\1/p'
+			grep -E "^${TAB}?(cargo |scripts/)" "$file" || true
+		} | tr '|' '\n' | command_shapes
+	done
+}
+
+# Commands CI runs that the gate cannot, each with the reason it is out. A
+# working tree holds no pull request, so a check that reads one is a property of
+# the request rather than of the tree. The reason sits beside the command as
+# data rather than in prose about it, so a reviewer sees what was excluded and
+# why in the diff that excludes it.
+ci_exceptions() {
+	printf '%s\n' \
+		"scripts/check-pr-body.sh${TAB}reads a pull request body, which does not exist while the gate runs"
+}
+
+# The commands CI runs that the gate neither runs nor excepts. Both sides are
+# read out of the files that run them, so a check dropped from the gate stops
+# accounting for the step in CI it mirrored.
+unaccounted() {
+	local ci="$1" gate="$2" exceptions="$3" cmd found=""
+	while IFS= read -r cmd; do
+		[ -n "$cmd" ] || continue
+		if printf '%s\n' "$gate" | grep -qxF "$cmd"; then
+			continue
+		fi
+		if printf '%s\n' "$exceptions" | cut -d"$TAB" -f1 | grep -qxF "$cmd"; then
+			continue
+		fi
+		found="$found$cmd
+"
+	done <<EOF
+$ci
+EOF
 	printf '%s' "$found"
 }
 
@@ -395,6 +486,46 @@ cross-compile guard${TAB}cargo check --target aarch64-unknown-linux-gnu --all-fe
 	st_has "$(unpinned_sweeps "$pinned" "$unpinned")" "$unpinned" \
 		"one call site dropping it is caught beside one that kept it"
 	rm -f "$pinned" "$unpinned"
+
+	local workflow
+	workflow="$(mktemp "${TMPDIR:-/tmp}/motif-gate.XXXXXX")"
+	cat >"$workflow" <<'EOF'
+jobs:
+  demo:
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: cargo test --all-features
+      - run: |
+          git diff origin/main...HEAD > /tmp/pr.diff
+          cargo bench --all-features
+EOF
+
+	out="$(ci_commands "$workflow")"
+	st_has "$out" "cargo test --all-features" "a one-line run: step is a command"
+	st_has "$out" "cargo bench --all-features" \
+		"a cargo line after the first of a run: block is one too"
+	st_hasnt "$out" "actions/checkout" "a uses: step is not a command"
+	st_hasnt "$out" "apt-get" "an apt-get step is not a command"
+	st_hasnt "$out" "git diff" "a git diff step is not a command"
+
+	out="$(unaccounted "$out" "$(gate_commands scripts/gate.sh)" "$(ci_exceptions)")"
+	st_has "$out" "cargo bench --all-features" \
+		"a command the gate neither runs nor excepts is unaccounted"
+	st_hasnt "$out" "cargo test" "a command the gate runs is accounted for"
+	rm -f "$workflow"
+
+	st_has "$(unaccounted "scripts/check-pr-body.sh" "" "")" \
+		"scripts/check-pr-body.sh" \
+		"dropping an entry from the exception table unaccounts its command"
+	st_is "" "$(unaccounted "scripts/check-pr-body.sh" "" "$(ci_exceptions)")" \
+		"the entry that carries a reason is what accounts for it"
+
+	st_is "" "$(unaccounted \
+		"$(ci_commands .github/workflows/ci.yml .github/workflows/pr.yml)" \
+		"$(gate_commands scripts/gate.sh scripts/check-mutants.sh)" \
+		"$(ci_exceptions)")" \
+		"every command CI runs is one the gate runs or excepts"
 
 	if [ "$st_status" = 0 ]; then
 		printf '\033[32mok\033[0m    every rule the gate runs on holds\n'
