@@ -1580,6 +1580,11 @@ st_delete_run() {   # st_delete_run <marker>|--all
   else
     nums="$(printf '%s\n' "$rows" | grep -F "$marker" | awk -F'\t' 'NF{print $1}' || true)"
   fi
+  # Paired here rather than left to the caller: gh_write acquires and does not
+  # release, so this running inside a $( ) would set LOCK_HELD in the subshell
+  # only and leave the lock directory behind — recorded as held by a pid that is
+  # the parent's, which then waits on itself for ever.
+  lock_acquire
   for n in $nums; do
     if gh_write issue delete "$n" --yes >/dev/null 2>&1; then
       deleted=$((deleted + 1))
@@ -1588,6 +1593,7 @@ st_delete_run() {   # st_delete_run <marker>|--all
       note "  (could not delete #$n — closed instead; needs admin to delete)"
     fi
   done
+  lock_release
   note "  cleanup: removed $deleted throwaway issue(s) from $scope"
   printf '%s\n' "$deleted"
   return 0
@@ -1630,6 +1636,17 @@ st_add() {
   ST_NUM="$(st_num "$out")"
   [ -n "$ST_NUM" ] || rc=1
   st_assert "$rc" "$label"
+  return 0
+}
+
+# Files one throwaway issue under the marker of a second, imaginary run. What
+# cleanup has to leave alone is another run's work, and the only way to have any
+# without starting a second run is to file it under a second marker.
+st_add_foreign() {
+  local keep="$ST_RUN"
+  ST_RUN="$ST_FOREIGN_RUN"
+  st_add "$@"
+  ST_RUN="$keep"
   return 0
 }
 
@@ -1681,7 +1698,7 @@ Re-run with:  scripts/track.sh selftest --clean --yes"
 Re-run with:  scripts/track.sh selftest --yes" ;;
   esac
 
-  local t0 A B C D E F G H I J K L M N P Q R S T U V X1 X2 Y Z
+  local t0 A B C D E F G H I J K L M N P R S T U V X1 X2 Y Z
   local out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
   ST_RUN="$(st_run_id)"
@@ -1749,6 +1766,17 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_add "add files an issue blocked by #$A" \
     -t "selftest blocked by $A" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z"
   B="$ST_NUM"
+
+  # A second run, simulated: filed through the same path under another marker,
+  # and filed here rather than beside the assertions that read them — the label
+  # listing lags a write by a second or two, and a run that cannot see its own
+  # issues yet reports the wrong count.
+  st_add_foreign "add files a stand-in for another run" \
+    -t "selftest crashed litter one" --area infra --kind chore --size s --parent "$Z"
+  X1="$ST_NUM"
+  st_add_foreign "add files a second stand-in for that run" \
+    -t "selftest crashed litter two" --area infra --kind chore --size s --parent "$Z"
+  X2="$ST_NUM"
 
   rc=0; out="$(AS_JSON=1 cmd_ready)" || rc=$?
   st_assert "$rc" "ready runs with #$A, #$C and #$B filed"
@@ -2314,11 +2342,6 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   rc=0; ( AS_JSON=1 cmd_find "selftest unmarked" ) | jq -e 'length == 0' >/dev/null || rc=1
   st_assert "$rc" "add creates nothing when it has no run marker"
 
-  # A second run, simulated: filed through the same path under another marker.
-  X1="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest crashed litter one" --area infra --kind chore --size s --parent "$Z" --selftest )")"
-  X2="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest crashed litter two" --area infra --kind chore --size s --parent "$Z" --selftest )")"
-  st_ok "created #$X1 #$X2 under another run's marker"
-
   out="$(st_delete_run "$ST_FOREIGN_RUN" 2>&1)" || true
   rc=0; printf '%s' "$out" | grep -q "removed 2 throwaway" || rc=1
   st_assert "$rc" "cleanup counts only the run it names"
@@ -2328,14 +2351,13 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
     | jq -e --argjson n "$Z" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "cleanup leaves a concurrent run's fixtures alone"
 
-  # A run closes five of its own issues before it ends, so the newest closed
-  # issue in the repository is very often a live run's — and hanging this run's
-  # whole chain off one is the same death by a second route.
-  Q="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest closed litter" --area infra --kind chore --size s --parent "$Z" --selftest )")"
-  ( MOTIF_AGENT=selftest-1 cmd_claim "$Q" ) >/dev/null 2>&1 || true
-  ( MOTIF_AGENT=selftest-1 cmd_done  "$Q" ) >/dev/null 2>&1 || true
-  rc=0; [ "$( st_chain_head )" != "$Q" ] || rc=1
-  st_assert "$rc" "the chain head skips a concurrent run's closed throwaway #$Q"
+  # A run closes five of its own issues before it ends, so by now the newest
+  # closed issue in the repository is a throwaway — and a run that hangs its
+  # whole chain off one dies when the run that owns it cleans up.
+  head="$( st_chain_head )"
+  rc=0; ( AS_JSON=1 cmd_show "$head" ) \
+    | jq -e '.title | startswith("selftest ") | not' >/dev/null || rc=1
+  st_assert "$rc" "the chain head is not a throwaway issue (#$head)"
 
   # Informational canary: the search index is expected to disagree (it lags writes).
   # This documents WHY local derivation is the primary path. Never fails the run.
