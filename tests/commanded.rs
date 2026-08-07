@@ -123,6 +123,15 @@ fn played(path: &mut Commanded<Both>, captured: &[f32]) -> Vec<f32> {
     playing
 }
 
+/// Render the frame a queued level change is walked over.
+///
+/// Ten milliseconds of ramp is under a frame at `SAMPLE_RATE`, so one frame is
+/// the whole of it. A level read off the block that queued it would be the ramp
+/// rather than the level.
+fn settle(path: &mut Commanded<Both>) {
+    played(path, &[0.0]);
+}
+
 /// The level the monitor inside the composition is playing the input at.
 fn monitored(path: &Commanded<Both>) -> f32 {
     path.path().monitor.gain().target()
@@ -169,6 +178,7 @@ fn the_path_offered_a_command_first_is_the_one_that_owns_it() {
     let (mut path, mut sender, _position) = both(First::Engine, First::Monitor);
 
     press(&mut sender, Command::SetGain(GAIN));
+    settle(&mut path);
     press(&mut sender, Command::SetTransport(Transport::Recording));
     played(&mut path, &[1.0, 1.0]);
     press(&mut sender, Command::SetTransport(Transport::Playing));
