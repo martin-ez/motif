@@ -44,6 +44,7 @@ scripts/track.sh <command> [args] [--json]
   submit <n> [--pr N] [--force]  built, now waiting on a human merge
   release <n> [--force]       give it back
   done <n> [-m MSG] [--force] close it, report what it unblocked
+  reopen <n> [-m MSG]         undo a close, report what it re-blocked
   add -t TITLE --area A --kind K --size S --parent N [-b BODY|-F FILE]
       [--blocked-by N,...] [--blocking N,...]
       (an epic is --size l: no --parent, but --blocked-by the chain's open end)
@@ -445,8 +446,9 @@ Readiness is inherited through the parent and the walk stops at a closed
 ancestor, so work under #$n is gated by nothing and startable ahead of the chain
 it belongs to, and \`plan\` lists the children of open epics only, so it appears
 under no epic at all.
-Point it at an open issue:
-  scripts/track.sh plan   the chain, and which epics are startable"
+Point it at an open issue, or reopen this one if it was closed by mistake:
+  scripts/track.sh plan        the chain, and which epics are startable
+  scripts/track.sh reopen $n   if its work is not in main after all"
   return 0
 }
 
@@ -1076,6 +1078,67 @@ ${msg:-Completed by \`$me\`.}" >/dev/null || true
   return 0
 }
 
+# The other reading of a closed issue, and the one `require_open_parent` had no
+# move for. `done` takes a number and closes it, and an epic's `Done when` is a
+# judgement about `main` rather than a count of its sub-issues, so closing one
+# before its chain has landed is a mistake a careful agent still makes. Without
+# this the only correction is `gh` directly, which AGENTS.md forbids.
+#
+# No claim is required and none is restored. `done` cleared wip on the way past,
+# so there is no holder to match and nothing to put back; what comes back is
+# open, unheld work, and `claim` is how it is taken again.
+cmd_reopen() {
+  local n="" msg="" me info state was ready_now regated rc=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -m|--message) [ $# -ge 2 ] || die "-m needs a message"; msg="$2"; shift 2 ;;
+      -*)           die "unknown flag for reopen: $1" ;;
+      *)            n="${1#\#}"; shift ;;
+    esac
+  done
+  [ -n "$n" ] || die "usage: track.sh reopen <n> [-m MSG]"
+  # A comment body containing a track: marker would be parsed as claim state.
+  case "$msg" in *'<!-- track:'*) die "reopen message may not contain a '<!-- track:' marker." ;; esac
+  me="$(agent_id_or_empty)"
+
+  lock_acquire
+  info="$(fetch_issue "$n" | jq -c "$JQ_LIB"' shape')"
+  state="$(printf '%s' "$info" | jq -r '.state')"
+  was="$(  printf '%s' "$info" | jq -r '.unblocks | map("#\(.)") | join(" ")')"
+  [ "$state" = "CLOSED" ] \
+    || { lock_release; die "#$n is $state — there is nothing to reopen."; }
+
+  # Read before the write, where `done` reads what it freed after one: once #$n
+  # is open again everything it blocks is already gated, so the mirror of that
+  # report would come back empty however much the reopen re-blocked.
+  regated=""
+  if [ -n "$was" ]; then
+    ready_now="$(fetch_open | jq -r "$JQ_LIB"'[.[] | shape] | with_gates
+                  | map(select(is_ready) | .num) | map("#\(.)") | join(" ")')"
+    regated="$(printf '%s\n%s\n' "$was" "$ready_now" | tr ' ' '\n' | sort | uniq -d | tr '\n' ' ')"
+    regated="${regated% }"
+  fi
+
+  rc=0
+  gh_write issue reopen "$n" >/dev/null || rc=$?
+  [ "$rc" -eq 0 ] || { lock_release; die "could not reopen #$n — see the gh error above."; }
+  # After the reopen, never before it: a marker on an issue that is still closed
+  # tells the next reader the tracker moved when it did not.
+  gh_write issue comment "$n" --body "<!-- track:reopen${me:+ agent=$me} -->
+${msg:-Reopened${me:+ by \`$me\`} — its work is not in \`main\` after all.}" >/dev/null || true
+  lock_release
+
+  # The mirror of `done`'s report, and needed for the same reason: an issue that
+  # has stopped being ready is one a caller must not be left pointed at, since
+  # the claim it would go and make exits 1.
+  if [ -n "$regated" ]; then
+    printf 'reopened #%s  re-blocked: %s\n' "$n" "$regated"
+  else
+    printf 'reopened #%s\n' "$n"
+  fi
+  return 0
+}
+
 # ----------------------------------------------------------------- refs -----
 # A pull request body is written by hand and kept largely as the template left
 # it, so the two things it reliably contains are template instructions inside
@@ -1562,7 +1625,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M N P R S T U V Z out rc loc adv dt bn ob scratch ids head
+  local t0 A B C D E F G H I J K L M N P Q R S T U V Z out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1895,6 +1958,13 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; AS_JSON=1 cmd_find "selftest closed parent" | jq -e 'length == 0' >/dev/null || rc=1
   st_assert "$rc" "add creates nothing when the parent is closed"
 
+  # Re-pointing the child is the right move when the child was aimed at the
+  # wrong epic, and the wrong one when the epic was closed by mistake. A
+  # refusal that offers only the first reading sends an agent to `gh`, which
+  # AGENTS.md forbids, because this script had no move for the second.
+  rc=0; printf '%s' "$out" | grep -q "track.sh reopen" || rc=1
+  st_assert "$rc" "add's refusal offers reopen as the other reading"
+
   # `dep <n> --child C` parents C under n, so n is the number that has to be
   # open -- not the one the flag names.
   rc=0; out="$( ( cmd_dep "$A" --child "$K" ) 2>&1 >/dev/null )" || rc=$?
@@ -1926,6 +1996,49 @@ Re-run with:  scripts/track.sh selftest --yes"
   # pass.
   rc=0; ( cmd_dep "$K" --needs "$C" ) >/dev/null || rc=$?
   st_assert "$rc" "dep still takes closed #$C as a blocker for #$K"
+
+  # The move those refusals point at. An issue that is already open has nothing
+  # to restore, and reopening it would write a marker saying otherwise.
+  rc=0; ( cmd_reopen "$Z" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "reopen refuses open #$Z (got $rc)"
+
+  # `done` cleared wip on the way past, so what comes back is open, unheld work
+  # -- reopening restores the issue, not the claim that was on it.
+  out="$(cmd_reopen "$A")"
+  rc=0; AS_JSON=1 cmd_show "$A" | jq -e '.state == "OPEN" and (.wip | not)' >/dev/null || rc=1
+  st_assert "$rc" "reopen returns #$A to open, unheld work"
+
+  # The mirror of `done #$A reports 'unblocked: #$B'`. Closing announced what it
+  # released; reopening has to announce what it gates again, or a caller stays
+  # pointed at a row whose claim now exits 1. Matched exactly, since `#$B` is a
+  # prefix of every longer number the list could also hold.
+  rc=0; printf '%s' "$out" | sed -n 's/.*re-blocked: //p' | tr ' ' '\n' \
+    | grep -qx "#$B" || rc=1
+  st_assert "$rc" "reopen #$A names #$B as re-blocked"
+
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$B" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "#$B leaves ready again once #$A reopens"
+
+  # Readiness is inherited, so the restored gate has to carry down the same walk
+  # the close released #$M through -- #$L blocked by #$A once more.
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$M" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "#$M is gated again through reopened #$A"
+
+  # What the refusal sent the caller here to do. A reopen that leaves the parent
+  # still unusable has restored the state and not the capability.
+  Q="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of reopened $A" --area infra --kind chore --size s --parent "$A" --selftest)")"
+  rc=0; [ -n "$Q" ] || rc=1
+  st_assert "$rc" "add takes reopened #$A as a parent"
+
+  # #$A is borrowed from the block above, and assertions further down still read
+  # #$B as ready. Handing it back closed is what keeps that true -- left open,
+  # this fails a cycle assertion two hundred lines below, for a reason nothing
+  # there could explain. The round trip is worth stating anyway: an undo that
+  # cannot be undone again is a one-way door.
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_done "$A" --force ) >/dev/null || rc=$?
+  st_assert "$rc" "done closes reopened #$A again"
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$B" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "#$B returns to ready once #$A closes again"
 
   # `add` refuses to file a non-epic with no parent; dropping one out of its
   # epic reaches the same state from the other side. GitHub gives an issue one
@@ -2170,6 +2283,7 @@ case "$CMD" in
   submit)       cmd_submit "$@" ;;
   release)      cmd_release "$@" ;;
   done)         cmd_done "$@" ;;
+  reopen)       cmd_reopen "$@" ;;
   add)          cmd_add "$@" ;;
   dep)          cmd_dep "$@" ;;
   note)         cmd_note "$@" ;;
