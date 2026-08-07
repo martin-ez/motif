@@ -47,7 +47,7 @@ scripts/track.sh <command> [args] [--json]
   add -t TITLE --area A --kind K --size S --parent N [-b BODY|-F FILE]
       [--blocked-by N,...] [--blocking N,...]
       (an epic is --size l: no --parent, but --blocked-by the chain's open end)
-  dep <n> [--needs N] [--drop-needs N] [--child N] [--drop-child N]
+  dep <n> [--needs N] [--drop-needs N] [--parent N] [--child N] [--drop-child N]
   note <n> -m MSG             leave a comment on an issue
   graph                       dependency forest of open issues
   labels-init                 create/update the label taxonomy (idempotent)
@@ -432,6 +432,33 @@ claimed_issues() {
     fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder, submit: submitted}'
   done
   return 0
+}
+
+# GitHub gives an issue one parent, so `--drop-child` does not move a child --
+# it removes the only parent it has. Readiness is inherited through that parent,
+# so a non-epic dropped out of its chain is gated by nothing and startable ahead
+# of the work it belongs after: exactly the state `add` refuses to file, reached
+# from the other side. An epic is a root and takes no parent, so dropping one is
+# not that mistake and is left alone.
+#
+# Silent when the child is an epic. A number that does not resolve is a
+# different mistake from one that resolves to work in a chain, and says so.
+require_epic_to_drop() {   # require_epic_to_drop <child>
+  local n="$1" info size title
+  info="$(fetch_issue "$n" | jq -c "$JQ_LIB"' shape')" \
+    || die "dep --drop-child: could not read #$n — see the gh error above.
+  scripts/track.sh show $n"
+  size="$(printf '%s' "$info" | jq -r '.size')"
+  title="$(printf '%s' "$info" | jq -r '.title')"
+  [ "$size" != l ] || return 0
+  die "dep --drop-child: #$n is not an epic — \"$title\".
+GitHub gives an issue one parent, so this removes the only one #$n has rather
+than moving it: readiness is inherited through the parent, so it would come out
+gated by nothing and startable ahead of the chain it belongs to — the state
+\`add\` refuses to file.
+Re-point it instead, which moves it in one write and never leaves it loose:
+  scripts/track.sh dep $n --parent <epic>
+  scripts/track.sh plan   the chain, and which epics are startable"
 }
 
 # The chain `plan` reads, rendered for a refusal: every open epic in the order
@@ -1182,8 +1209,8 @@ Re-run with --blocked-by <n> for the epic this one follows."
 }
 
 cmd_dep() {
-  [ $# -ge 1 ] || die "usage: track.sh dep <n> [--needs N] [--drop-needs N] [--child N] [--drop-child N]"
-  local n="${1#\#}" desc="" rc=0
+  [ $# -ge 1 ] || die "usage: track.sh dep <n> [--needs N] [--drop-needs N] [--parent N] [--child N] [--drop-child N]"
+  local n="${1#\#}" desc="" dropped="" c rc=0
   shift
   GH_ARGS=(issue edit "$n")
   while [ $# -gt 0 ]; do
@@ -1194,16 +1221,27 @@ cmd_dep() {
       --drop-needs) [ $# -ge 2 ] || die "--drop-needs needs a value"
                     GH_ARGS[${#GH_ARGS[@]}]="--remove-blocked-by"; GH_ARGS[${#GH_ARGS[@]}]="${2#\#}"
                     desc="$desc drop-needs #${2#\#}"; shift 2 ;;
+      --parent)     [ $# -ge 2 ] || die "--parent needs a value"
+                    GH_ARGS[${#GH_ARGS[@]}]="--parent";            GH_ARGS[${#GH_ARGS[@]}]="${2#\#}"
+                    desc="$desc parent #${2#\#}"; shift 2 ;;
       --child)      [ $# -ge 2 ] || die "--child needs a value"
                     GH_ARGS[${#GH_ARGS[@]}]="--add-sub-issue";     GH_ARGS[${#GH_ARGS[@]}]="${2#\#}"
                     desc="$desc child #${2#\#}"; shift 2 ;;
       --drop-child) [ $# -ge 2 ] || die "--drop-child needs a value"
                     GH_ARGS[${#GH_ARGS[@]}]="--remove-sub-issue";  GH_ARGS[${#GH_ARGS[@]}]="${2#\#}"
+                    dropped="$dropped ${2#\#}"
                     desc="$desc drop-child #${2#\#}"; shift 2 ;;
       *)            die "unknown flag for dep: $1" ;;
     esac
   done
-  [ "${#GH_ARGS[@]}" -gt 3 ] || die "dep needs at least one of --needs/--drop-needs/--child/--drop-child"
+  [ "${#GH_ARGS[@]}" -gt 3 ] || die "dep needs at least one of --needs/--drop-needs/--parent/--child/--drop-child"
+
+  # Checked before the write, so the orphan is unreachable rather than reported
+  # after the fact -- the same reason `add`'s refusal lands before its create.
+  for c in $dropped; do
+    require_epic_to_drop "$c"
+  done
+
   # Explicit status check: when this function is called as `cmd_dep … || rc=$?`,
   # bash disables `set -e` for the whole body, so a failed write would otherwise
   # fall through to the success message below. GitHub rejects a direct 2-cycle
@@ -1741,6 +1779,37 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$rc" "add's refusal leaves blocked epic #$N unmarked"
   rc=0; printf '%s' "$out" | grep -q "▸ #$J  " || rc=1
   st_assert "$rc" "add's refusal marks startable epic #$J"
+
+  # `add` refuses to file a non-epic with no parent; dropping one out of its
+  # epic reaches the same state from the other side. GitHub gives an issue one
+  # parent, so `--drop-child` removes the only one #$R has rather than moving
+  # it, and it comes out gated by nothing and startable ahead of the chain it
+  # belongs to. The refusal has to land before the write, or the orphan it
+  # exists to prevent is already on the tracker by the time it is reported.
+  rc=0; out="$( cmd_dep "$N" --drop-child "$R" 2>&1 >/dev/null )" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "dep refuses to orphan non-epic #$R (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "#$R is not an epic" || rc=1
+  st_assert "$rc" "dep's refusal names the child it would orphan, #$R"
+  rc=0; printf '%s' "$out" | grep -q -- "--parent" || rc=1
+  st_assert "$rc" "dep's refusal says to re-point #$R with --parent"
+  rc=0; AS_JSON=1 cmd_show "$R" | jq -e --argjson n "$N" '.parent.num == $n' >/dev/null || rc=1
+  st_assert "$rc" "dep writes nothing when it refuses: #$R still under #$N"
+
+  # The way out of the refusal, and what makes it one: re-shaping an epic is
+  # moving a child, which is one write that never leaves it loose.
+  rc=0; ( cmd_dep "$R" --parent "$J" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$rc" "dep --parent moves #$R from #$N to #$J"
+  rc=0; AS_JSON=1 cmd_show "$R" | jq -e --argjson j "$J" '.parent.num == $j' >/dev/null || rc=1
+  st_assert "$rc" "show reports #$R under its new parent #$J"
+
+  # An epic is a root and takes no parent, so dropping one is not the orphaning
+  # this refuses. The rule is about non-epics, not about `--drop-child`.
+  rc=0; ( cmd_dep "$J" --child "$N" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$rc" "dep parents epic #$N under epic #$J"
+  rc=0; ( cmd_dep "$J" --drop-child "$N" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$rc" "dep still drops epic #$N out of #$J"
+  rc=0; AS_JSON=1 cmd_show "$N" | jq -e '.parent == null' >/dev/null || rc=1
+  st_assert "$rc" "show reports epic #$N back at the head of its own chain"
 
   # Between a draft pull request going up and a human merging it, the work is
   # finished and the issue is still held. "Leave it alone" and "there is nothing
