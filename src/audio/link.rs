@@ -18,7 +18,12 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-use super::{AudioBackend, AudioPath, DeviceError, DeviceSelection, DuplexStream, StreamRequest};
+use super::{
+    AudioBackend, AudioPath, DeviceError, DeviceSelection, DuplexStream, GUARDED_LEVEL, Opening,
+    StreamRequest,
+};
+
+const UNITY: f32 = 1.0;
 
 /// What the audio path is doing, as far as the rest of the application is
 /// concerned.
@@ -67,6 +72,7 @@ pub struct DeviceLink<B: AudioBackend, F> {
     path: F,
     stream: Option<B::Stream>,
     state: AudioState,
+    chosen: bool,
 }
 
 impl<B: AudioBackend, F, P> DeviceLink<B, F>
@@ -92,6 +98,7 @@ where
             path,
             stream: None,
             state: AudioState::Closed,
+            chosen: false,
         }
     }
 
@@ -109,7 +116,7 @@ where
     pub fn open(&mut self) -> Result<(), DeviceError> {
         self.close();
 
-        let path = (self.path)();
+        let path = Opening::at(self.opening_level(), (self.path)());
         match self.backend.open(&self.selection, self.request, path) {
             Ok(stream) => {
                 self.stream = Some(stream);
@@ -132,6 +139,7 @@ where
     /// in [`AudioState::Lost`] reports what was asked for, not what came before.
     pub fn select(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
         self.selection = selection;
+        self.chosen = true;
         self.open()
     }
 }
@@ -157,6 +165,18 @@ impl<B: AudioBackend, F> DeviceLink<B, F> {
     /// can be refreshed through the same backend the link is playing through.
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    /// The multiplier every stream this link opens comes up to.
+    ///
+    /// Unity where a player chose the devices, and [`GUARDED_LEVEL`] where
+    /// nobody has: a link opened on what the backend offered does not know what
+    /// it is playing into, and on a laptop that is a microphone in front of the
+    /// speakers it is about to play through. Choosing is
+    /// [`select`](Self::select), whether or not the device took it — a refused
+    /// choice is still one, and reopening the same selection is not.
+    pub fn opening_level(&self) -> f32 {
+        if self.chosen { UNITY } else { GUARDED_LEVEL }
     }
 
     /// The devices and channels the link is opening, or last tried to.

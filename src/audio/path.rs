@@ -6,14 +6,25 @@
 //! allocate, and the way anything a player is meant to hear — a loop, a
 //! metronome click, a monitored input — reaches the audio callback at all.
 //!
-//! [`Passthrough`] plays the frames it captured; [`InputMonitor`] is the same
-//! thing with a level on it. A queue has one reader, and [`Commanded`] is it:
-//! it deals what arrived to the path it holds, which may be a composition of
-//! several. Which of them a command belongs to is that composition's to say in
-//! [`apply`](AudioPath::apply), settled where the paths are put together rather
-//! than by the order they render in.
+//! [`Passthrough`] plays the frames it captured and [`InputMonitor`] is the same
+//! thing with a level on it, while [`Opening`] is the level a stream comes up to
+//! when it opens. A queue has one reader, and [`Commanded`] is it: it deals what
+//! arrived to the path it holds, which may be a composition of several. Which of
+//! them a command belongs to is that composition's to say in
+//! [`apply`](AudioPath::apply), settled where the paths are put together.
 
 use super::{Command, CommandReceiver, Gain, StreamConfig};
+
+const UNITY: f32 = 1.0;
+
+/// The multiplier a stream opens at where nobody has chosen its devices.
+///
+/// Twelve decibels below unity, which is exactly the range the panel's encoder
+/// has above it: unity is still reachable, but only by asking for the whole of
+/// that range. A run nobody has pointed at an interface is playing into
+/// whatever the machine offered, and a built-in microphone in front of built-in
+/// speakers is a feedback loop that unity is where it runs away from.
+pub const GUARDED_LEVEL: f32 = UNITY / Gain::CEILING;
 
 /// What a stream plays, block by block.
 ///
@@ -180,6 +191,75 @@ impl AudioPath for InputMonitor {
         }
 
         true
+    }
+}
+
+/// A path with the level its stream opens at in front of it.
+///
+/// Two things a stream owes the room it plays into. It comes up from silence
+/// over [`Gain::RAMP`] rather than landing on its level in the first block,
+/// which a device reopening after a fault owes as much as one opening for the
+/// first time. And it opens at whatever level it was given, which is
+/// [`GUARDED_LEVEL`] where nothing has said what it is playing into.
+///
+/// The trim is on what is played, so it covers a loop as much as a monitored
+/// input, and no command moves it.
+///
+/// ```
+/// use motif::audio::{AudioPath, Opening, Passthrough, StreamConfig};
+///
+/// let mut path = Opening::at(1.0, Passthrough::new());
+/// path.prepare(StreamConfig {
+///     sample_rate: 48_000,
+///     block_size: 4,
+///     input_channels: 1,
+///     output_channels: 1,
+/// });
+///
+/// let mut playing = [0.0; 4];
+/// path.render(&[1.0; 4], &mut playing);
+///
+/// assert_eq!(playing[0], 0.0);
+/// assert!(playing[3] > playing[0]);
+/// ```
+pub struct Opening<P> {
+    gain: Gain,
+    level: f32,
+    path: P,
+}
+
+impl<P: AudioPath> Opening<P> {
+    /// `path`, opening at `level`.
+    pub const fn at(level: f32, path: P) -> Self {
+        Self {
+            gain: Gain::rising(),
+            level,
+            path,
+        }
+    }
+}
+
+impl<P: AudioPath> AudioPath for Opening<P> {
+    /// Puts the gain back at silence, so that every stream opened on this path
+    /// comes up rather than only the first.
+    fn prepare(&mut self, config: StreamConfig) {
+        self.path.prepare(config);
+        self.gain = Gain::rising();
+        self.gain.set_target(self.level);
+        self.gain.prepare(config.sample_rate);
+    }
+
+    /// Trims the whole of what the path under it played, allocating nothing and
+    /// costing the multiply and add [`Gain::apply`] costs.
+    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
+        self.path.render(captured, playing);
+        self.gain.apply(playing);
+    }
+
+    /// Answers whatever the path it holds answers, having nothing of its own to
+    /// take: the level a stream opens at is not one the player moves.
+    fn apply(&mut self, command: Command) -> bool {
+        self.path.apply(command)
     }
 }
 

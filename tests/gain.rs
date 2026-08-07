@@ -24,6 +24,13 @@ fn prepared() -> Gain {
     gain
 }
 
+fn rising() -> Gain {
+    let mut gain = Gain::rising();
+    gain.prepare(SAMPLE_RATE);
+
+    gain
+}
+
 fn ones(frames: usize) -> Vec<f32> {
     vec![1.0; frames]
 }
@@ -265,4 +272,55 @@ fn a_target_at_the_ceiling_is_kept() {
     gain.set_target(Gain::CEILING);
 
     assert_eq!(gain.target(), Gain::CEILING);
+}
+
+#[test]
+fn a_rising_gain_heads_for_unity() {
+    assert_eq!(Gain::rising().target(), 1.0);
+}
+
+#[test]
+fn a_rising_gain_is_not_muted() {
+    assert!(!Gain::rising().muted());
+}
+
+#[test]
+fn a_rising_gain_starts_at_silence() {
+    let block = applied(&mut rising(), 1);
+
+    assert_eq!(block[0], 0.0);
+}
+
+#[test]
+fn a_rising_gain_does_not_jump_to_unity() {
+    let block = applied(&mut rising(), RAMP_FRAMES);
+
+    assert!(largest_step(&block) < 1.0 / RAMP_FRAMES as f32 + TOLERANCE);
+}
+
+#[test]
+fn a_rising_gain_reaches_unity_after_the_ramp() {
+    assert!((settled(&mut rising()) - 1.0).abs() < TOLERANCE);
+}
+
+#[test]
+fn a_rising_gain_comes_up_to_a_target_set_before_it_was_prepared() {
+    let mut gain = Gain::rising();
+    gain.set_target(HALF);
+    gain.prepare(SAMPLE_RATE);
+
+    let block = applied(&mut gain, RAMP_FRAMES + 1);
+
+    assert_eq!(block[0], 0.0);
+    assert!((block[block.len() - 1] - HALF).abs() < TOLERANCE);
+}
+
+#[test]
+fn a_rising_gain_that_was_never_prepared_arrives_at_once() {
+    let mut gain = Gain::rising();
+
+    let block = applied(&mut gain, 2);
+
+    assert_eq!(block[0], 0.0);
+    assert!((block[1] - 1.0).abs() < TOLERANCE);
 }
