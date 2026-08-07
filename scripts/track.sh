@@ -409,6 +409,35 @@ gating_ancestor() {
   return 0
 }
 
+# `add --parent` and `dep --child` hand a number to `gh`, which takes a closed
+# issue as a parent without complaint. Readiness is inherited through the parent
+# and every walk stops at a closed ancestor -- correctly, since a finished epic
+# gates nothing -- so the child comes out gated by nothing and startable ahead of
+# the work it belongs to, and `plan`, which lists the children of open epics,
+# does not show it under any epic at all.
+#
+# Silent when the parent is open. A number that does not resolve is a different
+# mistake from one that resolves to closed work, and says so; which of "no such
+# issue" and "GitHub is unreachable" it was is left to gh's own error, since the
+# two are not separable here without guessing at its prose.
+require_open_parent() {   # require_open_parent <num> <ctx>
+  local n="$1" ctx="$2" info state title
+  info="$(fetch_issue "$n" | jq -c "$JQ_LIB"' shape')" \
+    || die "$ctx: could not read #$n — see the gh error above.
+A parent has to be an open issue, and this number did not resolve to one.
+  scripts/track.sh show $n"
+  state="$(printf '%s' "$info" | jq -r '.state')"
+  title="$(printf '%s' "$info" | jq -r '.title')"
+  [ "$state" = OPEN ] || die "$ctx: #$n is $state — \"$title\".
+Readiness is inherited through the parent and the walk stops at a closed
+ancestor, so work under #$n is gated by nothing and startable ahead of the chain
+it belongs to, and \`plan\` lists the children of open epics only, so it appears
+under no epic at all.
+Point it at an open issue:
+  scripts/track.sh plan   the chain, and which epics are startable"
+  return 0
+}
+
 # Claim markers live on comments, which `fetch_open` does not carry. Fetching
 # every open issue to find them would cost one call per issue; the wip label is
 # already in the list payload, so the walk is bounded by the number of live
@@ -1103,6 +1132,8 @@ and startable ahead of the whole chain it belongs to.
 $guide"
   fi
 
+  [ -z "$parent" ] || require_open_parent "$parent" "add --parent"
+
   GH_ARGS=(issue create --title "$title"
            --label "area:$area" --label "kind:$kind" --label "size:$size")
   [ "$selftest" = 1 ] && GH_ARGS[${#GH_ARGS[@]}]="--label" && GH_ARGS[${#GH_ARGS[@]}]="track:selftest"
@@ -1138,7 +1169,7 @@ $guide"
 
 cmd_dep() {
   [ $# -ge 1 ] || die "usage: track.sh dep <n> [--needs N] [--drop-needs N] [--child N] [--drop-child N]"
-  local n="${1#\#}" desc="" rc=0
+  local n="${1#\#}" desc="" child="" rc=0
   shift
   GH_ARGS=(issue edit "$n")
   while [ $# -gt 0 ]; do
@@ -1151,6 +1182,7 @@ cmd_dep() {
                     desc="$desc drop-needs #${2#\#}"; shift 2 ;;
       --child)      [ $# -ge 2 ] || die "--child needs a value"
                     GH_ARGS[${#GH_ARGS[@]}]="--add-sub-issue";     GH_ARGS[${#GH_ARGS[@]}]="${2#\#}"
+                    child="$child ${2#\#}"
                     desc="$desc child #${2#\#}"; shift 2 ;;
       --drop-child) [ $# -ge 2 ] || die "--drop-child needs a value"
                     GH_ARGS[${#GH_ARGS[@]}]="--remove-sub-issue";  GH_ARGS[${#GH_ARGS[@]}]="${2#\#}"
@@ -1159,6 +1191,13 @@ cmd_dep() {
     esac
   done
   [ "${#GH_ARGS[@]}" -gt 3 ] || die "dep needs at least one of --needs/--drop-needs/--child/--drop-child"
+
+  # Only `--child` is checked. A blocker that is closed is the normal state of
+  # finished work, and `--drop-child` is how a child already under a closed
+  # parent is repaired -- refusing that would close the way out of the very
+  # state this refuses to create.
+  [ -z "$child" ] || require_open_parent "$n" "dep --child"
+
   # Explicit status check: when this function is called as `cmd_dep … || rc=$?`,
   # bash disables `set -e` for the whole body, so a failed write would otherwise
   # fall through to the success message below. GitHub rejects a direct 2-cycle
@@ -1654,6 +1693,33 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$rc" "add's refusal leaves blocked epic #$N unmarked"
   rc=0; printf '%s' "$out" | grep -q "▸ #$J  " || rc=1
   st_assert "$rc" "add's refusal marks startable epic #$J"
+
+  # A closed parent is not a parent: the walk stops there, so #$K would be gated
+  # by nothing and startable ahead of the chain, and `plan` would list it under
+  # no epic. #466 made --parent mandatory for a non-epic, which turned a closed
+  # number into the way to satisfy a required flag without joining a chain. The
+  # refusal has to land before the write in both commands, or the state it
+  # exists to prevent is already on the tracker by the time it is reported.
+  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest closed parent" --area infra --kind chore --size s --parent "$A" --selftest 2>&1 >/dev/null)" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "add refuses closed #$A as a parent (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "#$A is CLOSED" || rc=1
+  st_assert "$rc" "add's refusal says #$A is closed"
+  rc=0; AS_JSON=1 cmd_find "selftest closed parent" | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "add creates nothing when the parent is closed"
+
+  # `dep <n> --child C` parents C under n, so n is the number that has to be
+  # open -- not the one the flag names.
+  rc=0; out="$(cmd_dep "$A" --child "$K" 2>&1 >/dev/null)" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "dep refuses closed #$A as a parent (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "#$A is CLOSED" || rc=1
+  st_assert "$rc" "dep's refusal says #$A is closed"
+  rc=0; AS_JSON=1 cmd_show "$K" | jq -e --argjson z "$Z" '.parent.num == $z' >/dev/null || rc=1
+  st_assert "$rc" "dep writes nothing when the parent is closed: #$K still under #$Z"
+
+  rc=0; cmd_dep "$J" --child "$K" >/dev/null || rc=$?
+  st_assert "$rc" "dep still moves #$K under open #$J"
+  rc=0; AS_JSON=1 cmd_show "$K" | jq -e --argjson j "$J" '.parent.num == $j' >/dev/null || rc=1
+  st_assert "$rc" "show reports #$K under its new parent #$J"
 
   # Between a draft pull request going up and a human merging it, the work is
   # finished and the issue is still held. "Leave it alone" and "there is nothing
