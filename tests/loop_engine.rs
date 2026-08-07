@@ -17,7 +17,7 @@ use std::cell::Cell;
 use std::hint::black_box;
 
 use motif::audio::{
-    AudioPath, Command, CommandSender, Commanded, Gain, StreamConfig, command_channel,
+    AudioPath, Command, CommandSender, Commanded, Gain, StreamConfig, command_channel, held,
 };
 use motif::device::AudioProfile;
 use motif::looper::{
@@ -115,6 +115,16 @@ const RAMPING_FRAMES: usize = 64;
 /// mutant is free to move. The change the level makes is twenty-five times this
 /// if nothing spreads it.
 const LARGEST_STEP: f32 = 0.03;
+
+/// The bound every block the engine plays stays inside.
+const FULL_SCALE: f32 = 1.0;
+
+/// What a sum of exactly full scale comes back as, curved into the room the
+/// ceiling keeps above it.
+///
+/// Pinned rather than derived from `HELD_ABOVE`, which a mutant is free to
+/// move. Clipping would have left the sum at full scale instead.
+const CURVED_FROM_FULL_SCALE: f32 = 0.875;
 
 /// The stream a device granting `ramping_profile` would report.
 fn ramping_config() -> StreamConfig {
@@ -864,7 +874,42 @@ fn a_gain_past_the_ceiling_is_held_at_it() {
     press(&mut sender, Command::SetGain(Gain::CEILING + 1.0));
     settle(&mut engine);
 
-    assert_eq!(played(&mut engine, &[1.0]), [Gain::CEILING]);
+    assert_eq!(played(&mut engine, &[1.0]), [held(Gain::CEILING)]);
+}
+
+#[test]
+fn nothing_played_leaves_full_scale() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetGain(Gain::CEILING));
+    settle(&mut engine);
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[1.0]);
+    for _ in 1..LoopBuffer::LAYERS {
+        press(&mut sender, Command::SetTransport(Transport::Playing));
+        heard(&mut engine, 1);
+        press(&mut sender, Command::SetTransport(Transport::Overdubbing));
+        played(&mut engine, &[1.0]);
+    }
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    let mixed = played(&mut engine, &[1.0]);
+
+    assert!(
+        mixed.iter().all(|played| played.abs() < FULL_SCALE),
+        "the block played {mixed:?}"
+    );
+}
+
+#[test]
+fn a_sum_over_the_ceiling_is_curved_rather_than_clipped() {
+    let (mut engine, mut sender, _position) = engine();
+
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Playing));
+
+    assert_eq!(played(&mut engine, &[0.5]), [CURVED_FROM_FULL_SCALE]);
 }
 
 #[test]
