@@ -1547,16 +1547,8 @@ st_ok()   { ST_PASS=$((ST_PASS + 1)); note "  ok    $*"; return 0; }
 st_bad()  { ST_FAIL=$((ST_FAIL + 1)); note "  FAIL  $*"; return 0; }
 st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
 
-st_cleanup() {
+st_delete_run() {
   local nums n deleted=0
-  note "  cleaning up …"
-  # Both outlive a failed assertion, and an abandoned orphan branch is one this
-  # very change would then read as work this checkout holds.
-  if [ -n "$ST_SCRATCH" ]; then rm -rf "$ST_SCRATCH"; ST_SCRATCH=""; fi
-  if [ -n "$ST_ORPHAN_BRANCH" ]; then
-    git branch -D "$ST_ORPHAN_BRANCH" >/dev/null 2>&1 || true
-    ST_ORPHAN_BRANCH=""
-  fi
   nums="$(gh issue list --state all --label track:selftest --limit 100 \
           --json number --jq '.[].number' 2>/dev/null || true)"
   for n in $nums; do
@@ -1567,8 +1559,21 @@ st_cleanup() {
       note "  (could not delete #$n — closed instead; needs admin to delete)"
     fi
   done
-  lock_release
   note "  cleanup: removed $deleted throwaway issue(s)"
+  return 0
+}
+
+st_cleanup() {
+  note "  cleaning up …"
+  # Both outlive a failed assertion, and an abandoned orphan branch is one this
+  # very change would then read as work this checkout holds.
+  if [ -n "$ST_SCRATCH" ]; then rm -rf "$ST_SCRATCH"; ST_SCRATCH=""; fi
+  if [ -n "$ST_ORPHAN_BRANCH" ]; then
+    git branch -D "$ST_ORPHAN_BRANCH" >/dev/null 2>&1 || true
+    ST_ORPHAN_BRANCH=""
+  fi
+  st_delete_run
+  lock_release
   return 0
 }
 
