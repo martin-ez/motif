@@ -39,11 +39,10 @@ const LAYER_COUNT: usize = 8;
 
 /// The samples of a loop, in storage that is allocated once and never grows.
 ///
-/// A loop is the sum of its layers, taken as it is read and
-/// [`held`](crate::audio::held) inside full scale. Nothing under the ceiling
-/// moves as the stack deepens: what a layer holds is what was played into it,
-/// so an overdub never quietens the take and [`undo`](Self::undo) gives back
-/// exactly what was there.
+/// A loop is the sum of its layers, taken as it is read and [`held`] inside
+/// full scale. Nothing under the ceiling moves as the stack deepens: what a
+/// layer holds is what was played into it, so an overdub never quietens the
+/// take and [`undo`](Self::undo) gives back exactly what was there.
 pub struct LoopBuffer {
     layers: Box<[f32]>,
     written: [usize; LAYER_COUNT],
