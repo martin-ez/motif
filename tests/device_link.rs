@@ -285,6 +285,65 @@ fn a_reselection_replaces_the_stream_that_was_running() {
 }
 
 #[test]
+fn a_chosen_selection_is_not_opened_yet() {
+    let mut link = opened();
+    link.start().expect("null backend starts");
+
+    link.choose(one_input_channel());
+
+    assert_eq!(link.state(), AudioState::Opening);
+    assert_eq!(link.selection(), &one_input_channel());
+}
+
+#[test]
+fn a_device_being_chosen_keeps_the_stream_that_is_running() {
+    let mut link = opened();
+    link.start().expect("null backend starts");
+
+    link.choose(one_input_channel());
+
+    assert_eq!(
+        link.stream().map(DuplexStream::state),
+        Some(StreamState::Running)
+    );
+}
+
+#[test]
+fn opening_is_what_leaves_the_chosen_state() {
+    let mut link = opened();
+    link.choose(one_input_channel());
+
+    link.open().expect("one channel of two opens");
+
+    assert_eq!(link.state(), AudioState::Idle);
+    assert_eq!(link.selection(), &one_input_channel());
+}
+
+#[test]
+fn selecting_is_choosing_and_opening_together() {
+    let mut chosen = opened();
+    let mut selected = opened();
+
+    chosen.choose(one_input_channel());
+    chosen.open().expect("one channel of two opens");
+    selected
+        .select(one_input_channel())
+        .expect("one channel of two opens");
+
+    assert_eq!(chosen.state(), selected.state());
+    assert_eq!(chosen.selection(), selected.selection());
+}
+
+#[test]
+fn a_link_that_is_opening_says_so() {
+    let mut link = opened();
+
+    link.choose(one_input_channel());
+
+    assert_eq!(link.state().to_string(), "opening");
+}
+
+#[test]
 fn a_selection_the_device_refuses_leaves_the_link_lost() {
     let mut link = opened();
 

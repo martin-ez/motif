@@ -268,10 +268,15 @@ fn moved(setting: AudioSetting, events: impl IntoIterator<Item = ControlEvent>) 
     page
 }
 
-fn settled(page: &mut StudioPage) {
+fn chosen(page: &mut StudioPage) {
     for _ in 0..SETTLING_FRAMES {
         let _rows = drawn(page);
     }
+}
+
+fn settled(page: &mut StudioPage) {
+    chosen(page);
+    let _rows = drawn(page);
 }
 
 fn opens(page: &StudioPage) -> usize {
@@ -518,18 +523,48 @@ fn a_burst_opens_the_choice_it_comes_to_rest_on() {
 }
 
 #[test]
-fn a_burst_opens_on_the_frame_it_settles() {
+fn a_burst_opens_on_the_frame_after_it_settles() {
     let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
     let before = opens(&page);
 
-    for _ in 0..SETTLING_FRAMES - 1 {
-        let _rows = drawn(&mut page);
-    }
+    chosen(&mut page);
     let waiting = opens(&page) - before;
     let _rows = drawn(&mut page);
 
     assert_eq!(waiting, 0);
     assert_eq!(opens(&page) - before, 1);
+}
+
+#[test]
+fn a_settled_choice_says_it_is_opening() {
+    let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
+    let before = opens(&page);
+
+    chosen(&mut page);
+
+    assert_eq!(page.state(), AudioState::Opening);
+    assert_eq!(opens(&page) - before, 0);
+}
+
+#[test]
+fn the_row_draws_the_device_being_opened() {
+    let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
+
+    chosen(&mut page);
+    let rows = drawn(&mut page);
+
+    assert!(rows[0].ends_with(SECOND), "{}", rows[0]);
+}
+
+#[test]
+fn the_frame_after_a_settle_opens_the_choice() {
+    let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
+
+    chosen(&mut page);
+    let _rows = drawn(&mut page);
+
+    assert_eq!(page.state(), AudioState::Playing);
+    assert_eq!(host_of(&page), SECOND);
 }
 
 #[test]
