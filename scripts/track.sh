@@ -2100,7 +2100,8 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
 
   # `done` cleared wip on the way past, so what comes back is open, unheld work
   # -- reopening restores the issue, not the claim that was on it.
-  out="$(cmd_reopen "$A")"
+  rc=0; out="$(cmd_reopen "$A")" || rc=$?
+  st_assert "$rc" "reopen runs on closed #$A"
   rc=0; AS_JSON=1 cmd_show "$A" | jq -e '.state == "OPEN" and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "reopen returns #$A to open, unheld work"
 
@@ -2122,9 +2123,9 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
 
   # What the refusal sent the caller here to do. A reopen that leaves the parent
   # still unusable has restored the state and not the capability.
-  Q="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of reopened $A" --area infra --kind chore --size s --parent "$A" --selftest)")"
-  rc=0; [ -n "$Q" ] || rc=1
-  st_assert "$rc" "add takes reopened #$A as a parent"
+  st_add "add takes reopened #$A as a parent" \
+    -t "selftest child of reopened $A" --area infra --kind chore --size s --parent "$A"
+  Q="$ST_NUM"
 
   # #$A is borrowed from the block above, and assertions further down still read
   # #$B as ready. Handing it back closed is what keeps that true -- left open,
