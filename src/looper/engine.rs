@@ -21,8 +21,8 @@ use super::{LoopBuffer, LoopPosition, PositionWriter, TakeWriter, Transport, Wav
 ///
 /// Record captures the input, overdub layers over what is there, and play runs
 /// the loop under the live input; a player reaches all three over the command
-/// queue. A [`Gain`] ramps the input ahead of all of it, and mute silences the
-/// output alone — a muted take is still recorded.
+/// queue. A [`Gain`] ramps the input ahead of all of it, and a second one over
+/// the mixed output carries the mute, so a muted take is still recorded.
 ///
 /// A layer is recorded after the loop is played, so the input is heard once
 /// rather than twice. It is written from the playhead it was punched in at and
@@ -61,7 +61,7 @@ pub struct LoopEngine {
     playhead: usize,
     layer_open: bool,
     gain: Gain,
-    muted: bool,
+    output: Gain,
 }
 
 impl LoopEngine {
@@ -85,6 +85,8 @@ impl LoopEngine {
         assert!(block > 0, "an engine renders nothing block by block");
         let mut gain = Gain::unity();
         gain.prepare(profile.sample_rate);
+        let mut output = Gain::unity();
+        output.prepare(profile.sample_rate);
 
         Self {
             buffer: LoopBuffer::for_profile(profile),
@@ -96,7 +98,7 @@ impl LoopEngine {
             playhead: 0,
             layer_open: true,
             gain,
-            muted: false,
+            output,
         }
     }
 
@@ -151,9 +153,7 @@ impl LoopEngine {
         for (played, level) in playing.iter_mut().zip(gained) {
             *played += level;
         }
-        if self.muted {
-            playing.fill(0.0);
-        }
+        self.output.apply(playing);
     }
 
     fn publish(&mut self) {
@@ -171,7 +171,7 @@ fn frame_count(frames: usize) -> u32 {
 }
 
 impl AudioPath for LoopEngine {
-    /// Spreads the gain's ramp over the rate the device granted, which is all
+    /// Spreads both gains' ramps over the rate the device granted, which is all
     /// there is to prepare: the loop and the scratch are sized from the profile
     /// the engine was built with, and what the device granted reaches the block
     /// as the frames it was handed rather than as a number stated up front.
@@ -182,6 +182,7 @@ impl AudioPath for LoopEngine {
     /// of the take crossing.
     fn prepare(&mut self, config: StreamConfig) {
         self.gain.prepare(config.sample_rate);
+        self.output.prepare(config.sample_rate);
     }
 
     /// Plays the loop under the player's input, and publishes the playhead the
@@ -212,7 +213,7 @@ impl AudioPath for LoopEngine {
     fn apply(&mut self, command: Command) -> bool {
         match command {
             Command::SetTransport(transport) => self.move_to(transport),
-            Command::SetMuted(muted) => self.muted = muted,
+            Command::SetMuted(muted) => self.output.set_muted(muted),
             Command::SetGain(gain) => self.gain.set_target(gain),
             Command::Undo => {
                 if self.buffer.undo() {
