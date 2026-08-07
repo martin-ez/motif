@@ -44,8 +44,8 @@ scripts/track.sh <command> [args] [--json]
   submit <n> [--pr N] [--force]  built, now waiting on a human merge
   release <n> [--force]       give it back
   done <n> [-m MSG] [--force] close it, report what it unblocked
-  add -t TITLE --area A --kind K --size S [-b BODY|-F FILE]
-      [--blocked-by N,...] [--blocking N,...] [--parent N]
+  add -t TITLE --area A --kind K --size S --parent N [-b BODY|-F FILE]
+      [--blocked-by N,...] [--blocking N,...]  (an epic is --size l, and a root)
   dep <n> [--needs N] [--drop-needs N] [--child N] [--drop-child N]
   note <n> -m MSG             leave a comment on an issue
   graph                       dependency forest of open issues
@@ -419,6 +419,17 @@ claimed_issues() {
     fetch_issue "$n" | jq -c "$JQ_LIB$JQ_CLAIM"' shape + {claim: holder, submit: submitted}'
   done
   return 0
+}
+
+# The heads of the chain `plan` reads: epics nothing holds up, in the order they
+# come off each other. `add` names them when it refuses, so the caller reads the
+# answer rather than being sent to look for it. Best effort by design — failing
+# to read the chain must not swallow the refusal it decorates.
+current_epics() {
+  fetch_open 2>/dev/null | jq -r "$JQ_LIB"'
+    [.[] | shape] | with_gates | epic_order
+    | map(select(((.blockers | length) == 0) and (.gated_by == null)))
+    | .[] | "  #\(.num)  \(.title)"' 2>/dev/null || true
 }
 
 # GNU date takes -d, BSD date takes -j -f. A timestamp that parses under neither
@@ -1037,7 +1048,7 @@ add_flag_list() {   # $1 = flag, $2 = comma list; appends to GH_ARGS
 
 cmd_add() {
   local title="" body="" bodyfile="" area="" kind="" size=""
-  local bby="" bing="" parent="" selftest=0 url num rc=0
+  local bby="" bing="" parent="" selftest=0 url num rc=0 chains
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--title)     [ $# -ge 2 ] || die "-t needs a value"; title="$2"; shift 2 ;;
@@ -1059,6 +1070,24 @@ cmd_add() {
   valid_label "area:$area" || die "unknown area '$area'. Valid: $(label_values area)"
   valid_label "kind:$kind" || die "unknown kind '$kind'. Valid: $(label_values kind)"
   valid_label "size:$size" || die "unknown size '$size'. Valid: $(label_values size)"
+
+  # Readiness is inherited through the parent, so this is the same shape of
+  # failure as the legacy index answering `is:blocked` with a 200: the issue is
+  # filed and well formed, and it has quietly jumped the queue. Refuse before
+  # the write, so the silent success is unreachable rather than reported.
+  if [ "$size" != l ] && [ -z "$parent" ]; then
+    chains="$(current_epics)"
+    [ -n "$chains" ] || chains="  (could not read them — scripts/track.sh plan)"
+    die "add: '$title' is not an epic, so it needs --parent.
+Readiness is inherited through the parent, so an issue filed without one is
+startable ahead of the whole chain it belongs to — filed, well formed, carrying
+all three labels, and at the front of \`ready\`.
+The chains open right now, in the order they come off each other:
+$chains
+Re-run with --parent <n> for the one this belongs under.
+  scripts/track.sh plan       the whole order
+  scripts/track.sh show <n>   one epic in full"
+  fi
 
   GH_ARGS=(issue create --title "$title"
            --label "area:$area" --label "kind:$kind" --label "size:$size")
@@ -1358,7 +1387,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K L M N P R S T U V out rc loc adv dt bn ob scratch ids
+  local t0 A B C D E F G H I J K L M N P R S T U V Z out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1370,9 +1399,26 @@ Re-run with:  scripts/track.sh selftest --yes"
   trap 'st_cleanup; lock_release; exit 130' INT TERM
 
   note "  creating throwaway issues …"
-  A="$(st_num "$(AS_JSON=0 cmd_add -t "selftest parent" --area infra --kind chore --size s --selftest)")"
+  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest root epic" --area infra --kind chore --size l --selftest)" || rc=$?
+  Z="$(st_num "$out")"
+  st_assert "$rc" "add files size:l epic #$Z as a root, with no parent"
+
+  # Readiness is inherited, so an issue filed with no parent is startable ahead
+  # of the whole chain it belongs to — filed, well formed, and at the front of
+  # `ready`. The refusal has to land before the write, or the silent success it
+  # exists to prevent has already happened by the time it is reported.
+  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest parentless" --area infra --kind chore --size s --selftest 2>&1 >/dev/null)" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "add refuses a non-epic with no parent (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "#$Z" || rc=1
+  st_assert "$rc" "add's refusal names open epic #$Z as a chain to file under"
+  rc=0; printf '%s' "$out" | grep -q "track.sh plan" || rc=1
+  st_assert "$rc" "add's refusal says how to look the chain up"
+  rc=0; AS_JSON=1 cmd_find "selftest parentless" | jq -e 'length == 0' >/dev/null || rc=1
+  st_assert "$rc" "add creates nothing when it refuses"
+
+  A="$(st_num "$(AS_JSON=0 cmd_add -t "selftest parent" --area infra --kind chore --size s --parent "$Z" --selftest)")"
   C="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of $A" --area infra --kind chore --size s --parent "$A" --selftest)")"
-  B="$(st_num "$(AS_JSON=0 cmd_add -t "selftest blocked by $A" --area infra --kind chore --size s --blocked-by "$A" --selftest)")"
+  B="$(st_num "$(AS_JSON=0 cmd_add -t "selftest blocked by $A" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z" --selftest)")"
   st_ok "created #$A (parent) #$C (child) #$B (blocked by #$A)"
 
   out="$(AS_JSON=1 cmd_ready)"
@@ -1390,7 +1436,7 @@ Re-run with:  scripts/track.sh selftest --yes"
   # Readiness is inherited, so a leaf under a blocked epic is not startable even
   # though nothing points at it. This is the whole of the epic ordering: the
   # chain is stated between epics and the work under them has to feel it.
-  L="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gated parent" --area infra --kind chore --size s --blocked-by "$A" --selftest)")"
+  L="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gated parent" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z" --selftest)")"
   M="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of gated $L" --area infra --kind chore --size s --parent "$L" --selftest)")"
   st_ok "created #$L (blocked by #$A) #$M (its child)"
 
@@ -1468,7 +1514,7 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # The crash-recovery case end to end: the branch that recorded the claim is
   # not checked out, so an id taken from HEAD can never match it.
-  K="$(st_num "$(AS_JSON=0 cmd_add -t "selftest orphan claim" --area infra --kind chore --size s --selftest)")"
+  K="$(st_num "$(AS_JSON=0 cmd_add -t "selftest orphan claim" --area infra --kind chore --size s --parent "$Z" --selftest)")"
   ob="selftest-orphan-$$"
   ST_ORPHAN_BRANCH="$ob"
   git branch "$ob"
@@ -1534,9 +1580,9 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # An issue with two blockers must not be announced when only one closes:
   # the caller would claim it and get a fatal exit 1.
-  G="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate G" --area infra --kind chore --size s --selftest)")"
-  H="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate H" --area infra --kind chore --size s --selftest)")"
-  I="$(st_num "$(AS_JSON=0 cmd_add -t "selftest needs G and H" --area infra --kind chore --size s --blocked-by "$G,$H" --selftest)")"
+  G="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate G" --area infra --kind chore --size s --parent "$Z" --selftest)")"
+  H="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate H" --area infra --kind chore --size s --parent "$Z" --selftest)")"
+  I="$(st_num "$(AS_JSON=0 cmd_add -t "selftest needs G and H" --area infra --kind chore --size s --blocked-by "$G,$H" --parent "$Z" --selftest)")"
   MOTIF_AGENT=selftest-1 cmd_claim "$G" >/dev/null
   out="$(MOTIF_AGENT=selftest-1 cmd_done "$G")"
   rc=0; printf '%s' "$out" | grep -q "unblocked:" && rc=1
@@ -1687,9 +1733,9 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # GitHub rejects a direct 2-cycle server-side but does NOT check transitively,
   # so a 3-cycle is reachable and is what we must detect. Verified 2026-08-03.
-  D="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle D" --area infra --kind chore --size s --selftest)")"
-  E="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle E" --area infra --kind chore --size s --blocked-by "$D" --selftest)")"
-  F="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle F" --area infra --kind chore --size s --blocked-by "$E" --selftest)")"
+  D="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle D" --area infra --kind chore --size s --parent "$Z" --selftest)")"
+  E="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle E" --area infra --kind chore --size s --blocked-by "$D" --parent "$Z" --selftest)")"
+  F="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle F" --area infra --kind chore --size s --blocked-by "$E" --parent "$Z" --selftest)")"
 
   rc=0; cmd_dep "$D" --needs "$F" >/dev/null 2>&1 || rc=$?
   st_assert "$rc" "closed the 3-cycle #$D <- #$F <- #$E <- #$D"
