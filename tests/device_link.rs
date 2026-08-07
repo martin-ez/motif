@@ -9,9 +9,9 @@
 //! Opening happens away from the caller, so a device that takes its time is a
 //! device a test can hold inside `open` and look at the link while it waits.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::{self, ThreadId};
 use std::time::Duration;
 
@@ -493,7 +493,7 @@ fn a_refused_selection_is_the_one_the_link_kept() {
         ..selection()
     };
 
-    let _ = link.select(refused.clone());
+    link.select(refused.clone());
 
     assert_eq!(link.selection(), &refused);
 }
@@ -682,7 +682,7 @@ fn a_chosen_link_stays_at_unity_across_a_device_fault() {
 fn a_selection_the_device_refused_is_still_a_choice() {
     let mut link = closed();
 
-    let _refused = link.select(DeviceSelection::nothing());
+    link.select(DeviceSelection::nothing());
 
     assert_eq!(link.opening_level(), 1.0);
 }

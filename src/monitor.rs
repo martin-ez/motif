@@ -88,16 +88,11 @@ where
     /// The link belongs to the run rather than to the monitor, so whatever else
     /// configures it holds a handle of its own and a composition with no device
     /// to open passes `None`. Opening happens here rather than where the link
-    /// was built, so that a page listing what it could be opened on has done so
-    /// before any stream holds the device.
+    /// was built, so a page listing what it could be opened on has listed first,
+    /// and it is the one open a run waits for: no frame is drawn to give back.
     ///
     /// This cannot fail. A device that refuses the request or will not start
     /// leaves the monitor in [`AudioState::Lost`] carrying why.
-    ///
-    /// The one open a run waits for, rather than taking the answer at a later
-    /// [`DeviceLink::poll`]: there is no frame to hand back before the first
-    /// one is drawn, and a run that started silently while its device was still
-    /// opening would draw a screen nobody could play into.
     pub fn watching(app: A, mut link: Option<SharedLink<B, F>>) -> Self {
         if let Some(link) = link.as_mut() {
             link.change(|held| {

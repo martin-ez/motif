@@ -453,18 +453,12 @@ where
         }
     }
 
-    /// Draw the rows, opening the choice the frame before settled on and taking
-    /// the device's answer whenever it comes.
+    /// Draw the rows, and carry the choice settled on towards the device.
     ///
-    /// Three phases, never two of them for one choice in one frame: a value
-    /// that stood still becomes a choice the link reports as opening, the next
-    /// frame hands that choice to the bench, and the row keeps saying opening
-    /// for as many frames as the device takes. A choice the device refuses
-    /// rolls back to what was running, on the frame its refusal arrived.
-    ///
-    /// Nothing settles while a change is in flight, so a player walking on
-    /// during an open sees the row move and the device follow once, rather than
-    /// queueing an open per row they passed.
+    /// Three phases, never two for one choice in one frame: a value that stood
+    /// still becomes a choice, the next frame hands it to the bench, and the row
+    /// says opening until the device answers. A refusal rolls back on the frame
+    /// it arrived, and nothing settles meanwhile.
     ///
     /// Three still frames, counted rather than timed because a page has no
     /// clock: an arrow held down repeats at about a frame's interval, so a page

@@ -36,7 +36,10 @@ fn a_bench_runs_its_work_away_from_the_caller() {
         let _sent = done.send(thread::current().id());
     });
 
-    assert_ne!(answers.recv().expect("the bench answers"), thread::current().id());
+    assert_ne!(
+        answers.recv().expect("the bench answers"),
+        thread::current().id()
+    );
 }
 
 #[test]

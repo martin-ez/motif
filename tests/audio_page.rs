@@ -109,7 +109,11 @@ impl Studio {
     }
 
     fn wait_where_held(&self) {
-        let held = self.gate.lock().unwrap_or_else(PoisonError::into_inner).take();
+        let held = self
+            .gate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
 
         if let Some(gate) = held {
             let _entered = gate.entering.try_send(());
