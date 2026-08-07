@@ -254,8 +254,9 @@ unblocks, so one filed with no `--blocked-by` or `--blocking` sorts last and
 stays invisible. Filing is also what to do instead of a `TODO` marker (3.4): file
 it, wire it, and go back to the task in hand.
 
-The `next`, `refine` and `file` skills in `.claude/skills/` carry the full
-procedure for taking, grooming and filing work.
+The `next`, `epic`, `refine` and `file` skills in `.claude/skills/` carry the
+full procedure for taking one issue, running a whole epic, grooming and filing
+work.
 
 ## Working agreement
 
