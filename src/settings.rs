@@ -47,6 +47,7 @@ closed_set! {
     OutputChannels,
 }
 
+const SETTLING_FRAMES: usize = 3;
 const MARKER: char = '>';
 const MARKER_COLUMN: usize = 0;
 const LABEL_COLUMN: usize = 2;
@@ -107,8 +108,8 @@ fn taken_whole(device: &AudioDevice) -> ChannelSelection {
 ///
 /// Five settings drawn as rows: the arrows move between them, and the arrows
 /// across or the encoder move the selected row's value. A value that moves is
-/// applied at once, and the row shows what the link is open on rather than
-/// what was asked for.
+/// drawn at once and opened once it stands still, so walking a list opens only
+/// the device it comes to rest on.
 ///
 /// A choice the backend refuses leaves the previous one running and draws why,
 /// an interface unplugged since the list was drawn being ordinary rather than
@@ -142,6 +143,12 @@ pub struct AudioPage<B: AudioBackend, F> {
     catalog: DeviceCatalog,
     row: usize,
     refused: Option<DeviceError>,
+    settling: Option<Settling>,
+}
+
+struct Settling {
+    chosen: DeviceSelection,
+    still: usize,
 }
 
 impl<B: AudioBackend, F, P> AudioPage<B, F>
@@ -165,6 +172,7 @@ where
             catalog,
             row: 0,
             refused: None,
+            settling: None,
         }
     }
 
@@ -185,9 +193,12 @@ where
         AudioSetting::ALL[self.row]
     }
 
-    /// What the page draws for `setting`, taken from what the link is open on.
+    /// What the page draws for `setting`, taken from the choice in hand.
+    ///
+    /// That is the value still settling where there is one, and what the link
+    /// is open on otherwise, so a row answers a key before the device does.
     pub fn value(&self, setting: AudioSetting) -> String {
-        let selection = self.selection();
+        let selection = self.choice();
 
         match setting {
             AudioSetting::Host => selection.host,
@@ -226,12 +237,19 @@ where
         self.refused
     }
 
-    fn selection(&self) -> DeviceSelection {
+    fn running(&self) -> DeviceSelection {
         self.link.read(|held| held.selection().clone())
     }
 
+    fn choice(&self) -> DeviceSelection {
+        match &self.settling {
+            Some(settling) => settling.chosen.clone(),
+            None => self.running(),
+        }
+    }
+
     fn host(&self) -> Option<&AudioHost> {
-        let named = self.selection().host;
+        let named = self.choice().host;
 
         self.listed().iter().find(|host| host.name == named)
     }
@@ -240,11 +258,29 @@ where
         let Some(chosen) = self.chosen(forward) else {
             return;
         };
-        if chosen == self.selection() {
+
+        self.settling = Some(Settling { chosen, still: 0 });
+    }
+
+    fn settle(&mut self) {
+        let Some(chosen) = self.stood_still() else {
             return;
+        };
+
+        if chosen != self.running() {
+            self.apply(chosen);
+        }
+    }
+
+    fn stood_still(&mut self) -> Option<DeviceSelection> {
+        let settling = self.settling.as_mut()?;
+        settling.still += 1;
+
+        if settling.still < SETTLING_FRAMES {
+            return None;
         }
 
-        self.apply(chosen);
+        self.settling.take().map(|settled| settled.chosen)
     }
 
     fn chosen(&self, forward: bool) -> Option<DeviceSelection> {
@@ -258,7 +294,7 @@ where
     }
 
     fn on_another_host(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.selection();
+        let selection = self.choice();
         let at = self
             .listed()
             .iter()
@@ -278,7 +314,7 @@ where
     }
 
     fn on_another_input(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.selection();
+        let selection = self.choice();
         let devices = &self.host()?.inputs;
         let device = &devices[stepped(found(devices, &selection.input), devices.len(), forward)?];
 
@@ -290,7 +326,7 @@ where
     }
 
     fn on_another_output(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.selection();
+        let selection = self.choice();
         let devices = &self.host()?.outputs;
         let device = &devices[stepped(found(devices, &selection.output), devices.len(), forward)?];
 
@@ -302,7 +338,7 @@ where
     }
 
     fn across_other_input_channels(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.selection();
+        let selection = self.choice();
         let devices = &self.host()?.inputs;
         let offered = runs(widest(&devices[found(devices, &selection.input)?]));
         let at = offered
@@ -316,7 +352,7 @@ where
     }
 
     fn across_other_output_channels(&self, forward: bool) -> Option<DeviceSelection> {
-        let selection = self.selection();
+        let selection = self.choice();
         let devices = &self.host()?.outputs;
         let offered = runs(widest(&devices[found(devices, &selection.output)?]));
         let at = offered
@@ -330,7 +366,7 @@ where
     }
 
     fn apply(&mut self, chosen: DeviceSelection) {
-        let running = self.selection();
+        let running = self.running();
 
         match self.serve(chosen) {
             Ok(()) => self.refused = None,
@@ -383,7 +419,15 @@ where
         }
     }
 
+    /// Draw the rows, opening a value that has stood still long enough.
+    ///
+    /// The settle is counted in frames because a page is reached once a frame
+    /// and has no clock. Three of them: an arrow held down repeats at about a
+    /// frame's interval, so a page that opened on the first still frame would
+    /// open every device the player walks past.
     fn draw(&mut self, mut region: Region<'_>) {
+        self.settle();
+
         for (row, setting) in AudioSetting::ALL.into_iter().enumerate() {
             if row == self.row {
                 region.set(MARKER_COLUMN, row, Cell::new(MARKER));
