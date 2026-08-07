@@ -35,6 +35,7 @@ scripts/track.sh <command> [args] [--json]
   ready                       work that can be started right now
   refs [-F FILE]              issues a pull request body tracks (stdin default)
   blocked                     open work with open blockers, and what blocks it
+  plan [--all]                the epic chain in order, the current ones opened
   find <term>                 match issue titles, open and closed
   show <n>                    one issue in full, including claim state
   start <n>                   claim, then branch from main onto it
@@ -268,10 +269,32 @@ def shape: {
   url:       .url
 };
 
+# Readiness is inherited: work under a blocked epic is not startable however
+# clear its own edges are. That is what carries an order stated between epics
+# down to the issues an agent actually claims, without an edge from every child
+# to whatever precedes the epic it belongs to -- the parent says that already,
+# once, and an edge per child is the same fact copied and hand-maintained.
+#
+# The walk stops at an ancestor that is closed, because a finished epic gates
+# nothing, and at a depth no real tree reaches, so a parent cycle cannot spin
+# here. `gated_by` names the nearest ancestor carrying the blocker, not the
+# blocker, since that is the row a reader has to go and look at.
+def with_gates:
+  (INDEX(.[]; .num | tostring)) as $by
+  | map(. + { gated_by:
+      ( [ limit(8; recurse(
+            if (.parent != null) and ($by[.parent.num | tostring] != null)
+            then $by[.parent.num | tostring] else empty end)) ]
+        | .[1:]
+        | map(select((.blockers | length) > 0))
+        | (.[0].num // null) ) });
+
+def is_gated: (.state == "OPEN") and (.gated_by != null);
 def is_ready:   (.state == "OPEN") and (.wip | not) and (.trunc | not)
-                and (.size != "l")
+                and (.size != "l") and (is_gated | not)
                 and ((.blockers | length) == 0) and ((.subs_open | length) == 0);
 def needs_split: (.state == "OPEN") and (.wip | not) and (.size == "l")
+                and (is_gated | not)
                 and ((.blockers | length) == 0) and ((.subs_open | length) == 0);
 def is_container: (.state == "OPEN") and ((.subs_open | length) > 0);
 def is_blocked: (.state == "OPEN") and ((.blockers | length) > 0);
@@ -294,6 +317,26 @@ def has_cycle: ((cycle_nodes | length) > 0);
 def top_blockers:
   [.[] | select(is_blocked) | .blockers[]]
   | group_by(.) | map({num: .[0], n: length}) | sort_by(-.n, .num);
+
+# The plan is a chain, not a forest: epics come off each other in one order, so
+# peeling the ones nothing holds up, over and over, is the order to read them
+# in. Only edges between epics count -- an epic waiting on a loose bug is still
+# next. Whatever survives the peel is in a cycle, and goes last rather than
+# vanishing out of the list.
+def epic_order:
+  ([ .[] | select(.size == "l") | .num ]) as $enums
+  | ([ .[] | select(.size == "l")
+       | . + {ebl: [ .blockers[] | select(IN($enums[])) ]} ]) as $init
+  | ( reduce range(0; ($init | length)) as $_
+        ({rest: $init, out: []};
+          ([ .rest[] | select((.ebl | length) == 0) ] | sort_by(.num)) as $free
+          | ([ $free[] | .num ]) as $freed
+          | if ($free | length) == 0 then .
+            else { out: (.out + $free),
+                   rest: [ .rest[] | select((.ebl | length) > 0)
+                           | .ebl = (.ebl - $freed) ] }
+            end) )
+  | (.out + .rest);
 '
 
 # Claim ownership lives in HTML-comment markers on issue comments. They arrive on
@@ -320,6 +363,26 @@ fetch_open()  { gh issue list --state open --limit "$LIST_LIMIT" --json "$ISSUE_
 fetch_all()   { gh issue list --state all  --limit "$LIST_LIMIT" --json "$ISSUE_FIELDS"; }
 fetch_issue() { gh issue view "$1" --json "$ISSUE_FIELDS,body,comments"; }
 
+# Readiness is inherited (see `with_gates`), and `claim` reads one issue rather
+# than the whole set, so it walks the parent chain itself instead. Bounded at a
+# depth no real tree reaches, so a parent cycle stops here rather than spinning,
+# and it stops at a closed ancestor because a finished epic gates nothing.
+# Prints the nearest open ancestor carrying a blocker, or nothing.
+gating_ancestor() {
+  local num="$1" depth=0 info
+  while [ -n "$num" ] && [ "$depth" -lt 8 ]; do
+    info="$(fetch_issue "$num" | jq -c "$JQ_LIB"' shape')"
+    if [ "$(printf '%s' "$info" | jq -r '.blockers | length')" -gt 0 ]; then
+      printf '%s' "$num"
+      return 0
+    fi
+    num="$(printf '%s' "$info" | jq -r '
+      if (.parent != null) and (.parent.state == "OPEN") then .parent.num else "" end')"
+    depth=$((depth + 1))
+  done
+  return 0
+}
+
 # Claim markers live on comments, which `fetch_open` does not carry. Fetching
 # every open issue to find them would cost one call per issue; the wip label is
 # already in the list payload, so the walk is bounded by the number of live
@@ -344,7 +407,7 @@ iso_epoch() {
 # --------------------------------------------------------------- commands ---
 cmd_ready() {
   local shaped payload total n nblocked nwip ncont tb cyc split trunc
-  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape]')"
+  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape] | with_gates')"
   total="$(printf '%s' "$shaped" | jq 'length')"
   payload="$(printf '%s' "$shaped" | jq "$JQ_LIB"'
     [.[] | select(is_ready)] | sort_by(-(.unblocks | length), .num)')"
@@ -372,7 +435,7 @@ cmd_ready() {
     # Empty queue: say why, on stdout, where the agent will actually read it.
     # Containers are counted separately -- an open, unclaimed, unblocked issue
     # with open children is in neither of the other buckets.
-    nblocked="$(printf '%s' "$shaped" | jq "$JQ_LIB"'[.[] | select(is_blocked)] | length')"
+    nblocked="$(printf '%s' "$shaped" | jq "$JQ_LIB"'[.[] | select(is_blocked or is_gated)] | length')"
     nwip="$(printf '%s' "$shaped" | jq '[.[] | select(.wip)] | length')"
     ncont="$(printf '%s' "$shaped" | jq "$JQ_LIB"'[.[] | select(is_container)] | length')"
     printf '  nothing is ready. %s blocked, %s claimed, %s waiting on sub-issues.\n' \
@@ -396,10 +459,10 @@ cmd_ready() {
 
 cmd_blocked() {
   local shaped payload total n tb
-  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape]')"
+  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape] | with_gates')"
   total="$(printf '%s' "$shaped" | jq 'length')"
   payload="$(printf '%s' "$shaped" | jq "$JQ_LIB"'
-    [.[] | select(is_blocked)] | sort_by(.num)')"
+    [.[] | select(is_blocked or is_gated)] | sort_by(.num)')"
 
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
 
@@ -408,7 +471,9 @@ cmd_blocked() {
   printf '%s' "$payload" | jq -r --argjson m "$TITLE_MAX" '
     .[] | [ .num, (.size // ""), (.area // ""), (.kind // ""),
             (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
-            (.blockers | map("#\(.)") | join(" "))
+            (((.blockers | map("#\(.)"))
+              + (if .gated_by != null then ["via #\(.gated_by)"] else [] end))
+             | join(" "))
           ] | @tsv' \
   | awk -F'\t' '{
       printf "  #%-4s %-1s  %-7s %-6s %s  <- %s\n",
@@ -417,6 +482,74 @@ cmd_blocked() {
   tb="$(printf '%s' "$shaped" | jq -r "$JQ_LIB"'
         top_blockers[0:5] | map("#\(.num) (\(.n))") | join("  ")')"
   [ -n "$tb" ] && printf 'top blockers: %s\n' "$tb"
+  return 0
+}
+
+cmd_plan() {
+  local all=0 shaped payload total nready
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) all=1; shift ;;
+      *)     die "usage: track.sh plan [--all]" ;;
+    esac
+  done
+
+  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape] | with_gates')"
+  total="$( printf '%s' "$shaped" | jq 'length')"
+  nready="$(printf '%s' "$shaped" | jq "$JQ_LIB"'[.[] | select(is_ready)] | length')"
+
+  payload="$(printf '%s' "$shaped" | jq "$JQ_LIB"'
+    . as $open
+    | epic_order
+    | map(. as $e
+        | { num: $e.num, title: $e.title, area: $e.area,
+            done: $e.subs.completed, of: $e.subs.total,
+            waits: $e.blockers,
+            current: ((($e.blockers | length) == 0) and ($e.gated_by == null)),
+            children:
+              ( [ $open[] | select((.parent != null) and (.parent.num == $e.num)) ]
+                | sort_by(.num)
+                | map(. as $c
+                      | { num: $c.num, size: $c.size, title: $c.title,
+                          stance: (if $c.wip then "claimed"
+                                   elif ($c | is_ready) then "ready"
+                                   else "waiting" end),
+                          waits: ((($c.blockers | map("#\(.)"))
+                                   + (if ($c.gated_by != null)
+                                         and (($c.blockers | index($c.gated_by)) == null)
+                                      then ["via #\($c.gated_by)"] else [] end))
+                                  | join(" ")) }) ) })')"
+
+  if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$payload"; return 0; fi
+
+  printf 'plan (%s open, %s ready)\n' "$total" "$nready"
+  printf '%s' "$payload" | jq -r --argjson all "$all" --argjson m "$TITLE_MAX" '
+    .[]
+    | ([ "E", (.num | tostring),
+         (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
+         (.done | tostring), (.of | tostring),
+         (.waits | map("#\(.)") | join(" ")),
+         (if .current then "yes" else "no" end) ] | @tsv),
+      ( if (.current or ($all == 1))
+        then (.children[]
+              | [ "C", (.num | tostring), (.size // "-"), .stance,
+                  (if (.title | length) > $m then (.title[0:$m] + "…") else .title end),
+                  .waits ] | @tsv)
+        else empty end )' \
+  | awk -F'\t' -v all="$all" '
+      $1 == "E" {
+        open_here = ($7 == "yes" || all == 1);
+        mark = ($7 == "yes") ? "\342\226\270" : " ";
+        prog = ($5 + 0 > 0) ? sprintf("%s/%s done", $4, $5) : "";
+        waits = ($6 == "") ? "" : sprintf("  waits on %s", $6);
+        line = sprintf("%s #%-4s %-44s %-9s%s", mark, $2, $3, prog, waits);
+        sub(/[ \t]+$/, "", line);
+        printf "%s%s\n", (open_here ? "\n" : ""), line;
+      }
+      $1 == "C" {
+        w = ($6 == "") ? "" : sprintf("  <- %s", $6);
+        printf "     %-8s #%-4s %-1s  %s%s\n", $4, $2, ($3 == "" ? "-" : $3), $5, w;
+      }'
   return 0
 }
 
@@ -560,7 +693,7 @@ cmd_show() {
 }
 
 cmd_claim() {
-  local force=0 n="" me info state wip size blockers subs holder since rc=0
+  local force=0 n="" me info state wip size blockers subs holder since gate rc=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --force) force=1; shift ;;
@@ -584,6 +717,11 @@ cmd_claim() {
   [ "$state" = "OPEN" ] || { lock_release; die "#$n is $state — nothing to claim."; }
   [ -z "$blockers" ]    || { lock_release; die "#$n is blocked by $blockers. Work on a blocker instead."; }
   [ -z "$subs" ]        || { lock_release; die "#$n is a container (open sub-issues: $subs). Claim a sub-issue."; }
+
+  gate="$(gating_ancestor "$(printf '%s' "$info" | jq -r '
+    if (.parent != null) and (.parent.state == "OPEN") then .parent.num else "" end')")"
+  [ -z "$gate" ] || { lock_release
+    die "#$n sits under #$gate, which is blocked. Work on what blocks #$gate instead."; }
 
   if [ "$wip" = "true" ]; then
     if [ "$holder" = "$me" ]; then
@@ -711,8 +849,8 @@ ${msg:-Completed by \`$me\`.}" >/dev/null || true
   # into a claim that exits 1, which AGENTS.md tells agents to treat as fatal.
   freed=""
   if [ -n "$was" ]; then
-    freed="$(fetch_open | jq -r "$JQ_LIB"'[.[] | shape | select(is_ready) | .num]
-              | map("#\(.)") | join(" ")')"
+    freed="$(fetch_open | jq -r "$JQ_LIB"'[.[] | shape] | with_gates
+              | map(select(is_ready) | .num) | map("#\(.)") | join(" ")')"
     freed="$(printf '%s\n%s\n' "$was" "$freed" | tr ' ' '\n' | sort | uniq -d | tr '\n' ' ')"
     freed="${freed% }"
   fi
@@ -902,7 +1040,7 @@ cmd_note() {
 
 cmd_graph() {
   local shaped cyc
-  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape]')"
+  shaped="$(fetch_open | jq "$JQ_LIB"' [.[] | shape] | with_gates')"
   if [ "$AS_JSON" = 1 ]; then printf '%s\n' "$shaped"; return 0; fi
 
   printf 'graph (%s open)\n' "$(printf '%s' "$shaped" | jq 'length')"
@@ -1100,7 +1238,7 @@ cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
 
-  local t0 A B C D E F G H I J K out rc loc adv dt bn ob scratch ids
+  local t0 A B C D E F G H I J K L M N R out rc loc adv dt bn ob scratch ids
   t0="$(date +%s)"
   note "selftest"
   note "  preflight: doctor"
@@ -1128,6 +1266,24 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$B" --argjson a "$A" \
       'any(.num == $n and (.blockers | index($a) != null))' >/dev/null || rc=1
   st_assert "$rc" "blocked lists #$B <- #$A"
+
+  # Readiness is inherited, so a leaf under a blocked epic is not startable even
+  # though nothing points at it. This is the whole of the epic ordering: the
+  # chain is stated between epics and the work under them has to feel it.
+  L="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gated parent" --area infra --kind chore --size s --blocked-by "$A" --selftest)")"
+  M="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of gated $L" --area infra --kind chore --size s --parent "$L" --selftest)")"
+  st_ok "created #$L (blocked by #$A) #$M (its child)"
+
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$M" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "ready excludes #$M under blocked parent #$L"
+
+  rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$M" --argjson l "$L" \
+      'any(.num == $n and .gated_by == $l)' >/dev/null || rc=1
+  st_assert "$rc" "blocked names #$L as what gates #$M"
+
+  rc=0; ( MOTIF_AGENT=selftest-3 cmd_claim "$M" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "claim refuses #$M under a blocked ancestor (got $rc)"
 
   out="$(AS_JSON=1 cmd_find "selftest child of")"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
@@ -1251,6 +1407,11 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$B" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "#$B becomes ready when its blocker closes"
 
+  # A closed ancestor gates nothing, which is what makes finishing an epic
+  # release the work under the next one without re-pointing any of it.
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$M" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "#$M becomes ready once the ancestor gating it is unblocked"
+
   # An issue with two blockers must not be announced when only one closes:
   # the caller would claim it and get a fatal exit 1.
   G="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate G" --area infra --kind chore --size s --selftest)")"
@@ -1274,6 +1435,29 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$rc" "ready reports #$J under SPLIT rather than hiding it"
   rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "claim refuses size:l #$J (got $rc)"
+
+  # `plan` reads the chain rather than the forest: epics in the order they come
+  # off each other, the ones nothing blocks expanded, everything else a row.
+  N="$(st_num "$(AS_JSON=0 cmd_add -t "selftest epic behind $J" --area infra --kind chore --size l --blocked-by "$J" --selftest)")"
+  R="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of epic $N" --area infra --kind chore --size s --parent "$N" --selftest)")"
+  out="$(AS_JSON=1 cmd_plan)"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson j "$J" --argjson n "$N" '
+    (map(.num) | index($j)) as $a | (map(.num) | index($n)) as $b
+    | ($a != null) and ($b != null) and ($a < $b)' >/dev/null || rc=1
+  st_assert "$rc" "plan orders #$J before the epic it blocks, #$N"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson j "$J" \
+    'any(.num == $j and .current)' >/dev/null || rc=1
+  st_assert "$rc" "plan marks unblocked epic #$J as current"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$N" \
+    'any(.num == $n and (.current | not))' >/dev/null || rc=1
+  st_assert "$rc" "plan leaves epic #$N behind a blocker uncurrent"
+
+  rc=0; printf '%s' "$out" | jq -e --argjson n "$N" --argjson r "$R" '
+    any(.num == $n and (.children | any(.num == $r and .stance == "waiting")))' >/dev/null || rc=1
+  st_assert "$rc" "plan carries #$R under #$N as waiting on its gated epic"
 
   # A whitespace agent id would produce an unmatchable claim marker.
   rc=0; ( MOTIF_AGENT="bad id" cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
@@ -1388,6 +1572,7 @@ case "$CMD" in
   ready)        cmd_ready "$@" ;;
   refs)         cmd_refs "$@" ;;
   blocked)      cmd_blocked "$@" ;;
+  plan)         cmd_plan "$@" ;;
   find)         cmd_find "$@" ;;
   show)         cmd_show "$@" ;;
   start)        cmd_start "$@" ;;
