@@ -34,6 +34,7 @@ const SECOND_INPUT: &str = "second input";
 const OUTPUT: &str = "output";
 const CHANNELS: u16 = 2;
 const IDLE: &str = "IDLE";
+const SETTLING_FRAMES: usize = 3;
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -206,6 +207,13 @@ fn onto_the_second_input(monitor: &mut Composed) {
     onto_the_settings(monitor);
     monitor.control(pressed(Button::Down));
     monitor.control(pressed(Button::Right));
+    settled(monitor);
+}
+
+fn settled(monitor: &mut Composed) {
+    for _ in 0..SETTLING_FRAMES {
+        let _frame = drawn(monitor);
+    }
 }
 
 fn drawn(monitor: &mut Composed) -> Frame {

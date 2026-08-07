@@ -7,7 +7,7 @@
 //! is read back from the selection the link is open on and from the frame the
 //! page drew.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
@@ -19,6 +19,7 @@ use motif::settings::{AudioPage, AudioSetting};
 use motif::ui::{ControlEvent, Controls, Frame, Page, ScriptedControls, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
+const SETTLING_FRAMES: usize = 3;
 const RATE: u32 = 48_000;
 const FIRST: &str = "first";
 const SECOND: &str = "second";
@@ -35,14 +36,18 @@ const BOOTH: &str = "booth";
 const WEDGE: &str = "wedge";
 
 /// A backend listing two hosts, whose devices can arrive and depart between
-/// enumerations, and whose spare input refuses to open.
+/// enumerations, whose spare input refuses to open, and which counts the
+/// streams it was asked for.
 ///
 /// It stands in for an interface unplugged between the moment the list was
 /// drawn and the moment a row was moved, which is the case the page exists to
-/// survive.
+/// survive. The count is what a page walking a device list is measured by: an
+/// open is a teardown and six blocking queries on a real host, so how many the
+/// walk asks for is the cost the player feels.
 struct Studio {
     arrived: AtomicBool,
     departed: AtomicBool,
+    opens: AtomicUsize,
 }
 
 impl Studio {
@@ -50,7 +55,12 @@ impl Studio {
         Self {
             arrived: AtomicBool::new(false),
             departed: AtomicBool::new(false),
+            opens: AtomicUsize::new(0),
         }
+    }
+
+    fn opens(&self) -> usize {
+        self.opens.load(Ordering::Relaxed)
     }
 
     fn arrive(&self) {
@@ -143,6 +153,8 @@ impl AudioBackend for Studio {
         request: StreamRequest,
         path: P,
     ) -> Result<Self::Stream, DeviceError> {
+        self.opens.fetch_add(1, Ordering::Relaxed);
+
         let host = self
             .hosts(RATE)
             .into_iter()
@@ -241,12 +253,29 @@ fn on(setting: AudioSetting) -> Vec<ControlEvent> {
     repeated(pressed(Button::Down), row)
 }
 
-fn moved(setting: AudioSetting, events: impl IntoIterator<Item = ControlEvent>) -> StudioPage {
+fn walking(setting: AudioSetting, events: impl IntoIterator<Item = ControlEvent>) -> StudioPage {
     let mut page = page();
     driven_by(&mut page, on(setting));
     driven_by(&mut page, events);
 
     page
+}
+
+fn moved(setting: AudioSetting, events: impl IntoIterator<Item = ControlEvent>) -> StudioPage {
+    let mut page = walking(setting, events);
+    settled(&mut page);
+
+    page
+}
+
+fn settled(page: &mut StudioPage) {
+    for _ in 0..SETTLING_FRAMES {
+        let _rows = drawn(page);
+    }
+}
+
+fn opens(page: &StudioPage) -> usize {
+    page.link().read(|held| held.backend().opens())
 }
 
 fn row_of(frame: &Frame, row: usize) -> String {
@@ -456,11 +485,111 @@ fn moving_the_output_opens_the_next_device() {
 }
 
 #[test]
+fn a_value_still_moving_is_not_opened() {
+    let mut page = page();
+    let before = opens(&page);
+    driven_by(&mut page, repeated(pressed(Button::Right), 2));
+
+    let _rows = drawn(&mut page);
+
+    assert_eq!(opens(&page) - before, 0);
+    assert_eq!(host_of(&page), FIRST);
+}
+
+#[test]
+fn the_row_draws_the_value_it_is_settling_on() {
+    let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
+
+    let rows = drawn(&mut page);
+
+    assert!(rows[0].ends_with(SECOND), "{}", rows[0]);
+    assert_eq!(host_of(&page), FIRST);
+}
+
+#[test]
+fn a_burst_opens_the_choice_it_comes_to_rest_on() {
+    let mut page = walking(AudioSetting::Host, repeated(pressed(Button::Right), 2));
+    let before = opens(&page);
+
+    settled(&mut page);
+
+    assert_eq!(opens(&page) - before, 1);
+    assert_eq!(host_of(&page), THIRD);
+}
+
+#[test]
+fn a_burst_opens_on_the_frame_it_settles() {
+    let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
+    let before = opens(&page);
+
+    for _ in 0..SETTLING_FRAMES - 1 {
+        let _rows = drawn(&mut page);
+    }
+    let waiting = opens(&page) - before;
+    let _rows = drawn(&mut page);
+
+    assert_eq!(waiting, 0);
+    assert_eq!(opens(&page) - before, 1);
+}
+
+#[test]
+fn a_press_starts_the_settle_over() {
+    let mut page = walking(AudioSetting::Host, [pressed(Button::Right)]);
+    let before = opens(&page);
+
+    let _rows = drawn(&mut page);
+    driven_by(&mut page, [pressed(Button::Right)]);
+    for _ in 0..SETTLING_FRAMES - 1 {
+        let _rows = drawn(&mut page);
+    }
+
+    assert_eq!(opens(&page) - before, 0);
+    assert_eq!(host_of(&page), FIRST);
+}
+
+#[test]
+fn a_burst_that_comes_back_where_it_started_opens_nothing() {
+    let mut page = walking(
+        AudioSetting::Host,
+        [pressed(Button::Right), pressed(Button::Left)],
+    );
+    let before = opens(&page);
+
+    settled(&mut page);
+
+    assert_eq!(opens(&page) - before, 0);
+    assert_eq!(host_of(&page), FIRST);
+}
+
+#[test]
+fn a_choice_that_has_opened_is_not_opened_again() {
+    let mut page = moved(AudioSetting::Host, [pressed(Button::Right)]);
+    let before = opens(&page);
+
+    settled(&mut page);
+
+    assert_eq!(opens(&page) - before, 0);
+    assert_eq!(host_of(&page), SECOND);
+}
+
+#[test]
+fn a_refused_choice_opens_the_one_that_was_running_as_well() {
+    let mut page = walking(AudioSetting::Input, repeated(pressed(Button::Right), 2));
+    let before = opens(&page);
+
+    settled(&mut page);
+
+    assert_eq!(opens(&page) - before, 2);
+    assert_eq!(input_of(&page), MIC);
+}
+
+#[test]
 fn a_new_input_device_is_taken_whole() {
     let mut page = page();
     driven_by(&mut page, on(AudioSetting::InputChannels));
     driven_by(&mut page, [pressed(Button::Left)]);
     driven_by(&mut page, [pressed(Button::Up), pressed(Button::Right)]);
+    settled(&mut page);
 
     assert_eq!(input_channels_of(&page), ChannelSelection::all(2));
 }
@@ -471,6 +600,7 @@ fn a_new_output_device_is_taken_whole() {
     driven_by(&mut page, on(AudioSetting::OutputChannels));
     driven_by(&mut page, [pressed(Button::Left)]);
     driven_by(&mut page, [pressed(Button::Up), pressed(Button::Right)]);
+    settled(&mut page);
 
     assert_eq!(output_channels_of(&page), ChannelSelection::all(2));
 }
@@ -523,7 +653,7 @@ fn a_channel_run_is_named_by_the_channels_a_player_counts() {
 fn a_device_that_cannot_be_opened_leaves_the_previous_one_running() {
     let page = moved(AudioSetting::Input, repeated(pressed(Button::Right), 2));
 
-    assert_eq!(input_of(&page), LINE);
+    assert_eq!(input_of(&page), MIC);
     assert_eq!(page.state(), AudioState::Playing);
 }
 
@@ -567,10 +697,11 @@ fn a_page_given_fewer_rows_draws_nothing_below_them() {
 #[test]
 fn a_choice_that_opens_clears_the_refusal() {
     let mut page = moved(AudioSetting::Input, repeated(pressed(Button::Right), 2));
-    driven_by(&mut page, [pressed(Button::Left)]);
+    driven_by(&mut page, [pressed(Button::Right)]);
+    settled(&mut page);
 
     assert_eq!(page.refused(), None);
-    assert_eq!(input_of(&page), MIC);
+    assert_eq!(input_of(&page), LINE);
 }
 
 #[test]
@@ -586,6 +717,7 @@ fn a_page_with_nothing_listed_still_draws_what_is_open() {
 fn a_setting_with_nothing_listed_does_not_move() {
     let mut page = unlisted_page();
     driven_by(&mut page, [pressed(Button::Right)]);
+    settled(&mut page);
 
     assert_eq!(host_of(&page), FIRST);
     assert_eq!(page.state(), AudioState::Playing);
