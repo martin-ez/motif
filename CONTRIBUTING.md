@@ -10,9 +10,10 @@ exists only because GitHub links it from the pull request and issue pages.
 Before opening a pull request:
 
 ```sh
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features
-scripts/check-style.sh
-cargo check --target aarch64-unknown-linux-gnu
+scripts/gate.sh
 ```
+
+That runs every check CI can fail a pull request on that a working tree can
+answer, in the configuration CI uses. The title's length and shape, and the
+scan for tool attribution in the body, belong to the pull request rather than
+the tree; [AGENTS.md](AGENTS.md) says what to do about those.

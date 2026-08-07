@@ -214,9 +214,16 @@ fi
 note "sweeping the diff with $base ($(git rev-parse --short "$merge_base")) …"
 
 # --no-shuffle keeps two runs of the same diff comparable.
+#
+# --cap-lints=true because the sweep runs under -D warnings, which CI sets at
+# workflow level and scripts/gate.sh mirrors. Without it a mutant that trips a
+# lint is reported unviable rather than tested, and an unviable mutant is not
+# counted: measured on src/ui/hold.rs, 10 of 11 mutants caught with the flag
+# and 5 of 11 without. The same flag is on ci.yml's invocation, and
+# scripts/gate.sh --selftest fails if the two stop agreeing.
 jobs="$(sweep_jobs)"
 status=0
-cargo mutants --in-diff "$diff" --no-shuffle -j "$jobs" || status=$?
+cargo mutants --in-diff "$diff" --no-shuffle --cap-lints=true -j "$jobs" || status=$?
 [ "$status" = 0 ] || die "$(explain "$status" "$jobs")"
 
 pass "every mutant in the diff was caught"
