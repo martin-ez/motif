@@ -7,20 +7,26 @@
 //! [`DeviceLink`], and [`AudioState`] is what it looks like from outside.
 //!
 //! Recovery is a replacement, never a repair: a faulted stream is stopped and
-//! dropped on the application thread, where dropping is allowed and is what
-//! joins the callback threads. [`open`](DeviceLink::open) replaces the stream
-//! whatever the reason and [`select`](DeviceLink::select) is that call after
-//! changing the choice, so a lost device and a changed one are one mechanism.
+//! dropped on a [`Bench`], where blocking is allowed and where the callback
+//! threads are joined. [`open`](DeviceLink::open) replaces the stream whatever
+//! the reason and [`select`](DeviceLink::select) is that call after changing
+//! the choice, so a lost device and a changed one are one mechanism.
+//!
+//! Neither waits for the device. The answer comes back at
+//! [`poll`](DeviceLink::poll), which a caller already runs once a frame, or at
+//! [`settled`](DeviceLink::settled) where there is nothing to draw meanwhile.
 //!
 //! One run, one device, one link: [`SharedLink`] is how its holders share it.
 
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 use super::{
-    AudioBackend, AudioPath, DeviceError, DeviceSelection, DuplexStream, GUARDED_LEVEL, Opening,
-    StreamRequest,
+    AudioBackend, AudioPath, Bench, DeviceError, DeviceSelection, DuplexStream, GUARDED_LEVEL,
+    Opening, StreamRequest,
 };
 
 const UNITY: f32 = 1.0;
@@ -38,11 +44,12 @@ pub enum AudioState {
     Idle,
     /// A stream is open and calling back.
     Playing,
-    /// A stream is being opened, and whatever was playing still is.
+    /// A stream is being opened, and the device has not answered.
     ///
-    /// [`DeviceLink::choose`] is what reaches this state and
-    /// [`DeviceLink::open`] is what leaves it, so a link resting here is one
-    /// whose holder has not opened the choice yet.
+    /// [`DeviceLink::choose`] reaches it without touching the device, keeping
+    /// whatever was playing; [`DeviceLink::open`] reaches it by handing the
+    /// work to a bench, which is where that stream is torn down. Taking the
+    /// answer is what leaves it, whichever answer comes.
     Opening,
     /// The device failed, and this is what it failed with.
     ///
@@ -67,24 +74,28 @@ impl fmt::Display for AudioState {
 /// one like it.
 ///
 /// Nothing here runs on the audio thread. It is the application-thread end of
-/// the boundary: it reads the fault a callback latched, and it does the
-/// stopping, dropping and rebuilding that a callback may not.
+/// the boundary: it reads the fault a callback latched, and it decides the
+/// stopping, dropping and rebuilding that a callback may not. Deciding is all
+/// it does on that thread — the device work itself goes to the bench.
 ///
 /// Only opening a stream needs to know what the path is, so whatever holds a
 /// link can poll, stop and drop one without naming what it plays.
 pub struct DeviceLink<B: AudioBackend, F> {
-    backend: B,
+    backend: Arc<B>,
     request: StreamRequest,
     selection: DeviceSelection,
-    path: F,
+    path: Arc<F>,
     stream: Option<B::Stream>,
     state: AudioState,
     chosen: bool,
+    running: bool,
+    bench: Bench,
+    awaiting: Option<Receiver<Result<B::Stream, DeviceError>>>,
 }
 
 impl<B: AudioBackend, F, P> DeviceLink<B, F>
 where
-    F: FnMut() -> P,
+    F: Fn() -> P + Send + Sync + 'static,
     P: AudioPath,
 {
     /// A link that will open `selection` at `request` on `backend`, playing
@@ -93,45 +104,61 @@ where
     /// A path is built rather than held, because opening a stream moves one to
     /// where the callback can reach it: every stream the link opens gets one of
     /// its own, and [`Escrow`](super::Escrow) is what builds those out of a path
-    /// a run has only one of.
+    /// a run has only one of. The bench builds it, after the stream being
+    /// replaced is dropped — which is when an escrow has its path back to lend.
     ///
     /// Touches no device, so this cannot fail; the first
     /// [`open`](Self::open) is where a device gets a say.
     pub fn new(backend: B, request: StreamRequest, selection: DeviceSelection, path: F) -> Self {
         Self {
-            backend,
+            backend: Arc::new(backend),
             request,
             selection,
-            path,
+            path: Arc::new(path),
             stream: None,
             state: AudioState::Closed,
             chosen: false,
+            running: false,
+            bench: Bench::new(),
+            awaiting: None,
         }
     }
 
-    /// Open a stream, replacing whichever one the link is holding.
+    /// Hand the bench a stream to open, replacing whichever one the link is
+    /// holding.
     ///
-    /// The replaced stream is stopped and dropped before the new one is opened,
-    /// so no two streams are ever live on one link and the old callbacks have
-    /// finished before the new ones begin. This is the way out of
-    /// [`AudioState::Lost`], and also what changing device comes down to.
+    /// Returns without waiting for the device, leaving the link
+    /// [`AudioState::Opening`]: a caller that opens a device from a frame gets
+    /// the frame back. The bench stops and drops the replaced stream before it
+    /// opens the new one, so no two streams are ever live on one link and the
+    /// old callbacks have finished before the new ones begin.
     ///
-    /// # Errors
-    ///
-    /// Returns [`DeviceError`] when the backend will not open the request, and
-    /// leaves the link in [`AudioState::Lost`] carrying it.
-    pub fn open(&mut self) -> Result<(), DeviceError> {
-        self.close();
+    /// An open already in flight finishes first, so there is one at a time.
+    /// This is the way out of [`AudioState::Lost`], and also what changing
+    /// device comes down to; [`poll`](Self::poll) is where either lands.
+    pub fn open(&mut self) {
+        self.settled();
 
-        let path = Opening::at(self.opening_level(), (self.path)());
-        match self.backend.open(&self.selection, self.request, path) {
-            Ok(stream) => {
-                self.stream = Some(stream);
-                self.state = AudioState::Idle;
-                Ok(())
+        let backend = Arc::clone(&self.backend);
+        let selection = self.selection.clone();
+        let request = self.request;
+        let build = Arc::clone(&self.path);
+        let level = self.opening_level();
+        let mut replaced = self.stream.take();
+        let (answer, awaiting) = channel();
+
+        self.bench.run(move || {
+            if let Some(stream) = replaced.as_mut() {
+                let _stopped = stream.stop();
             }
-            Err(error) => Err(self.lose(error)),
-        }
+            drop(replaced);
+
+            let path = Opening::at(level, build());
+            let _answered = answer.send(backend.open(&selection, request, path));
+        });
+
+        self.awaiting = Some(awaiting);
+        self.state = AudioState::Opening;
     }
 
     /// Take `selection` as the choice to serve, and open it.
@@ -140,13 +167,12 @@ where
     /// and is dropped before the new one opens: a device serving both cannot be
     /// opened twice, and a moment of silence is the price of the change.
     ///
-    /// # Errors
-    ///
-    /// As [`open`](Self::open). The refused selection is kept, so a link left
-    /// in [`AudioState::Lost`] reports what was asked for, not what came before.
-    pub fn select(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
+    /// As [`open`](Self::open), this does not wait for the device. The refused
+    /// selection is kept, so a link that lands in [`AudioState::Lost`] reports
+    /// what was asked for, not what came before.
+    pub fn select(&mut self, selection: DeviceSelection) {
         self.choose(selection);
-        self.open()
+        self.open();
     }
 }
 
@@ -215,54 +241,124 @@ impl<B: AudioBackend, F> DeviceLink<B, F> {
         self.stream.as_ref()
     }
 
+    /// Wait for the open in flight, and report what the link is doing.
+    ///
+    /// Blocking, so this belongs where there is no frame to give back: a run
+    /// opening its device before the screen exists, or a caller with nothing to
+    /// draw meanwhile. [`poll`](Self::poll) is the same answer without the
+    /// wait. A bench that died holding the work reports
+    /// [`DeviceError::BackendFailure`].
+    pub fn settled(&mut self) -> AudioState {
+        if let Some(awaiting) = self.awaiting.take() {
+            let answer = awaiting.recv().unwrap_or(Err(DeviceError::BackendFailure));
+            self.arrive(answer);
+        }
+
+        self.state
+    }
+
     /// Stop and drop the stream, leaving the link [`AudioState::Closed`].
     ///
     /// A stream that refuses to stop is dropped anyway. There is nothing left
-    /// to do with one, and its own drop is what waits for the callbacks.
+    /// to do with one, and its own drop is what waits for the callbacks. The
+    /// stream an open in flight is about to hand over is waited for and dropped
+    /// too, here rather than on the bench: closing is what a run does on its
+    /// way out, and there is no frame left to protect.
     pub fn close(&mut self) {
+        self.settled();
+
         if let Some(stream) = self.stream.as_mut() {
             let _ = stream.stop();
         }
         self.stream = None;
         self.state = AudioState::Closed;
+        self.running = false;
     }
 
-    /// Start calling back.
+    /// Start calling back, and keep calling back across the streams that
+    /// follow.
+    ///
+    /// A link being opened has no stream to start, so this records that it is
+    /// wanted playing and the stream the bench hands over starts on arrival.
+    /// That is what lets a caller say "play this device" in the frame that
+    /// chose it rather than in whichever later frame the device answered on.
     ///
     /// # Errors
     ///
     /// Returns the latched [`DeviceError`] where the device is already lost,
-    /// [`DeviceError::DeviceNotAvailable`] where no stream is open, and
-    /// whatever the device refuses with otherwise. A refusal moves the link to
-    /// [`AudioState::Lost`], because a stream that will not start is not one
-    /// anything can wait on.
+    /// [`DeviceError::DeviceNotAvailable`] where no stream is open and none is
+    /// being opened, and whatever the device refuses with otherwise. A refusal
+    /// moves the link to [`AudioState::Lost`], because a stream that will not
+    /// start is not one anything can wait on.
     pub fn start(&mut self) -> Result<(), DeviceError> {
+        self.running = true;
         self.act(DuplexStream::start, AudioState::Playing)
     }
 
-    /// Stop calling back, leaving the stream open.
+    /// Stop calling back, leaving the stream open, and leave the streams that
+    /// follow stopped too.
     ///
     /// # Errors
     ///
     /// As [`start`](Self::start), and for the same reasons.
     pub fn stop(&mut self) -> Result<(), DeviceError> {
+        self.running = false;
         self.act(DuplexStream::stop, AudioState::Idle)
     }
 
-    /// Notice a device that failed, and report what the link is doing now.
+    /// Take whatever happened between frames, and report what the link is doing
+    /// now.
     ///
-    /// This is what turns a fault latched on the audio thread into
-    /// [`AudioState::Lost`]: the faulted stream is stopped and dropped here,
-    /// and the reason it gave is kept. Call it wherever the application already
-    /// looks at its audio path — once a frame is plenty, since the fault waits.
+    /// Two things happen there. A device the bench finished opening arrives,
+    /// and starts if the link is wanted playing. A fault latched on the audio
+    /// thread becomes [`AudioState::Lost`], the faulted stream stopped and
+    /// dropped and the reason it gave kept. Call it wherever the application
+    /// already looks at its audio path — once a frame is plenty, since neither
+    /// answer goes anywhere.
     ///
-    /// Cheap and idempotent when nothing has failed: one atomic load.
+    /// Cheap and idempotent when nothing has happened: one atomic load.
     pub fn poll(&mut self) -> AudioState {
+        self.collect();
+
         if let Some(fault) = self.stream.as_ref().and_then(DuplexStream::fault) {
             self.close();
             self.lose(fault);
         }
         self.state
+    }
+
+    fn collect(&mut self) {
+        let Some(awaiting) = self.awaiting.as_ref() else {
+            return;
+        };
+
+        match awaiting.try_recv() {
+            Ok(answer) => {
+                self.awaiting = None;
+                self.arrive(answer);
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.awaiting = None;
+                self.arrive(Err(DeviceError::BackendFailure));
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+    }
+
+    fn arrive(&mut self, answer: Result<B::Stream, DeviceError>) {
+        match answer {
+            Ok(stream) => {
+                self.stream = Some(stream);
+                self.state = AudioState::Idle;
+
+                if self.running {
+                    let _playing = self.start();
+                }
+            }
+            Err(error) => {
+                self.lose(error);
+            }
+        }
     }
 
     fn act(
@@ -275,7 +371,10 @@ impl<B: AudioBackend, F> DeviceLink<B, F> {
         }
 
         let Some(stream) = self.stream.as_mut() else {
-            return Err(DeviceError::DeviceNotAvailable);
+            return match self.state {
+                AudioState::Opening => Ok(()),
+                _ => Err(DeviceError::DeviceNotAvailable),
+            };
         };
 
         match action(stream) {
@@ -323,7 +422,8 @@ impl<B: AudioBackend, F> DeviceLink<B, F> {
 ///     .expect("the null backend has a device in each direction");
 /// let watching = link.clone();
 ///
-/// let _opened = link.change(DeviceLink::open);
+/// link.change(DeviceLink::open);
+/// link.change(DeviceLink::settled);
 ///
 /// assert_eq!(watching.read(DeviceLink::state), AudioState::Idle);
 /// ```
@@ -342,7 +442,7 @@ impl<B: AudioBackend, F> Clone for SharedLink<B, F> {
 
 impl<B: AudioBackend, F, P> SharedLink<B, F>
 where
-    F: FnMut() -> P,
+    F: Fn() -> P + Send + Sync + 'static,
     P: AudioPath,
 {
     /// A shared link on what `backend` would open at `request` if nobody chose,

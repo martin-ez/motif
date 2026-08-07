@@ -194,8 +194,10 @@ fn reopening_a_link_hands_the_new_stream_the_same_path() {
         move || escrow.lend(),
     );
 
-    link.open().expect("null backend opens");
-    link.open().expect("null backend opens");
+    link.open();
+    link.settled();
+    link.open();
+    link.settled();
 
     assert_eq!(served.counted(), vec![1, 2]);
 }
@@ -211,8 +213,10 @@ fn selecting_another_device_keeps_the_path_that_was_playing() {
         move || escrow.lend(),
     );
 
-    link.open().expect("null backend opens");
-    link.select(selection()).expect("null backend opens");
+    link.open();
+    link.settled();
+    link.select(selection());
+    link.settled();
 
     assert_eq!(served.counted(), vec![1, 2]);
 }

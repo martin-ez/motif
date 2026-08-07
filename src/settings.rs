@@ -145,6 +145,7 @@ pub struct AudioPage<B: AudioBackend, F> {
     refused: Option<DeviceError>,
     settling: Option<Settling>,
     replacing: Option<DeviceSelection>,
+    restoring: Option<DeviceSelection>,
 }
 
 struct Settling {
@@ -154,7 +155,7 @@ struct Settling {
 
 impl<B: AudioBackend, F, P> AudioPage<B, F>
 where
-    F: FnMut() -> P,
+    F: Fn() -> P + Send + Sync + 'static,
     P: AudioPath,
 {
     /// List what `link` could be opened on, leaving the opening to whatever
@@ -175,6 +176,7 @@ where
             refused: None,
             settling: None,
             replacing: None,
+            restoring: None,
         }
     }
 
@@ -265,6 +267,10 @@ where
     }
 
     fn settle(&mut self) {
+        if self.changing() {
+            return;
+        }
+
         let Some(chosen) = self.stood_still() else {
             return;
         };
@@ -278,18 +284,37 @@ where
         self.link.change(|held| held.choose(chosen));
     }
 
-    fn open(&mut self) {
+    fn changing(&self) -> bool {
+        self.replacing.is_some() || self.restoring.is_some()
+    }
+
+    fn dispatch(&mut self) {
         let Some(replaced) = self.replacing.take() else {
             return;
         };
         let chosen = self.selection();
 
-        match self.serve(chosen) {
-            Ok(()) => self.refused = None,
-            Err(error) => {
+        self.restoring = Some(replaced);
+        self.serve(chosen);
+    }
+
+    fn answered(&mut self) {
+        let state = self.link.change(DeviceLink::poll);
+
+        if state == AudioState::Opening {
+            return;
+        }
+
+        let Some(replaced) = self.restoring.take() else {
+            return;
+        };
+
+        match state {
+            AudioState::Lost(error) => {
                 self.refused = Some(error);
-                let _restored = self.serve(replaced);
+                self.serve(replaced);
             }
+            _ => self.refused = None,
         }
     }
 
@@ -386,15 +411,15 @@ where
         })
     }
 
-    fn serve(&mut self, selection: DeviceSelection) -> Result<(), DeviceError> {
-        self.link.change(|held| held.select(selection))?;
-        self.link.change(DeviceLink::start)
+    fn serve(&mut self, selection: DeviceSelection) {
+        self.link.change(|held| held.select(selection));
+        let _playing = self.link.change(DeviceLink::start);
     }
 }
 
 impl<B: AudioBackend, F, P> Page for AudioPage<B, F>
 where
-    F: FnMut() -> P,
+    F: Fn() -> P + Send + Sync + 'static,
     P: AudioPath,
 {
     fn control(&mut self, event: ControlEvent) {
@@ -428,18 +453,25 @@ where
         }
     }
 
-    /// Draw the rows, opening the choice the frame before settled on.
+    /// Draw the rows, opening the choice the frame before settled on and taking
+    /// the device's answer whenever it comes.
     ///
-    /// Two phases, never both for one choice in one frame: a value that stood
-    /// still becomes a choice the link reports as opening, and the next frame
-    /// opens it. A page cannot draw and then block, so the frame that says so
-    /// is the one before the stall rather than after it.
+    /// Three phases, never two of them for one choice in one frame: a value
+    /// that stood still becomes a choice the link reports as opening, the next
+    /// frame hands that choice to the bench, and the row keeps saying opening
+    /// for as many frames as the device takes. A choice the device refuses
+    /// rolls back to what was running, on the frame its refusal arrived.
+    ///
+    /// Nothing settles while a change is in flight, so a player walking on
+    /// during an open sees the row move and the device follow once, rather than
+    /// queueing an open per row they passed.
     ///
     /// Three still frames, counted rather than timed because a page has no
     /// clock: an arrow held down repeats at about a frame's interval, so a page
     /// settling on the first would open every device the player walks past.
     fn draw(&mut self, mut region: Region<'_>) {
-        self.open();
+        self.answered();
+        self.dispatch();
         self.settle();
 
         for (row, setting) in AudioSetting::ALL.into_iter().enumerate() {

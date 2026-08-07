@@ -14,8 +14,8 @@
 //! not visible in an order of calls — each one opens and starts exactly as a
 //! single stream would.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use motif::audio::{
     AudioBackend, AudioDevice, AudioHost, AudioPath, AudioState, ChannelSelection, DeviceError,
@@ -35,6 +35,7 @@ const OUTPUT: &str = "output";
 const CHANNELS: u16 = 2;
 const IDLE: &str = "IDLE";
 const SETTLING_FRAMES: usize = 3;
+const ANSWERING_FRAMES: usize = 2_000;
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -67,26 +68,26 @@ fn device(name: &str) -> AudioDevice {
 /// says a device was not replaced is that none was ever built.
 #[derive(Clone, Default)]
 struct Live {
-    open: Rc<Cell<usize>>,
-    ever: Rc<Cell<usize>>,
+    open: Arc<AtomicUsize>,
+    ever: Arc<AtomicUsize>,
 }
 
 impl Live {
     fn count(&self) -> usize {
-        self.open.get()
+        self.open.load(Ordering::Relaxed)
     }
 
     fn ever(&self) -> usize {
-        self.ever.get()
+        self.ever.load(Ordering::Relaxed)
     }
 
     fn opened(&self) {
-        self.open.set(self.open.get() + 1);
-        self.ever.set(self.ever.get() + 1);
+        self.open.fetch_add(1, Ordering::Relaxed);
+        self.ever.fetch_add(1, Ordering::Relaxed);
     }
 
     fn closed(&self) {
-        self.open.set(self.open.get().saturating_sub(1));
+        self.open.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -238,7 +239,19 @@ fn chosen(monitor: &mut Composed) -> Frame {
 
 fn settled(monitor: &mut Composed) {
     let _chosen = chosen(monitor);
-    let _opened = drawn(monitor);
+    let _dispatched = drawn(monitor);
+    answered(monitor);
+}
+
+fn answered(monitor: &mut Composed) {
+    for _ in 0..ANSWERING_FRAMES {
+        if monitor.state() != AudioState::Opening {
+            return;
+        }
+        let _waiting = drawn(monitor);
+    }
+
+    panic!("the device never answered");
 }
 
 fn drawn(monitor: &mut Composed) -> Frame {
