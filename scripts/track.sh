@@ -1703,7 +1703,7 @@ Or name one run's marker:  scripts/track.sh selftest --clean <marker> --yes"
 Re-run with:  scripts/track.sh selftest --yes" ;;
   esac
 
-  local t0 A B C D E F G H I J K L M N P R S T U V X1 X2 Y Z
+  local t0 A B C D E F G H I J K L M N P Q R S T U V X1 X2 Y Z
   local out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
   ST_RUN="$(st_run_id)"
@@ -2384,7 +2384,9 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
     note "  note  advanced-search agrees with local derivation"
   fi
 
-  Y="$(st_num "$( ST_RUN="$ST_FOREIGN_RUN" AS_JSON=0 cmd_add -t "selftest surviving litter" --area infra --kind chore --size s --parent "$Z" --selftest )")"
+  st_add_foreign "add files what a crashed run would leave behind" \
+    -t "selftest surviving litter" --area infra --kind chore --size s --parent "$Z"
+  Y="$ST_NUM"
 
   # Re-armed rather than cleared: a live stand-in fixture and the lock both
   # outlive this point, so a Ctrl-C here would leak one and strand the other.
