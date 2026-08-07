@@ -14,7 +14,7 @@
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
 //! hardware panel once there is one.
 
-use crate::audio::{Command, CommandSender, Commanded, SampleClockReader, command_channel};
+use crate::audio::{Command, CommandSender, Commanded, Gain, SampleClockReader, command_channel};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
 use crate::looper::{
     LoopBuffer, LoopEngine, PositionReader, TakeReader, Transport, WaveformReader, position_meter,
@@ -40,7 +40,6 @@ const DECIBELS_PER_DETENT: f32 = 1.0;
 const UNITY_DECIBELS: f32 = 0.0;
 const DECIBELS_PER_DECADE: f32 = 20.0;
 const FLOOR_DECIBELS: f32 = -60.0;
-const CEILING_DECIBELS: f32 = 12.0;
 const FILLED: char = '#';
 const UNFILLED: char = '-';
 const TENTHS_PER_SECOND: u64 = 10;
@@ -71,6 +70,10 @@ fn clock(frames: u32) -> String {
 
 fn amplitude(decibels: f32) -> f32 {
     10.0_f32.powf(decibels / DECIBELS_PER_DECADE)
+}
+
+fn ceiling_decibels() -> f32 {
+    DECIBELS_PER_DECADE * Gain::CEILING.log10()
 }
 
 fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
@@ -308,7 +311,7 @@ impl LooperPage {
     }
 
     fn nudge_the_gain(&mut self, decibels: f32) {
-        self.decibels = (self.decibels + decibels).clamp(FLOOR_DECIBELS, CEILING_DECIBELS);
+        self.decibels = (self.decibels + decibels).clamp(FLOOR_DECIBELS, ceiling_decibels());
     }
 }
 
