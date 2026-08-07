@@ -248,6 +248,21 @@ fn across_a_level_change(
     held.into_iter().chain(changed).collect()
 }
 
+/// Hold unity over a frame, ask for `muted`, and return every frame mixed
+/// across the two blocks — the seam between them, where a mute that does not
+/// ramp lands in one step, included.
+fn across_a_mute(
+    engine: &mut Commanded<LoopEngine>,
+    sender: &mut CommandSender,
+    muted: bool,
+) -> Vec<f32> {
+    let held = played(engine, &[1.0]);
+    press(sender, Command::SetMuted(muted));
+    let changed = played(engine, &[1.0; RAMPING_FRAMES]);
+
+    held.into_iter().chain(changed).collect()
+}
+
 /// The largest a level moved between two frames of `mixed`.
 fn largest_step(mixed: &[f32]) -> f32 {
     mixed
@@ -715,8 +730,66 @@ fn a_muted_engine_plays_silence() {
     let (mut engine, mut sender, _position) = engine();
 
     press(&mut sender, Command::SetMuted(true));
+    settle(&mut engine);
 
     assert_eq!(played(&mut engine, &[0.25, 0.5]), [0.0, 0.0]);
+}
+
+#[test]
+fn muting_the_output_reaches_the_mixed_block_a_step_at_a_time() {
+    let (mut engine, mut sender, _position) = engine_at(ramping_profile());
+
+    let mixed = across_a_mute(&mut engine, &mut sender, true);
+
+    assert!(
+        largest_step(&mixed) <= LARGEST_STEP,
+        "the level stepped by {}",
+        largest_step(&mixed)
+    );
+    assert_eq!(mixed[RAMPING_FRAMES], 0.0);
+}
+
+#[test]
+fn unmuting_the_output_reaches_the_mixed_block_a_step_at_a_time() {
+    let (mut engine, mut sender, _position) = engine_at(ramping_profile());
+    press(&mut sender, Command::SetMuted(true));
+    played(&mut engine, &[1.0; RAMPING_FRAMES]);
+
+    let mixed = across_a_mute(&mut engine, &mut sender, false);
+
+    assert!(
+        largest_step(&mixed) <= LARGEST_STEP,
+        "the level stepped by {}",
+        largest_step(&mixed)
+    );
+    assert_eq!(mixed[RAMPING_FRAMES], 1.0);
+}
+
+#[test]
+fn a_mute_walks_the_ramp_the_device_granted() {
+    let (mut engine, mut sender, _position) = engine();
+    engine.prepare(ramping_config());
+
+    let mixed = across_a_mute(&mut engine, &mut sender, true);
+
+    assert!(
+        largest_step(&mixed) <= LARGEST_STEP,
+        "the level stepped by {}",
+        largest_step(&mixed)
+    );
+    assert_eq!(mixed[RAMPING_FRAMES], 0.0);
+}
+
+#[test]
+fn a_take_recorded_while_muted_carries_the_input() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetMuted(true));
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    assert_eq!(crossed(&mut engine, &mut takes), [0.25, 0.5]);
 }
 
 #[test]
@@ -726,7 +799,9 @@ fn muting_the_output_does_not_stop_the_take() {
     press(&mut sender, Command::SetMuted(true));
     press(&mut sender, Command::SetTransport(Transport::Recording));
     played(&mut engine, &[0.25, 0.5]);
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
     press(&mut sender, Command::SetMuted(false));
+    settle(&mut engine);
     press(&mut sender, Command::SetTransport(Transport::Playing));
 
     assert_eq!(heard(&mut engine, 2), [0.25, 0.5]);
@@ -801,7 +876,7 @@ fn a_pair_of_commands_both_land_on_the_next_block() {
     press(&mut sender, Command::SetTransport(Transport::Playing));
     press(&mut sender, Command::SetMuted(true));
 
-    assert_eq!(heard(&mut engine, 2), [0.0, 0.0]);
+    assert_eq!(heard(&mut engine, 2), [0.25, 0.0]);
 }
 
 #[test]
