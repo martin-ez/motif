@@ -195,4 +195,55 @@ that no test and no compiler will ever contradict."
 	fi
 fi
 
+# --- scripts/track.sh — a refusal fails one assertion, not the run -----------
+#
+# `die` calls `exit`, and `||` does not catch an exit, so a tracker command run
+# bare on a path expected to succeed ends the whole selftest instead of
+# recording one FAIL. Every assertion after it is lost, and the output blames
+# whichever line the run happened to reach. A subshell contains the exit;
+# catching the status keeps `set -e` from ending the run in its place.
+#
+# Both halves are needed, and each is invisible without the other: a bare call
+# dies past `||`, and a contained one whose status nobody reads is a non-zero
+# exit under `set -euo pipefail`. A pipeline element is already a subshell, and
+# `|| die` is the preflight, which ends a run that has created nothing yet.
+found=$(awk '
+	/^cmd_selftest\(\) \{/ { inside = 1 }
+	inside && /^\}/        { inside = 0 }
+	!inside                { next }
+	/^[ \t]*#/             { next }
+	{
+		if (buf == "") start = FNR
+		line = $0
+		sub(/[ \t]*\\$/, " ", line)
+		buf = buf line
+		if ($0 ~ /\\$/) next
+		logical = buf
+		buf = ""
+		caught = (logical ~ /\|\|/)
+		rest = logical
+		bad = 0
+		while (match(rest, /cmd_[a-z_]+/)) {
+			name = substr(rest, RSTART, RLENGTH)
+			pre  = substr(rest, 1, RSTART - 1)
+			post = substr(rest, RSTART + RLENGTH)
+			rest = post
+			if (name == "cmd_selftest") continue
+			tail = post
+			gsub(/\|\|/, "XX", tail)
+			contained = (pre ~ /\(/) || (tail ~ /\|/)
+			if (!contained || !caught) bad = 1
+		}
+		if (bad) printf "%d: %s\n", start, logical
+	}
+' scripts/track.sh)
+if [ -n "$found" ]; then
+	report "a tracker call in cmd_selftest that a refusal would end the run on" "$found
+Run it in a subshell — ( cmd_x … ) for a step, \$( cmd_x … ) for a capture — and
+catch its status with || rc=\$?, then hand that to st_assert. A refusal is one
+FAIL with the rest of the run still executing, not an exit that loses it."
+else
+	pass "a refusal fails one selftest assertion rather than ending the run"
+fi
+
 exit $status

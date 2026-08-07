@@ -1479,6 +1479,7 @@ ST_PASS=0
 ST_FAIL=0
 ST_SCRATCH=""
 ST_ORPHAN_BRANCH=""
+ST_NUM=""
 st_ok()   { ST_PASS=$((ST_PASS + 1)); note "  ok    $*"; return 0; }
 st_bad()  { ST_FAIL=$((ST_FAIL + 1)); note "  FAIL  $*"; return 0; }
 st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
@@ -1510,6 +1511,24 @@ st_cleanup() {
 
 st_num() { printf '%s' "$1" | awk '{print $2}' | tr -d '#'; }
 
+# Files one throwaway issue and leaves its number in ST_NUM.
+#
+# `add` is the step the rest of the run is built on, and the one whose refusal
+# used to vanish rather than end the run: `die` exits the substitution, the
+# assignment around it takes st_num's status instead, and every issue below is
+# filed against an empty number. Handing the number back through a global rather
+# than stdout is what keeps the assertion out of a subshell, where the counters
+# would not survive it.
+st_add() {
+  local label="$1" out rc=0
+  shift
+  out="$(AS_JSON=0 cmd_add "$@" --selftest)" || rc=$?
+  ST_NUM="$(st_num "$out")"
+  [ -n "$ST_NUM" ] || rc=1
+  st_assert "$rc" "$label"
+  return 0
+}
+
 # What the throwaway chain comes off. An epic names the epic it follows, and for
 # the selftest that one has to be CLOSED: an open blocker would gate every issue
 # filed under the root, and half the run would fail on a queue it never meant to
@@ -1531,6 +1550,14 @@ st_scratch_repo() {
   return 0
 }
 
+# Every command below runs inside a subshell — `( … )` for a step, `$( … )` for
+# a capture — and every status is caught with `|| rc=$?` and handed to
+# st_assert. A refusal is then one FAIL with the rest of the run still going,
+# rather than a `die` that `||` cannot catch or a status `set -e` acts on
+# first, either of which loses every assertion after it. scripts/check-style.sh
+# holds the whole function to it, so the file decides this and not the caller.
+# What makes the subshell safe is that a command takes and drops the write lock
+# inside its own body, refusal included, so neither outlives the containment.
 cmd_selftest() {
   [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
 Re-run with:  scripts/track.sh selftest --yes"
@@ -1549,9 +1576,9 @@ Re-run with:  scripts/track.sh selftest --yes"
   note "  creating throwaway issues …"
   head="$(st_chain_head)"
   [ -n "$head" ] || die "selftest: no closed issue for the throwaway chain to come off."
-  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest root epic" --area infra --kind chore --size l --blocked-by "$head" --selftest)" || rc=$?
-  Z="$(st_num "$out")"
-  st_assert "$rc" "add files size:l epic #$Z off closed #$head, with no parent"
+  st_add "add files a size:l epic off closed #$head, with no parent" \
+    -t "selftest root epic" --area infra --kind chore --size l --blocked-by "$head"
+  Z="$ST_NUM"
   # Every issue below hangs off $Z. Empty, they would all be refused for the
   # want of a parent, and one real failure would read as forty.
   [ -n "$Z" ] || die "selftest: the root epic was not created — nothing below can run."
@@ -1592,12 +1619,18 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; printf '%s' "$out" | grep -q "#$Z" || rc=1
   st_assert "$rc" "the refusal names open end #$Z"
 
-  A="$(st_num "$(AS_JSON=0 cmd_add -t "selftest parent" --area infra --kind chore --size s --parent "$Z" --selftest)")"
-  C="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of $A" --area infra --kind chore --size s --parent "$A" --selftest)")"
-  B="$(st_num "$(AS_JSON=0 cmd_add -t "selftest blocked by $A" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z" --selftest)")"
-  st_ok "created #$A (parent) #$C (child) #$B (blocked by #$A)"
+  st_add "add files the parent under #$Z" \
+    -t "selftest parent" --area infra --kind chore --size s --parent "$Z"
+  A="$ST_NUM"
+  st_add "add files a child under #$A" \
+    -t "selftest child of $A" --area infra --kind chore --size s --parent "$A"
+  C="$ST_NUM"
+  st_add "add files an issue blocked by #$A" \
+    -t "selftest blocked by $A" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z"
+  B="$ST_NUM"
 
-  out="$(AS_JSON=1 cmd_ready)"
+  rc=0; out="$(AS_JSON=1 cmd_ready)" || rc=$?
+  st_assert "$rc" "ready runs with #$A, #$C and #$B filed"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "ready includes leaf #$C"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$A" 'all(.num != $n)' >/dev/null || rc=1
@@ -1612,9 +1645,12 @@ Re-run with:  scripts/track.sh selftest --yes"
   # Readiness is inherited, so a leaf under a blocked epic is not startable even
   # though nothing points at it. This is the whole of the epic ordering: the
   # chain is stated between epics and the work under them has to feel it.
-  L="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gated parent" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z" --selftest)")"
-  M="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of gated $L" --area infra --kind chore --size s --parent "$L" --selftest)")"
-  st_ok "created #$L (blocked by #$A) #$M (its child)"
+  st_add "add files a parent gated by #$A" \
+    -t "selftest gated parent" --area infra --kind chore --size s --blocked-by "$A" --parent "$Z"
+  L="$ST_NUM"
+  st_add "add files a child under gated #$L" \
+    -t "selftest child of gated $L" --area infra --kind chore --size s --parent "$L"
+  M="$ST_NUM"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$M" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes #$M under blocked parent #$L"
@@ -1627,25 +1663,25 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
     "claim refuses #$M under a blocked ancestor (got $rc)"
 
-  out="$(AS_JSON=1 cmd_find "selftest child of")"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
+  rc=0; out="$(AS_JSON=1 cmd_find "selftest child of")" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "find matches #$C by title"
 
-  rc=0; MOTIF_AGENT=selftest-1 cmd_claim "$C" >/dev/null || rc=$?
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$C" ) >/dev/null || rc=$?
   st_assert "$rc" "claim #$C as selftest-1"
 
-  rc=0; MOTIF_AGENT=selftest-2 cmd_claim "$C" >/dev/null 2>&1 || rc=$?
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_claim "$C" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 2 ] && echo 0 || echo 1)" "second claim rejected with exit 2 (got $rc)"
 
-  rc=0; MOTIF_AGENT=selftest-1 cmd_claim "$C" >/dev/null 2>&1 || rc=$?
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$C" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 0 ] && echo 0 || echo 1)" "re-claim by owner is idempotent"
 
-  out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
+  rc=0; out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "mine lists #$C for the agent holding it"
 
-  out="$(MOTIF_AGENT=selftest-2 AS_JSON=1 cmd_mine)"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
+  rc=0; out="$(MOTIF_AGENT=selftest-2 AS_JSON=1 cmd_mine)" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "mine excludes #$C for a different agent"
 
   # Branch ownership is asserted in a scratch repository: the real one cannot
@@ -1690,13 +1726,16 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # The crash-recovery case end to end: the branch that recorded the claim is
   # not checked out, so an id taken from HEAD can never match it.
-  K="$(st_num "$(AS_JSON=0 cmd_add -t "selftest orphan claim" --area infra --kind chore --size s --parent "$Z" --selftest)")"
+  st_add "add files the issue a vanished branch will claim" \
+    -t "selftest orphan claim" --area infra --kind chore --size s --parent "$Z"
+  K="$ST_NUM"
   ob="selftest-orphan-$$"
   ST_ORPHAN_BRANCH="$ob"
   git branch "$ob"
-  MOTIF_AGENT="$ob" cmd_claim "$K" >/dev/null
-  out="$(AS_JSON=1 cmd_mine)"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$K" 'any(.num == $n)' >/dev/null || rc=1
+  rc=0; ( MOTIF_AGENT="$ob" cmd_claim "$K" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$K as a branch that is not checked out"
+  rc=0; out="$(AS_JSON=1 cmd_mine)" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$K" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "mine finds #$K claimed by a local branch that is not checked out"
 
   # `next` tells the agent to finish or release whatever `mine` lists, so a
@@ -1706,44 +1745,49 @@ Re-run with:  scripts/track.sh selftest --yes"
   git branch -D "$ob"; ST_ORPHAN_BRANCH=""
 
   # A claim whose branch is gone entirely is somebody else's, or nobody's.
-  MOTIF_AGENT=selftest-vanished cmd_claim "$K" >/dev/null
-  out="$(AS_JSON=1 cmd_mine)"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$K" 'all(.num != $n)' >/dev/null || rc=1
+  rc=0; ( MOTIF_AGENT=selftest-vanished cmd_claim "$K" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$K as an agent no local branch carries"
+  rc=0; out="$(AS_JSON=1 cmd_mine)" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$K" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "mine excludes #$K once no local branch carries its claim"
   rc=0; ( cmd_release "$K" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "release still refuses #$K held elsewhere (got $rc)"
 
   # Holding nothing while claims exist elsewhere is the answer that reads as a
   # dead end, so it has to say where those claims are reported.
-  out="$(MOTIF_AGENT=selftest-nobody AS_JSON=0 cmd_mine)"
-  rc=0; printf '%s' "$out" | grep -q "held elsewhere" || rc=1
+  rc=0; out="$(MOTIF_AGENT=selftest-nobody AS_JSON=0 cmd_mine)" || rc=$?
+  printf '%s' "$out" | grep -q "held elsewhere" || rc=1
   st_assert "$rc" "mine points at doctor when it holds nothing but claims exist"
-  MOTIF_AGENT=selftest-vanished cmd_release "$K" >/dev/null
+  rc=0; ( MOTIF_AGENT=selftest-vanished cmd_release "$K" ) >/dev/null || rc=$?
+  st_assert "$rc" "release settles #$K for the agent that holds it"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$C" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes claimed #$C"
 
-  MOTIF_AGENT=selftest-1 cmd_release "$C" >/dev/null
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$C" ) >/dev/null || rc=$?
+  st_assert "$rc" "release settles #$C"
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "release returns #$C to ready"
 
-  MOTIF_AGENT=selftest-1 cmd_claim "$C" >/dev/null
-  MOTIF_AGENT=selftest-1 cmd_done  "$C" >/dev/null
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$C" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$C back for the done path"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_done "$C" ) >/dev/null || rc=$?
+  st_assert "$rc" "done settles #$C"
   rc=0; AS_JSON=1 cmd_show "$C" | jq -e '.state == "CLOSED" and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "done closes #$C and clears wip"
 
   # The reason find exists: a duplicate check that cannot see closed issues is
   # exactly the check that lets a closed issue be filed again.
-  out="$(AS_JSON=1 cmd_find "selftest child of")"
-  rc=0; printf '%s' "$out" \
+  rc=0; out="$(AS_JSON=1 cmd_find "selftest child of")" || rc=$?
+  printf '%s' "$out" \
     | jq -e --argjson n "$C" 'any(.num == $n and .state == "CLOSED")' >/dev/null || rc=1
   st_assert "$rc" "find still matches #$C once it is closed"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$A" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "#$A leaves container state once #$C closes"
 
-  out="$(MOTIF_AGENT=selftest-1 cmd_done "$A" --force)"
-  rc=0; printf '%s' "$out" | grep -q "unblocked: #$B" || rc=1
+  rc=0; out="$(MOTIF_AGENT=selftest-1 cmd_done "$A" --force)" || rc=$?
+  printf '%s' "$out" | grep -q "unblocked: #$B" || rc=1
   st_assert "$rc" "done #$A reports 'unblocked: #$B'"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$B" 'any(.num == $n)' >/dev/null || rc=1
@@ -1756,33 +1800,48 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # An issue with two blockers must not be announced when only one closes:
   # the caller would claim it and get a fatal exit 1.
-  G="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate G" --area infra --kind chore --size s --parent "$Z" --selftest)")"
-  H="$(st_num "$(AS_JSON=0 cmd_add -t "selftest gate H" --area infra --kind chore --size s --parent "$Z" --selftest)")"
-  I="$(st_num "$(AS_JSON=0 cmd_add -t "selftest needs G and H" --area infra --kind chore --size s --blocked-by "$G,$H" --parent "$Z" --selftest)")"
-  MOTIF_AGENT=selftest-1 cmd_claim "$G" >/dev/null
-  out="$(MOTIF_AGENT=selftest-1 cmd_done "$G")"
-  rc=0; printf '%s' "$out" | grep -q "unblocked:" && rc=1
+  st_add "add files the first of two blockers" \
+    -t "selftest gate G" --area infra --kind chore --size s --parent "$Z"
+  G="$ST_NUM"
+  st_add "add files the second of two blockers" \
+    -t "selftest gate H" --area infra --kind chore --size s --parent "$Z"
+  H="$ST_NUM"
+  st_add "add files an issue needing both #$G and #$H" \
+    -t "selftest needs G and H" --area infra --kind chore --size s --blocked-by "$G,$H" --parent "$Z"
+  I="$ST_NUM"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$G" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$G"
+  rc=0; out="$(MOTIF_AGENT=selftest-1 cmd_done "$G")" || rc=$?
+  printf '%s' "$out" | grep -q "unblocked:" && rc=1
   st_assert "$rc" "done #$G stays quiet: #$I still needs #$H"
-  MOTIF_AGENT=selftest-1 cmd_claim "$H" >/dev/null
-  out="$(MOTIF_AGENT=selftest-1 cmd_done "$H")"
-  rc=0; printf '%s' "$out" | grep -q "unblocked: #$I" || rc=1
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$H" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$H"
+  rc=0; out="$(MOTIF_AGENT=selftest-1 cmd_done "$H")" || rc=$?
+  printf '%s' "$out" | grep -q "unblocked: #$I" || rc=1
   st_assert "$rc" "done #$H reports #$I once its last blocker closes"
 
   # size:l is refused by claim, so it must not be offered by ready.
-  J="$(st_num "$(AS_JSON=0 cmd_add -t "selftest oversized" --area infra --kind chore --size l --blocked-by "$head" --selftest)")"
+  st_add "add files a size:l epic off closed #$head" \
+    -t "selftest oversized" --area infra --kind chore --size l --blocked-by "$head"
+  J="$ST_NUM"
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$J" 'all(.num != $n)' >/dev/null || rc=1
   st_assert "$rc" "ready excludes size:l #$J"
-  out="$(AS_JSON=0 cmd_ready)"
-  rc=0; printf '%s' "$out" | grep -q "SPLIT:.*#$J" || rc=1
+  rc=0; out="$(AS_JSON=0 cmd_ready)" || rc=$?
+  printf '%s' "$out" | grep -q "SPLIT:.*#$J" || rc=1
   st_assert "$rc" "ready reports #$J under SPLIT rather than hiding it"
   rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "claim refuses size:l #$J (got $rc)"
 
   # `plan` reads the chain rather than the forest: epics in the order they come
   # off each other, the ones nothing blocks expanded, everything else a row.
-  N="$(st_num "$(AS_JSON=0 cmd_add -t "selftest epic behind $J" --area infra --kind chore --size l --blocked-by "$J" --selftest)")"
-  R="$(st_num "$(AS_JSON=0 cmd_add -t "selftest child of epic $N" --area infra --kind chore --size s --parent "$N" --selftest)")"
-  out="$(AS_JSON=1 cmd_plan)"
+  st_add "add files an epic behind #$J" \
+    -t "selftest epic behind $J" --area infra --kind chore --size l --blocked-by "$J"
+  N="$ST_NUM"
+  st_add "add files a child under epic #$N" \
+    -t "selftest child of epic $N" --area infra --kind chore --size s --parent "$N"
+  R="$ST_NUM"
+  rc=0; out="$(AS_JSON=1 cmd_plan)" || rc=$?
+  st_assert "$rc" "plan runs with epics #$J and #$N in the chain"
 
   rc=0; printf '%s' "$out" | jq -e --argjson j "$J" --argjson n "$N" '
     (map(.num) | index($j)) as $a | (map(.num) | index($n)) as $b
@@ -1902,14 +1961,26 @@ Re-run with:  scripts/track.sh selftest --yes"
   # Between a draft pull request going up and a human merging it, the work is
   # finished and the issue is still held. "Leave it alone" and "there is nothing
   # left to do here" are opposite answers, so they must not read the same.
-  P="$(st_num "$(AS_JSON=0 cmd_add -t "selftest review epic" --area infra --kind chore --size l --blocked-by "$head" --selftest)")"
-  S="$(st_num "$(AS_JSON=0 cmd_add -t "selftest submitted child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
-  T="$(st_num "$(AS_JSON=0 cmd_add -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$P" --blocked-by "$S" --selftest)")"
-  U="$(st_num "$(AS_JSON=0 cmd_add -t "selftest ready child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
-  V="$(st_num "$(AS_JSON=0 cmd_add -t "selftest claimed child of $P" --area infra --kind chore --size s --parent "$P" --selftest)")"
-  MOTIF_AGENT=selftest-1 cmd_claim "$S" >/dev/null
-  MOTIF_AGENT=selftest-2 cmd_claim "$V" >/dev/null
-  rc=0; MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 >/dev/null || rc=$?
+  st_add "add files the epic the review board is read off" \
+    -t "selftest review epic" --area infra --kind chore --size l --blocked-by "$head"
+  P="$ST_NUM"
+  st_add "add files the child that will be submitted" \
+    -t "selftest submitted child of $P" --area infra --kind chore --size s --parent "$P"
+  S="$ST_NUM"
+  st_add "add files a child waiting behind #$S" \
+    -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$P" --blocked-by "$S"
+  T="$ST_NUM"
+  st_add "add files a ready child under #$P" \
+    -t "selftest ready child of $P" --area infra --kind chore --size s --parent "$P"
+  U="$ST_NUM"
+  st_add "add files a child to be claimed under #$P" \
+    -t "selftest claimed child of $P" --area infra --kind chore --size s --parent "$P"
+  V="$ST_NUM"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$S before submitting it"
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_claim "$V" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$V as a second agent"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null || rc=$?
   st_assert "$rc" "submit puts #$S into review"
 
   rc=0; AS_JSON=1 cmd_show "$S" \
@@ -1924,12 +1995,13 @@ Re-run with:  scripts/track.sh selftest --yes"
       'any(.num == $n and (.blockers | index($s) != null))' >/dev/null || rc=1
   st_assert "$rc" "blocked still lists #$T <- #$S"
 
-  out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$S" \
+  rc=0; out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$S" \
       'any(.num == $n and .review)' >/dev/null || rc=1
   st_assert "$rc" "mine separates submitted #$S from work still being built"
 
-  out="$(AS_JSON=1 cmd_plan)"
+  rc=0; out="$(AS_JSON=1 cmd_plan)" || rc=$?
+  st_assert "$rc" "plan runs with #$S in review under #$P"
   rc=0; printf '%s' "$out" | jq -e --argjson p "$P" --argjson s "$S" '
     any(.num == $p and (.children | any(.num == $s and .stance == "review")))' >/dev/null || rc=1
   st_assert "$rc" "plan carries #$S under #$P as in review"
@@ -1950,16 +2022,20 @@ Re-run with:  scripts/track.sh selftest --yes"
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
     "submit refuses #$T, which nobody holds (got $rc)"
 
-  MOTIF_AGENT=selftest-1 cmd_release "$S" >/dev/null
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "release settles submitted #$S"
   rc=0; AS_JSON=1 cmd_show "$S" | jq -e '(.review | not) and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "release clears review from #$S"
 
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$S" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "release returns submitted #$S to ready"
 
-  MOTIF_AGENT=selftest-1 cmd_claim  "$S" >/dev/null
-  MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 >/dev/null
-  MOTIF_AGENT=selftest-1 cmd_done   "$S" >/dev/null
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$S back for the done path"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null || rc=$?
+  st_assert "$rc" "submit #$S again before closing it"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_done "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "done settles submitted #$S"
   rc=0; AS_JSON=1 cmd_show "$S" \
     | jq -e '.state == "CLOSED" and (.review | not)' >/dev/null || rc=1
   st_assert "$rc" "done clears review and closes #$S"
@@ -1983,22 +2059,22 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # #96 is the case this exists for: `Closes #98, #99, #100, #101` closed only
   # #98, because a GitHub keyword binds to the number directly after it.
-  out="$(printf 'Tracks #98, #99, #100, #101\n' | cmd_refs)"
-  rc=0; [ "$out" = "$(printf '98\n99\n100\n101')" ] || rc=1
+  rc=0; out="$(printf 'Tracks #98, #99, #100, #101\n' | cmd_refs)" || rc=$?
+  [ "$out" = "$(printf '98\n99\n100\n101')" ] || rc=1
   st_assert "$rc" "refs takes every number on a Tracks line"
 
-  out="$(printf 'Unlike #96, this parses the body itself.\n\nTracks #116\n' | cmd_refs)"
-  rc=0; [ "$out" = "116" ] || rc=1
+  rc=0; out="$(printf 'Unlike #96, this parses the body itself.\n\nTracks #116\n' | cmd_refs)" || rc=$?
+  [ "$out" = "116" ] || rc=1
   st_assert "$rc" "refs leaves a mention outside a Tracks line alone"
 
   # The template carries its own instructions in an HTML comment, so a body that
   # keeps them must not settle whatever issue the example names.
-  out="$(printf '<!--\n  Link the issue: Tracks #12\n-->\nTracks #116\n' | cmd_refs)"
-  rc=0; [ "$out" = "116" ] || rc=1
+  rc=0; out="$(printf '<!--\n  Link the issue: Tracks #12\n-->\nTracks #116\n' | cmd_refs)" || rc=$?
+  [ "$out" = "116" ] || rc=1
   st_assert "$rc" "refs ignores a Tracks line inside an HTML comment"
 
-  out="$(printf 'Tracks #7\n\nTracks #7 as well\n' | cmd_refs)"
-  rc=0; [ "$out" = "7" ] || rc=1
+  rc=0; out="$(printf 'Tracks #7\n\nTracks #7 as well\n' | cmd_refs)" || rc=$?
+  [ "$out" = "7" ] || rc=1
   st_assert "$rc" "refs reports each issue once"
 
   rc=0; out="$(printf 'A pull request that tracks nothing.\n' | cmd_refs)" || rc=1
@@ -2007,19 +2083,25 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # GitHub rejects a direct 2-cycle server-side but does NOT check transitively,
   # so a 3-cycle is reachable and is what we must detect. Verified 2026-08-03.
-  D="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle D" --area infra --kind chore --size s --parent "$Z" --selftest)")"
-  E="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle E" --area infra --kind chore --size s --blocked-by "$D" --parent "$Z" --selftest)")"
-  F="$(st_num "$(AS_JSON=0 cmd_add -t "selftest cycle F" --area infra --kind chore --size s --blocked-by "$E" --parent "$Z" --selftest)")"
+  st_add "add files the first link of the 3-cycle" \
+    -t "selftest cycle D" --area infra --kind chore --size s --parent "$Z"
+  D="$ST_NUM"
+  st_add "add files the second link, behind #$D" \
+    -t "selftest cycle E" --area infra --kind chore --size s --blocked-by "$D" --parent "$Z"
+  E="$ST_NUM"
+  st_add "add files the third link, behind #$E" \
+    -t "selftest cycle F" --area infra --kind chore --size s --blocked-by "$E" --parent "$Z"
+  F="$ST_NUM"
 
-  rc=0; cmd_dep "$D" --needs "$F" >/dev/null 2>&1 || rc=$?
+  rc=0; ( cmd_dep "$D" --needs "$F" ) >/dev/null 2>&1 || rc=$?
   st_assert "$rc" "closed the 3-cycle #$D <- #$F <- #$E <- #$D"
 
   # The cycle must be found even though unrelated work (#B) is still ready —
   # exactly the case a naive "no source anywhere" check misses.
   # NOTE: the library and the expression must be ONE argument. Passing them as
   # two makes jq treat the second as an input filename.
-  rc=0
-  AS_JSON=1 cmd_graph \
+  rc=0; out="$(AS_JSON=1 cmd_graph)" || rc=$?
+  printf '%s' "$out" \
     | jq -e --argjson d "$D" --argjson e "$E" --argjson f "$F" \
         "$JQ_LIB"'cycle_nodes as $c
          | ($c | index($d) != null) and ($c | index($e) != null) and ($c | index($f) != null)' \
@@ -2028,21 +2110,20 @@ Re-run with:  scripts/track.sh selftest --yes"
 
   # Capture first: piping into `grep -q` closes the pipe early and SIGPIPEs the
   # producer under `set -o pipefail`.
-  out="$(AS_JSON=0 cmd_ready)"
-  rc=0; printf '%s' "$out" | grep -q "CYCLE:.*#$D" || rc=1
+  rc=0; out="$(AS_JSON=0 cmd_ready)" || rc=$?
+  printf '%s' "$out" | grep -q "CYCLE:.*#$D" || rc=1
   st_assert "$rc" "ready reports the cycle on stdout"
 
   rc=0; printf '%s' "$out" | grep -q "^  #$B " || rc=1
   st_assert "$rc" "#$B still listed as ready despite the cycle"
 
   # A direct 2-cycle is refused by the server; the wrapper must surface that.
-  # Run in a subshell — `die` calls `exit`, which would otherwise end the run.
   rc=0; ( cmd_dep "$E" --needs "$F" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "server rejects a direct 2-cycle, wrapper exits non-zero (got $rc)"
 
   # Informational canary: the search index is expected to disagree (it lags writes).
   # This documents WHY local derivation is the primary path. Never fails the run.
-  loc="$(AS_JSON=1 cmd_ready | jq -r '[.[].num] | sort | join(",")')"
+  loc="$(AS_JSON=1 cmd_ready | jq -r '[.[].num] | sort | join(",")' 2>/dev/null || echo 'n/a')"
   adv="$(gh issue list --search 'is:open -is:blocked' --limit 100 --json number \
          --jq '[.[].number] | sort | join(",")' 2>/dev/null || echo 'n/a')"
   if [ "$adv" != "$loc" ]; then
