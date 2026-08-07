@@ -772,7 +772,7 @@ fn unmuting_the_output_reaches_the_mixed_block_a_step_at_a_time() {
         "the level stepped by {}",
         largest_step(&mixed)
     );
-    assert_eq!(mixed[RAMPING_FRAMES], 1.0);
+    assert_eq!(mixed[RAMPING_FRAMES], CURVED_FROM_FULL_SCALE);
 }
 
 #[test]
