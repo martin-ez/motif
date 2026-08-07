@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use motif::audio::{
     AudioBackend, AudioState, ChannelSelection, DeviceError, DeviceLink, DeviceSelection,
-    DuplexStream, NullBackend, Passthrough, SharedLink, StreamConfig, StreamRequest, StreamState,
+    DuplexStream, GUARDED_LEVEL, NullBackend, Passthrough, SharedLink, StreamConfig, StreamRequest,
+    StreamState,
 };
 
 /// A link over the null backend, playing what it captures.
@@ -446,4 +447,48 @@ fn a_shared_link_opens_one_stream_however_many_handles_hold_it() {
 
     assert_eq!(built.load(Ordering::Relaxed), 2);
     assert_eq!(link.read(DeviceLink::state), AudioState::Idle);
+}
+
+#[test]
+fn a_link_nobody_has_chosen_a_device_on_opens_below_unity() {
+    assert_eq!(closed().opening_level(), GUARDED_LEVEL);
+}
+
+#[test]
+fn a_link_a_player_chose_a_device_on_opens_at_unity() {
+    let mut link = closed();
+
+    link.select(selection()).expect("null backend opens");
+
+    assert_eq!(link.opening_level(), 1.0);
+}
+
+#[test]
+fn reopening_a_link_is_not_a_choice() {
+    let mut link = opened();
+
+    link.open().expect("null backend opens");
+
+    assert_eq!(link.opening_level(), GUARDED_LEVEL);
+}
+
+#[test]
+fn a_chosen_link_stays_at_unity_across_a_device_fault() {
+    let mut link = closed();
+    link.select(selection()).expect("null backend opens");
+    unplug(&link);
+    link.poll();
+
+    link.open().expect("null backend opens");
+
+    assert_eq!(link.opening_level(), 1.0);
+}
+
+#[test]
+fn a_selection_the_device_refused_is_still_a_choice() {
+    let mut link = closed();
+
+    let _refused = link.select(DeviceSelection::nothing());
+
+    assert_eq!(link.opening_level(), 1.0);
 }

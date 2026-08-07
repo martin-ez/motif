@@ -79,6 +79,27 @@ impl Gain {
         }
     }
 
+    /// A gain heading for unity from silence, with the ramp still to walk.
+    ///
+    /// What a stream opens with. [`unity`](Self::unity) is already there, and a
+    /// path built on it plays its first block at full level; this one arrives
+    /// over [`RAMP`](Self::RAMP) instead, so a device that has just come back
+    /// does not land on the level a player left an hour ago in one step.
+    ///
+    /// A target set before [`prepare`](Self::prepare) moves where it is heading
+    /// without touching where it is, so a stream can open quietly and still
+    /// come up from silence.
+    pub const fn rising() -> Self {
+        Self {
+            target: UNITY,
+            muted: false,
+            current: SILENCE,
+            step: UNITY,
+            frames: 1,
+            remaining: 1,
+        }
+    }
+
     /// Work out the ramp for a device running at `sample_rate`.
     ///
     /// Called where a path is prepared, which is the thread that may allocate

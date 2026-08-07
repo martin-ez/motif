@@ -44,7 +44,7 @@ pub use gain::Gain;
 pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use link::{AudioState, DeviceLink, SharedLink};
-pub use path::{AudioPath, Commanded, InputMonitor, Passthrough};
+pub use path::{AudioPath, Commanded, GUARDED_LEVEL, InputMonitor, Opening, Passthrough};
 pub use placement::{
     Grant, HOSTED_PRIORITY, Placed, Placement, PriorityReader, PriorityReporter, pinning,
     priority_latch,
