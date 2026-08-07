@@ -1039,6 +1039,12 @@ Built by \`$me\`, waiting on a human merge${pr:+ of #$pr}." >/dev/null || rc=$?
   return 0
 }
 
+# What the claim check is for is one agent not closing another's work, so a
+# *held* issue is what it protects, and `release` has drawn that line since the
+# start. An unheld one is what a merge reaches: `tracking.yml` sets MOTIF_AGENT
+# to the head ref, which matches the claim on the issue the branch was started
+# from and no other, so every later number on a `Tracks` line arrives here held
+# by nobody. Refusing those left the run red and the issue open.
 cmd_done() {
   local force=0 n="" msg="" me info state subs holder ids was rc=0 freed
   while [ $# -gt 0 ]; do
@@ -1070,9 +1076,9 @@ Work on a branch, or set MOTIF_AGENT."
   if [ -n "$subs" ] && [ "$force" = 0 ]; then
     lock_release; die "#$n still has open sub-issues: $subs. Close those first, or --force."
   fi
-  if [ "$holder" != "$me" ] && [ "$force" = 0 ]; then
+  if [ -n "$holder" ] && [ "$holder" != "$me" ] && [ "$force" = 0 ]; then
     lock_release
-    die "#$n is held by ${holder:-nobody}, not $me. Claim it first, or --force."
+    die "#$n is held by $holder, not $me. Claim it first, or --force."
   fi
 
   gh_write issue edit "$n" --remove-label wip --remove-label review >/dev/null 2>&1 || true
@@ -1753,7 +1759,7 @@ Or name one run's marker:  scripts/track.sh selftest --clean <marker> --yes"
 Re-run with:  scripts/track.sh selftest --yes" ;;
   esac
 
-  local t0 A B C D E F G H I J K L M N P Q R S T U V X1 X2 Y Z
+  local t0 A B C D E F G H I J K L M N P Q R S T U V W1 W2 X1 X2 Y Z
   local out rc loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
   ST_RUN="$(st_run_id)"
@@ -1997,6 +2003,34 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_assert "$rc" "done settles #$C"
   rc=0; AS_JSON=1 cmd_show "$C" | jq -e '.state == "CLOSED" and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "done closes #$C and clears wip"
+
+  # The merge path. `tracking.yml` sets MOTIF_AGENT to the head ref, which is
+  # the agent id `start` derived the branch from, so it matches the claim on
+  # the issue the branch was started from and no other. Every later number on
+  # a `Tracks` line therefore reaches `done` held by nobody -- and refusing
+  # those leaves the run red and the issue open for a second agent to rebuild.
+  st_add "add files the issue a merge settles for nobody" \
+    -t "selftest unheld at merge" --area infra --kind chore --size s --parent "$Z"
+  W1="$ST_NUM"
+  rc=0; ( MOTIF_AGENT=selftest-merge cmd_done "$W1" ) >/dev/null || rc=$?
+  st_assert "$rc" "done settles unheld #$W1, the way a merge reaches it"
+  rc=0; AS_JSON=1 cmd_show "$W1" | jq -e '.state == "CLOSED"' >/dev/null || rc=1
+  st_assert "$rc" "done closes unheld #$W1"
+
+  # The half that must not move with it: what the claim check is for is one
+  # agent not closing another's work, and that is a held issue, not an unheld
+  # one. `release` draws the same line on the unmerged path.
+  st_add "add files the issue another agent holds" \
+    -t "selftest held elsewhere at done" --area infra --kind chore --size s --parent "$Z"
+  W2="$ST_NUM"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$W2" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$W2 as the agent that holds it"
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_done "$W2" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "done still refuses #$W2 held by another agent (got $rc)"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$W2" ) >/dev/null || rc=$?
+  st_assert "$rc" "release returns #$W2 to nobody"
+  rc=0; ( MOTIF_AGENT=selftest-merge cmd_release "$W2" ) >/dev/null || rc=$?
+  st_assert "$rc" "release settles unheld #$W2, the way an unmerged close reaches it"
 
   # The reason find exists: a duplicate check that cannot see closed issues is
   # exactly the check that lets a closed issue be filed again.
