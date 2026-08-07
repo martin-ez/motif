@@ -33,6 +33,10 @@ mutes the input, stop takes the last layer back off and down empties the loop,
 and the encoder moves the input gain a decibel a detent. The bottom row carries
 the device's state and the input level, and `ctrl + c` ends the run.
 
+The scene buttons pick a screen: `2` opens the audio settings, where the host,
+the devices and their channels are chosen and the stream reopens on the choice,
+and `1` returns to the looper.
+
 The keyboard stands in for the panel the design is aimed at, twelve buttons and
 one encoder: `z`, `x` and `c` are play, stop and record, `,` and `.` turn the
 encoder, and an upper case letter is that button held with shift.
