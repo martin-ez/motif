@@ -25,9 +25,10 @@ just your own.
 
 ## 2. Label it
 
-`--area`, `--kind` and `--size`, all three required. `size:l` cannot be claimed —
-either split it immediately with `--parent`, or file it knowing it is a container
-whose children are the real work.
+`--area`, `--kind` and `--size`, all three required. `size:l` means an epic: the
+head of a chain, filed as a root, whose children are the real work. It cannot be
+claimed, and `ready` keeps it under `SPLIT:` until it is split. Reach for it when
+you are filing a chain — never to get past a `--parent` you have not chosen.
 
 ## 3. Write a body that reads cold
 
@@ -45,10 +46,14 @@ issue, it is a blocker.
 
 ```sh
 scripts/track.sh add -t 'Report the block size after negotiation' \
-  --area io --kind bug --size s -F body.md --blocked-by 75 --blocking 88
+  --area io --kind bug --size s -F body.md --parent 271 --blocked-by 75 --blocking 88
 ```
 
-`--parent N` instead, when it belongs to an epic rather than depends on one.
+`--parent` is required and is a different question from `--blocked-by`: it says
+which chain the work belongs to, not what it waits on. Readiness is inherited
+through it, so work filed without one is gated by nothing and jumps the queue —
+`add` refuses it and lists the open chain heads. An epic is where a chain starts,
+so it is the one thing filed as a root; that is what `--size l` means.
 
 ## 5. Confirm, then go back
 
