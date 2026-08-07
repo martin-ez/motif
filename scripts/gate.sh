@@ -118,10 +118,17 @@ preconditions() {
         cargo install --locked cargo-mutants"
 }
 
+# A check written as a shell function has no command line of its own, so the
+# heartbeat and the summary both show the line that reproduces it instead. A
+# function name announced as though it were a command is one a reader cannot run.
 run_check() {
-	local name="$1" fix="$2" out rc=0
+	local name="$1" fix="$2" out rc=0 shown
 	shift 2
-	note "→ $*"
+	shown="$*"
+	if [ "$(type -t "$1")" = function ] && [ -n "$fix" ]; then
+		shown="$fix"
+	fi
+	note "→ $shown"
 	out="$("$@" 2>&1)" || rc=$?
 	last_rc="$rc"
 	if [ "$rc" = 0 ]; then
@@ -189,6 +196,13 @@ st_hasnt() {
 	esac
 }
 
+st_check_passes() { return 0; }
+
+st_check_fails() {
+	printf 'the tool said what was wrong\n'
+	return 1
+}
+
 # The gate has no Rust to be tested from tests/, so it carries its cases with
 # it the way the sweep and the body check do, and they run wherever it can
 # change.
@@ -238,6 +252,23 @@ cross-compile guard${TAB}cargo check --target aarch64-unknown-linux-gnu --all-fe
 	out="$(summarise "tests${TAB}cargo test --all-features" off)" || rc=$?
 	st_is 1 "$rc" "--no-sweep does not rescue a failure"
 	st_has "$out" "SWEEP DID NOT RUN" "--no-sweep shouts under a failure too"
+
+	out="$(run_check "a demo" "" st_check_passes 2>&1)"
+	st_has "$out" "a demo" "a passing check is named"
+	st_hasnt "$out" "FAIL" "a passing check is not reported as one"
+
+	out="$(run_check "a demo" "the line that reproduces it" st_check_passes 2>&1)"
+	st_has "$out" "the line that reproduces it" \
+		"a check written as a function announces a line that can be run"
+	st_hasnt "$out" "st_check_passes" "the function name is not offered as a command"
+
+	out="$( { failures=""
+		run_check "a demo" "" st_check_fails
+		summarise "$failures" ran
+	} 2>&1 )" || true
+	st_has "$out" "the tool said what was wrong" "a failing check shows what it said"
+	st_has "$out" "1 check failed" "a failing check reaches the summary"
+	st_has "$out" "st_check_fails" "a failure with no fix offers the command itself"
 
 	if [ "$st_status" = 0 ]; then
 		printf '\033[32mok\033[0m    every rule the gate runs on holds\n'
