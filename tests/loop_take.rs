@@ -114,7 +114,7 @@ fn scaling_profile() -> AudioProfile {
 /// A signal of `frames` frames, no two of them alike, so a frame that crossed
 /// out of place is a frame that fails.
 fn ramp(frames: usize) -> Vec<f32> {
-    (0..frames).map(|frame| frame as f32 / 128.0).collect()
+    (0..frames).map(|frame| frame as f32 / 256.0).collect()
 }
 
 /// A buffer over `profile`'s longest loop, full to its last frame.
@@ -331,7 +331,7 @@ fn a_take_being_read_survives_the_take_that_follows_it() {
 fn the_take_after_the_one_being_read_crosses_whole() {
     let (mut writer, mut reader) = take_handoff(eight_frame_profile());
     let first = recorded(&[0.25, 0.5]);
-    let second = recorded(&[0.75, 1.0]);
+    let second = recorded(&[0.375, 0.625]);
 
     cross(&mut writer, &first);
     let read = samples(&reader.claim().expect("the first take crossed"));
@@ -339,7 +339,7 @@ fn the_take_after_the_one_being_read_crosses_whole() {
 
     assert_eq!(read, [0.25, 0.5]);
     let take = reader.claim().expect("the second take crossed");
-    assert_eq!(samples(&take), [0.75, 1.0]);
+    assert_eq!(samples(&take), [0.375, 0.625]);
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn a_take_nobody_looked_at_is_gone() {
     let (mut writer, mut reader) = take_handoff(eight_frame_profile());
     let first = recorded(&[0.25, 0.5]);
     let unread = recorded(&[0.5, 0.75]);
-    let newest = recorded(&[0.75, 1.0]);
+    let newest = recorded(&[0.375, 0.625]);
 
     cross(&mut writer, &first);
     {
@@ -358,7 +358,7 @@ fn a_take_nobody_looked_at_is_gone() {
     }
 
     let take = reader.claim().expect("the newest take crossed");
-    assert_eq!(samples(&take), [0.75, 1.0]);
+    assert_eq!(samples(&take), [0.375, 0.625]);
 }
 
 #[test]
@@ -376,12 +376,12 @@ fn a_take_that_fills_the_buffer_crosses_to_its_last_frame() {
 #[test]
 fn a_take_longer_than_the_handoff_crosses_as_much_as_fits() {
     let (mut writer, mut reader) = take_handoff(four_frame_profile());
-    let buffer = recorded(&[0.25, 0.5, 0.75, 1.0, 0.125, 0.25]);
+    let buffer = recorded(&[0.125, 0.25, 0.375, 0.5, 0.0625, 0.125]);
 
     cross(&mut writer, &buffer);
 
     let take = reader.claim().expect("as much of the take as fits crossed");
-    assert_eq!(samples(&take), [0.25, 0.5, 0.75, 1.0]);
+    assert_eq!(samples(&take), [0.125, 0.25, 0.375, 0.5]);
 }
 
 #[test]

@@ -16,6 +16,7 @@
 
 use std::ops::Range;
 
+use crate::audio::held;
 use crate::device::AudioProfile;
 
 mod engine;
@@ -37,6 +38,12 @@ pub use waveform::{Extremes, LoopWaveform, WaveformReader, WaveformWriter, wavef
 const LAYER_COUNT: usize = 8;
 
 /// The samples of a loop, in storage that is allocated once and never grows.
+///
+/// A loop is the sum of its layers, taken as it is read and
+/// [`held`](crate::audio::held) inside full scale. Nothing under the ceiling
+/// moves as the stack deepens: what a layer holds is what was played into it,
+/// so an overdub never quietens the take and [`undo`](Self::undo) gives back
+/// exactly what was there.
 pub struct LoopBuffer {
     layers: Box<[f32]>,
     written: [usize; LAYER_COUNT],
@@ -158,27 +165,16 @@ impl LoopBuffer {
             waveform,
             ..
         } = self;
-        let capacity = layers.len() / LAYER_COUNT;
-        let (written, cursor, depth) = (*written, *cursor, *depth);
-        let len = written[0];
+        let sum = Sum {
+            layers,
+            capacity: layers.len() / LAYER_COUNT,
+            cursor: *cursor,
+            written: *written,
+            depth: *depth,
+            len: written[0],
+        };
 
-        waveform.take(
-            from,
-            (0..taken).map(|offset| {
-                let frame = from + offset;
-                layers
-                    .chunks_exact(capacity)
-                    .zip(cursor.into_iter().zip(written))
-                    .take(depth)
-                    .filter(|&(_, (cursor, recorded))| {
-                        spans(cursor, recorded, len)
-                            .iter()
-                            .any(|span| span.contains(&frame))
-                    })
-                    .map(|(layer, _)| layer[frame])
-                    .sum::<f32>()
-            }),
-        );
+        waveform.take(from, (0..taken).map(|offset| held(sum.at(from + offset))));
     }
 
     /// Open a layer over the loop at frame `at`, and report whether there was
@@ -281,9 +277,10 @@ impl LoopBuffer {
     ///
     /// Kept as the loop is recorded rather than measured on demand: summarising
     /// the whole of a long loop is a pass the callback has no room for, and
-    /// folding each block in as it arrives is one it already makes. An undone
-    /// layer is swept out by [`resummarise`](Self::resummarise), so this trails
-    /// an undo by up to a lap of the loop.
+    /// folding each block in as it arrives is one it already makes. It is the
+    /// held sum rather than the raw one, so what is drawn is what is heard. An
+    /// undone layer is swept out by [`resummarise`](Self::resummarise), so this
+    /// trails an undo by up to a lap of the loop.
     pub const fn waveform(&self) -> &LoopWaveform {
         &self.waveform
     }
@@ -291,25 +288,16 @@ impl LoopBuffer {
     /// Add the loop, from frame `from`, into `block`, and report how many
     /// frames that was.
     ///
-    /// Layers are summed into what `block` already holds, so a caller mixing
-    /// the loop over live input passes the block it rendered; one wanting the
-    /// loop alone passes silence.
+    /// Layers are summed and held inside full scale, then added to what `block`
+    /// holds: a caller mixing the loop over live input passes the block it
+    /// rendered, and the ceiling is on the loop rather than on that block.
     ///
     /// A result below the length of `block` means the loop ended inside it,
     /// leaving the rest as it was. The loop does not repeat here; that is
     /// [`play_into`](Self::play_into).
     pub fn mix_into(&self, block: &mut [f32], from: usize) -> usize {
         let wanted = block.len().min(self.len().saturating_sub(from));
-        if wanted == 0 {
-            return 0;
-        }
-
-        let block = &mut block[..wanted];
-        for (layer, spans) in self.recorded_layers() {
-            for span in &spans {
-                mix(block, layer, from, span);
-            }
-        }
+        self.add_held(&mut block[..wanted], from);
 
         wanted
     }
@@ -317,13 +305,13 @@ impl LoopBuffer {
     /// Play the loop into the whole of `block`, from frame `from`, and report
     /// the frame it left the playhead on.
     ///
-    /// A boundary inside `block` is crossed there, so a loop whose length is not
-    /// a multiple of the block size repeats without drift or a seam, and one
-    /// shorter than `block` is heard as often as it fits.
+    /// A boundary inside `block` is crossed there, so a loop of any length
+    /// repeats without drift or a seam, and a short one as often as it fits.
     ///
-    /// Layers are summed into what `block` already holds; an empty loop is left
-    /// alone. A `from` at or past the end restarts the loop, so a playhead kept
-    /// across a change of length cannot hold a phase of its own.
+    /// Layers are summed and held inside full scale, then added to what `block`
+    /// holds; an empty loop is left alone. A `from` at or past the end restarts
+    /// the loop, so a playhead kept across a change of length cannot hold a
+    /// phase of its own.
     ///
     /// ```
     /// use motif::device::DeviceProfile;
@@ -347,26 +335,31 @@ impl LoopBuffer {
         let to_the_boundary = (self.len() - playhead).min(block.len());
         let (before, after) = block.split_at_mut(to_the_boundary);
 
-        for (layer, spans) in self.recorded_layers() {
-            for span in &spans {
-                mix(before, layer, playhead, span);
-                for repeat in after.chunks_mut(self.len()) {
-                    mix(repeat, layer, 0, span);
-                }
-            }
+        self.add_held(before, playhead);
+        for repeat in after.chunks_mut(self.len()) {
+            self.add_held(repeat, 0);
         }
 
         (playhead + block.len()) % self.len()
     }
 
-    fn recorded_layers(&self) -> impl Iterator<Item = (&[f32], [Range<usize>; 2])> {
-        let len = self.len();
+    fn add_held(&self, block: &mut [f32], from: usize) {
+        let sum = self.sum();
 
-        self.layers
-            .chunks_exact(self.capacity())
-            .zip(self.cursor.into_iter().zip(self.written))
-            .take(self.depth)
-            .map(move |(layer, (cursor, recorded))| (layer, spans(cursor, recorded, len)))
+        for (offset, mixed) in block.iter_mut().enumerate() {
+            *mixed += held(sum.at(from + offset));
+        }
+    }
+
+    fn sum(&self) -> Sum<'_> {
+        Sum {
+            layers: &self.layers,
+            capacity: self.capacity(),
+            cursor: self.cursor,
+            written: self.written,
+            depth: self.depth,
+            len: self.len(),
+        }
     }
 
     /// How many frames long the loop is.
@@ -420,12 +413,27 @@ fn spans(cursor: usize, recorded: usize, len: usize) -> [Range<usize>; 2] {
     ]
 }
 
-fn mix(block: &mut [f32], layer: &[f32], at: usize, span: &Range<usize>) {
-    let reach = at + block.len();
-    let from = span.start.clamp(at, reach);
-    let to = span.end.clamp(from, reach);
+struct Sum<'a> {
+    layers: &'a [f32],
+    capacity: usize,
+    cursor: [usize; LAYER_COUNT],
+    written: [usize; LAYER_COUNT],
+    depth: usize,
+    len: usize,
+}
 
-    for (mixed, sample) in block[from - at..to - at].iter_mut().zip(&layer[from..to]) {
-        *mixed += sample;
+impl Sum<'_> {
+    fn at(&self, frame: usize) -> f32 {
+        self.layers
+            .chunks_exact(self.capacity)
+            .zip(self.cursor.into_iter().zip(self.written))
+            .take(self.depth)
+            .filter(|&(_, (cursor, recorded))| {
+                spans(cursor, recorded, self.len)
+                    .iter()
+                    .any(|span| span.contains(&frame))
+            })
+            .map(|(layer, _)| layer[frame])
+            .sum()
     }
 }

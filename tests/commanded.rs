@@ -167,10 +167,10 @@ fn a_command_the_monitor_answered_does_not_reach_the_engine() {
 
     press(&mut sender, Command::SetGain(GAIN));
     press(&mut sender, Command::SetTransport(Transport::Recording));
-    played(&mut path, &[1.0, 1.0]);
+    played(&mut path, &[0.5, 0.5]);
     press(&mut sender, Command::SetTransport(Transport::Playing));
 
-    assert_eq!(played(&mut path, &[0.0, 0.0]), [1.0, 1.0]);
+    assert_eq!(played(&mut path, &[0.0, 0.0]), [0.5, 0.5]);
 }
 
 #[test]
