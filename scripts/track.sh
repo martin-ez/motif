@@ -54,6 +54,7 @@ scripts/track.sh <command> [args] [--json]
   labels-init                 create/update the label taxonomy (idempotent)
   doctor                      check preconditions
   selftest --yes              full lifecycle smoke test on throwaway issues
+  selftest --clean --yes      delete every throwaway issue, from any run
 USAGE
   exit 1
 }
@@ -1269,6 +1270,13 @@ Re-run with --blocked-by <n> for the epic this one follows."
 
   [ -z "$parent" ] || require_open_parent "$parent" "add --parent"
 
+  if [ "$selftest" = 1 ]; then
+    [ -n "${ST_RUN:-}" ] || die "add --selftest needs a run marker.
+Without one the issue carries no sign of which run filed it, and cleanup cannot
+tell it from a concurrent run's."
+    title="$title [$ST_RUN]"
+  fi
+
   GH_ARGS=(issue create --title "$title"
            --label "area:$area" --label "kind:$kind" --label "size:$size")
   [ "$selftest" = 1 ] && GH_ARGS[${#GH_ARGS[@]}]="--label" && GH_ARGS[${#GH_ARGS[@]}]="track:selftest"
@@ -1549,10 +1557,29 @@ st_ok()   { ST_PASS=$((ST_PASS + 1)); note "  ok    $*"; return 0; }
 st_bad()  { ST_FAIL=$((ST_FAIL + 1)); note "  FAIL  $*"; return 0; }
 st_assert() { if [ "$1" = 0 ]; then st_ok "$2"; else st_bad "$2"; fi; }
 
-st_delete_run() {
-  local nums n deleted=0
-  nums="$(gh issue list --state all --label track:selftest --limit 100 \
-          --json number --jq '.[].number' 2>/dev/null || true)"
+# The throwaway issues of one run, or of every run. The marker lives on the
+# issue rather than in a list held here: a run that dies between the write and
+# the assignment would leave one that nothing could attribute, and a snapshot of
+# the label taken before a run cannot tell two runs apart at all.
+#
+# There is deliberately no empty-means-everything. An unset marker reaching here
+# would delete a live run's fixtures, which is the fault this scoping removes.
+st_delete_run() {   # st_delete_run <marker>|--all
+  local marker="${1:-}" scope rows nums n deleted=0
+  if [ -z "$marker" ]; then
+    note "  cleanup: no run marker — nothing removed"
+    printf '0\n'
+    return 0
+  fi
+  scope="run $marker"
+  [ "$marker" = "--all" ] && scope="every run"
+  rows="$(gh issue list --state all --label track:selftest --limit "$LIST_LIMIT" \
+          --json number,title 2>/dev/null | jq -r '.[] | "\(.number)\t\(.title)"' || true)"
+  if [ "$marker" = "--all" ]; then
+    nums="$(printf '%s\n' "$rows" | awk -F'\t' 'NF{print $1}')"
+  else
+    nums="$(printf '%s\n' "$rows" | grep -F "$marker" | awk -F'\t' 'NF{print $1}' || true)"
+  fi
   for n in $nums; do
     if gh_write issue delete "$n" --yes >/dev/null 2>&1; then
       deleted=$((deleted + 1))
@@ -1561,7 +1588,8 @@ st_delete_run() {
       note "  (could not delete #$n — closed instead; needs admin to delete)"
     fi
   done
-  note "  cleanup: removed $deleted throwaway issue(s)"
+  note "  cleanup: removed $deleted throwaway issue(s) from $scope"
+  printf '%s\n' "$deleted"
   return 0
 }
 
@@ -1574,7 +1602,7 @@ st_cleanup() {
     git branch -D "$ST_ORPHAN_BRANCH" >/dev/null 2>&1 || true
     ST_ORPHAN_BRANCH=""
   fi
-  st_delete_run
+  st_delete_run "$ST_RUN" >/dev/null
   lock_release
   return 0
 }
@@ -1608,9 +1636,13 @@ st_add() {
 # What the throwaway chain comes off. An epic names the epic it follows, and for
 # the selftest that one has to be CLOSED: an open blocker would gate every issue
 # filed under the root, and half the run would fail on a queue it never meant to
-# test.
+# test. A run closes five of its own before it ends, so the newest closed issue
+# in the repository is often one a concurrent run is about to delete — and a
+# chain hung off that is the same death by a second route.
 st_chain_head() {
-  gh issue list --state closed --limit 1 --json number --jq '.[0].number // empty'
+  gh issue list --state closed --limit 20 --json number,labels \
+    | jq -r '[.[] | select((.labels | map(.name) | index("track:selftest")) == null)]
+             | .[0].number // empty'
 }
 
 # main checked out, one branch held by a second worktree, one held by nothing.
@@ -1635,8 +1667,19 @@ st_scratch_repo() {
 # What makes the subshell safe is that a command takes and drops the write lock
 # inside its own body, refusal included, so neither outlives the containment.
 cmd_selftest() {
-  [ "${1:-}" = "--yes" ] || die "selftest creates and deletes real issues in this repo.
-Re-run with:  scripts/track.sh selftest --yes"
+  case "${1:-}" in
+    --clean)
+      shift
+      [ "${1:-}" = "--yes" ] || die "selftest --clean deletes every throwaway issue in this repository,
+from every run — including a run in progress somewhere else.
+Re-run with:  scripts/track.sh selftest --clean --yes"
+      printf 'cleaned %s throwaway issue(s) from every run\n' "$(st_delete_run --all)"
+      return 0
+      ;;
+    --yes) ;;
+    *) die "selftest creates and deletes real issues in this repo.
+Re-run with:  scripts/track.sh selftest --yes" ;;
+  esac
 
   local t0 A B C D E F G H I J K L M N P Q R S T U V X1 X2 Y Z
   local out rc loc adv dt bn ob scratch ids head
@@ -1646,10 +1689,10 @@ Re-run with:  scripts/track.sh selftest --yes"
   note "  preflight: doctor"
   ( AS_JSON=0 cmd_doctor >/dev/null ) || die "doctor failed — fix that first."
 
-  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN"; lock_release' EXIT
+  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release' EXIT
   # Without an explicit exit, bash runs the handler and then RESUMES, so a Ctrl-C
   # would delete the throwaway issues and carry on asserting against them.
-  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN"; lock_release; exit 130' INT TERM
+  trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release; exit 130' INT TERM
 
   note "  creating throwaway issues …"
   head="$(st_chain_head)"
