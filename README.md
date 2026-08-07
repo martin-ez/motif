@@ -1,11 +1,26 @@
 # motif
 
-A terminal groovebox for capturing a loop of what you play, inferring its
-musical structure, and using that structure to help build a song sketch.
+A groovebox for developing a single music loop into a whole song sketch.
 
-It is meant to be a sketchpad, not a DAW. The terminal is a deliberate
-constraint: it keeps UI design off the critical path and forces the interaction
-to stay simple.
+In its most basic form it is a looper. What makes it a groovebox is what happens
+to the loop once you have played it: the musical content gets worked out — the
+tempo, the rhythm, the harmony, the notes — and that is what the instrument
+builds on. Parts that accompany the loop, and variations that become new
+sections.
+
+It is a sketchpad, not a DAW. Everything is aimed at the distance between a
+phrase you just played and something worth keeping.
+
+The terminal is not the destination. The instrument this is aimed at is a
+physical one — a compute module, a small display, a handful of controls — and
+work on the device is deliberately deferred until the software has proved it is
+worth putting in a box. So the terminal build mimics the thing it will become,
+at the same display resolution and with the same controls:
+`DeviceProfile::TARGET` is 66 by 20 cells, twelve buttons and one encoder, and
+those are numbers the code already compiles against.
+
+How much of this exists today is the next section, and it is the only part of
+this file describing behaviour you can have.
 
 ## What runs today
 
@@ -113,8 +128,10 @@ omissions otherwise:
   compiles as an external consumer of the crate. The compiler then guarantees
   that tests can only reach the public API, so implementation details stay free
   to change.
-- **There is no roadmap in this repository.** Planned work is in the issue
-  tracker, where it can block and be blocked by other work.
+- **There is no roadmap in this repository.** The order of the work lives in the
+  issue tracker, as a chain of epics each blocked by the one before it with
+  every issue parented to one of them. That order is queryable, it closes itself
+  as work lands, and nothing written here can quietly disagree with it.
 - **Incomplete work sits behind Cargo features**, off by default, so branches
   stay short-lived and `main` stays green.
 
