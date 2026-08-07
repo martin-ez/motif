@@ -13,5 +13,7 @@ Before opening a pull request:
 scripts/gate.sh
 ```
 
-That runs every check CI can fail a pull request on, in the configuration CI
-uses.
+That runs every check CI can fail a pull request on that a working tree can
+answer, in the configuration CI uses. The title's length and shape, and the
+scan for tool attribution in the body, belong to the pull request rather than
+the tree; [AGENTS.md](AGENTS.md) says what to do about those.

@@ -56,6 +56,10 @@ machine headroom — and a sweep without headroom reports timeouts as survivors,
 which sends an agent to write a test for a mutant nothing is wrong with. Nothing
 raises the cap past what the machine can sweep.
 
+`scripts/gate.sh` puts three clippy passes, `cargo doc`, the tests and the
+aarch64 check in front of each of those sweeps, so three agents at the gate cost
+more than three sweeps. Where the machine is small, batch two.
+
 Report the batch, and name what you held back and why. An exclusion nobody sees
 reads as an omission.
 

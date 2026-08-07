@@ -91,10 +91,15 @@ Before opening a pull request:
 scripts/gate.sh
 ```
 
-That runs every check CI can fail a pull request on, in the configuration CI
-uses, and reports all of them rather than stopping at the first. The mutation
-sweep runs last and is the one check that can fail a change the others
-approved; CI runs it on every pull request either way.
+That runs every check CI can fail a pull request on that a working tree can
+answer, in the configuration CI uses, and reports all of them rather than
+stopping at the first. The mutation sweep runs last and is the one check that
+can fail a change the others approved; CI runs it on every pull request either
+way.
+
+Three assertions are left out because they belong to a pull request rather than
+a tree: the title's length and shape, and the scan for tool attribution in the
+body. [`AGENTS.md`](AGENTS.md) says what to do about those.
 
 Debug builds compile dependencies at `opt-level = 2` and this crate at `1`.
 Audio code is unusable at `opt-level = 0` — the DSP path underruns the callback
@@ -106,7 +111,7 @@ and timing measurements become noise.
 src/            the crate
 tests/          every test lives here, so that tests reach only the public API
 examples/       things to run against real hardware: devices, layout, fixtures
-scripts/        house-style checks that rustc and clippy cannot express
+scripts/        the gate, the tracker, and the checks CI runs
 AGENTS.md       how this project is built; read before contributing
 ```
 

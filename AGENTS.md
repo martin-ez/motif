@@ -21,9 +21,12 @@ and the mutation sweep last. It keeps going after a failure and reports them
 all, so one run says everything. A check that is missing from it is a bug in
 the gate, not a command to run beside it.
 
-Two of CI's checks are not in it, because neither is knowable from a working
-tree: the pull request title and body belong to a request that does not exist
-yet. Draft the body and run `scripts/check-pr-body.sh -F body.md`.
+Three of CI's assertions are not in it, because a working tree cannot answer
+them: the title's length, its `type(scope): summary` shape, and the scan for
+tool attribution in the body all belong to a request that does not exist while
+the gate runs. Hold them yourself as you write them (4.2, 4.4, 4.5).
+`scripts/check-pr-body.sh -F body.md` covers a fourth, checking a drafted body
+for hard wrapping — and only that.
 
 The sweep is the slow one and the one most often skipped. `--no-sweep` exists
 for iterating and says so in red, because an agent who skips it silently leaves

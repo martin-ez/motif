@@ -10,20 +10,28 @@
 # inherits them. A warning that only denies in CI is the drift this exists to
 # close, and it costs a rebuild the first time the gate runs over ad-hoc work.
 #
-# Two of CI's checks are absent because they are not knowable from a working
-# tree: the pull request title and body are properties of a request that does
-# not exist yet. Draft the body and run `scripts/check-pr-body.sh -F body.md`.
+# Three of CI's assertions are absent because a working tree cannot answer
+# them: the title's length and its `type(scope): summary` shape, and the scan
+# for tool attribution in the body. All three belong to a request that does
+# not exist while this runs. `scripts/check-pr-body.sh -F body.md` checks a
+# drafted body for hard wrapping and nothing else, so it closes one of the
+# four and the other three are yours to hold as you write them (4.2, 4.4, 4.5).
+# The commit half of the attribution scan is here, because commits do exist.
 #
 # Every check runs even after an earlier one fails, as `!cancelled()` makes
 # them in CI, so one run says everything rather than the first thing. The
 # mutation sweep is last and is the exception: it decides nothing on a tree
 # whose tests already fail, so a red tree skips it rather than reporting it.
 #
-# The heartbeat naming each command goes to stderr and the verdicts to stdout,
-# so `scripts/gate.sh 2>/dev/null` is the report on its own.
+# The heartbeat naming each command goes to stderr and every verdict to
+# stdout, so `scripts/gate.sh 2>/dev/null` is the report on its own. A missing
+# precondition is the exception: it stops the gate before there is a report,
+# and says why on stderr.
 #
 # Exit codes:
-#   0  every check that ran passed
+#   0  every check that ran passed. A run that skipped the sweep lands here
+#      too, so --no-sweep can exit 0 — the shout saying so is on stdout, where
+#      output pasted into a report carries it
 #   1  a check failed, or the gate could not run one
 #
 # Written for bash 3.2 (macOS /bin/bash).
@@ -46,7 +54,8 @@ pass() { printf '\033[32mok\033[0m    %s\n' "$*"; }
 # differ wherever the fix is not the check: `--check` reports the formatting,
 # `cargo fmt --all` repairs it.
 failures=""
-last_rc=0
+
+TESTS_CHECK="tests"
 
 record() {
 	local entry="$1$TAB$2"
@@ -94,12 +103,55 @@ EOF
 	if [ -n "$failures" ]; then
 		return 1
 	fi
+	if [ "$sweep" = red ]; then
+		return 1
+	fi
 	if [ "$sweep" = ran ]; then
 		pass "every check CI can fail a pull request on passed"
 	else
 		pass "every check that ran passed"
 	fi
 	return 0
+}
+
+# Whether a named check recorded a failure. The sweep's decision turns on the
+# tests rather than on whatever happened to run last, so it asks by name and
+# stops depending on where it sits among the calls.
+recorded() {
+	local failures="$1" want="$2" name
+	while IFS="$TAB" read -r name _; do
+		if [ "$name" = "$want" ]; then
+			return 0
+		fi
+	done <<EOF
+$failures
+EOF
+	return 1
+}
+
+# The sweep is the only check whose verdict depends on another's. It asks
+# whether a diff's tests constrain behaviour, so a tree whose tests already
+# fail cannot be asked, and --no-sweep says not to ask. Both are states of
+# their own: a sweep that did not run has caught nothing.
+sweep_state() {
+	if [ "$1" = no ]; then
+		printf 'off\n'
+	elif recorded "$2" "$TESTS_CHECK"; then
+		printf 'red\n'
+	else
+		printf 'ran\n'
+	fi
+}
+
+# cpal's Linux backend links against ALSA, and alsa-sys resolves it through
+# pkg-config from a build script, which runs even under `cargo check`. macOS
+# uses CoreAudio and needs nothing installed.
+needs_alsa() {
+	if [ "$1" = Linux ]; then
+		printf 'yes\n'
+	else
+		printf 'no\n'
+	fi
 }
 
 # Named before anything runs rather than eight minutes into the gate, and with
@@ -111,6 +163,13 @@ preconditions() {
       cannot run.
 
         rustup target add aarch64-unknown-linux-gnu"
+
+	[ "$(needs_alsa "$(uname -s)")" = no ] || pkg-config --exists alsa 2>/dev/null ||
+		die "the ALSA development headers are not installed, so cpal's Linux
+      backend cannot build and every cargo check below will die inside
+      alsa-sys rather than in this crate.
+
+        sudo apt-get install -y libasound2-dev"
 
 	[ "$1" = no ] || cargo mutants --version >/dev/null 2>&1 ||
 		die "cargo-mutants is not installed, so the sweep cannot run.
@@ -130,7 +189,6 @@ run_check() {
 	fi
 	note "→ $shown"
 	out="$("$@" 2>&1)" || rc=$?
-	last_rc="$rc"
 	if [ "$rc" = 0 ]; then
 		pass "$name"
 		return 0
@@ -214,7 +272,7 @@ selftest() {
 	rc=0
 	out="$(summarise "" ran)" || rc=$?
 	st_is 0 "$rc" "a clean gate exits 0"
-	st_has "$out" "passed" "a clean gate says so"
+	st_has "$out" "every check CI can fail" "a clean gate says the whole gate passed"
 
 	two="clippy (default features)${TAB}cargo clippy --all-targets
 cross-compile guard${TAB}cargo check --target aarch64-unknown-linux-gnu --all-features"
@@ -233,6 +291,11 @@ cross-compile guard${TAB}cargo check --target aarch64-unknown-linux-gnu --all-fe
 	out="$(summarise "formatting${TAB}cargo fmt --all" ran)" || rc=$?
 	st_has "$out" "1 check failed" "one failure is not called two"
 	st_has "$out" "cargo fmt --all" "the fix is offered where it is not the check"
+
+	rc=0
+	out="$(summarise "" red)" || rc=$?
+	st_is 1 "$rc" "a skipped sweep is never a pass"
+	st_hasnt "$out" "passed" "a tree that skipped the sweep is not reported as green"
 
 	rc=0
 	out="$(summarise "tests${TAB}cargo test --all-features" red)" || rc=$?
@@ -268,7 +331,29 @@ cross-compile guard${TAB}cargo check --target aarch64-unknown-linux-gnu --all-fe
 	} 2>&1 )" || true
 	st_has "$out" "the tool said what was wrong" "a failing check shows what it said"
 	st_has "$out" "1 check failed" "a failing check reaches the summary"
-	st_has "$out" "st_check_fails" "a failure with no fix offers the command itself"
+	st_has "$out" "        st_check_fails" \
+		"a failure with no fix renders the command itself in the summary"
+
+	out="$( { failures=""
+		run_check "the first demo" "the first line" st_check_fails
+		run_check "the second demo" "the second line" st_check_fails
+		summarise "$failures" ran
+	} 2>&1 )" || true
+	st_has "$out" "2 checks failed" "two failing checks are recorded as two"
+	st_has "$out" "        the first line" "the summary renders the first"
+	st_has "$out" "        the second line" "the summary renders the second"
+
+	st_is ran "$(sweep_state yes "")" "a green tree sweeps"
+	st_is red "$(sweep_state yes "tests${TAB}cargo test --all-features")" \
+		"failing tests skip the sweep"
+	st_is ran "$(sweep_state yes "formatting${TAB}cargo fmt --all")" \
+		"another check's failure does not skip the sweep"
+	st_is off "$(sweep_state no "")" "--no-sweep skips the sweep"
+	st_is off "$(sweep_state no "tests${TAB}cargo test --all-features")" \
+		"--no-sweep skips it on a red tree too"
+
+	st_is yes "$(needs_alsa Linux)" "a Linux host needs the ALSA headers"
+	st_is no "$(needs_alsa Darwin)" "macOS uses CoreAudio and needs nothing"
 
 	if [ "$st_status" = 0 ]; then
 		printf '\033[32mok\033[0m    every rule the gate runs on holds\n'
@@ -307,21 +392,16 @@ run_check "clippy (all features)" "" cargo clippy --all-targets --all-features
 run_check "clippy (default features)" "" cargo clippy --all-targets
 run_check "clippy (no default features)" "" cargo clippy --all-targets --no-default-features
 run_check "documentation" "" cargo doc --no-deps --all-features
-run_check "tests" "" cargo test --all-features
-tests_rc="$last_rc"
+run_check "$TESTS_CHECK" "" cargo test --all-features
 run_check "cross-compile guard (aarch64)" "" \
 	cargo check --target aarch64-unknown-linux-gnu --all-features
 
-sweep_state=ran
-if [ "$sweep" = no ]; then
-	sweep_state=off
-elif [ "$tests_rc" != 0 ]; then
-	sweep_state=red
-else
+state="$(sweep_state "$sweep" "$failures")"
+if [ "$state" = ran ]; then
 	note "→ scripts/check-mutants.sh"
 	rc=0
 	scripts/check-mutants.sh || rc=$?
 	[ "$rc" = 0 ] || record "mutation coverage" "scripts/check-mutants.sh"
 fi
 
-summarise "$failures" "$sweep_state"
+summarise "$failures" "$state"
