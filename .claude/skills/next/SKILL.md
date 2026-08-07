@@ -82,6 +82,11 @@ with `scripts/check-pr-body.sh -F body.md` before you open anything. The body is
 the squashed commit message; wrapping it at 80 columns the way the rest of this
 repository is wrapped puts those breaks into `main`'s history for good.
 
+Then `scripts/track.sh submit 74`, which records that the work is built and
+waiting on a person. Without it the issue is indistinguishable from one still
+being written, and the next thing to read the tracker — `plan`, `mine`, or a
+supervisor — has no way to tell that there is nothing left to do here.
+
 **Do not close the issue and do not merge.** Merging settles it: the `tracking`
 workflow runs `done` for every issue the body tracks, and `release` if the pull
 request is closed unmerged. Closing it by hand earlier has the tracker assert
