@@ -256,8 +256,10 @@ it, wire it, and go back to the task in hand.
 
 `--parent` is required, because readiness is inherited through it: work filed
 without one is gated by nothing and is startable ahead of the whole chain it
-belongs to. `add` refuses that and names the open chain heads to pick from. An
-epic has no parent — it is where a chain starts — and is what `--size l` means.
+belongs to. `add` refuses that and prints the chain, marking which epics are
+startable, so the work goes where it belongs rather than where it can start
+soonest. An epic is where a chain starts, so it is the one thing filed as a
+root; that is what `--size l` means.
 
 The `next`, `epic`, `refine` and `file` skills in `.claude/skills/` carry the
 full procedure for taking one issue, running a whole epic, grooming and filing

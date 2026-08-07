@@ -301,6 +301,7 @@ def needs_split: (.state == "OPEN") and (.wip | not) and (.size == "l")
                 and ((.blockers | length) == 0) and ((.subs_open | length) == 0);
 def is_container: (.state == "OPEN") and ((.subs_open | length) > 0);
 def is_blocked: (.state == "OPEN") and ((.blockers | length) > 0);
+def epic_is_current: ((.blockers | length) == 0) and (.gated_by == null);
 
 # Kahn peeling: repeatedly drop nodes whose remaining blockers are all satisfied.
 # Whatever survives is in a cycle or downstream of one. Blockers are first
@@ -421,15 +422,16 @@ claimed_issues() {
   return 0
 }
 
-# The heads of the chain `plan` reads: epics nothing holds up, in the order they
-# come off each other. `add` names them when it refuses, so the caller reads the
-# answer rather than being sent to look for it. Best effort by design — failing
-# to read the chain must not swallow the refusal it decorates.
-current_epics() {
-  fetch_open 2>/dev/null | jq -r "$JQ_LIB"'
+# The chain `plan` reads, rendered for a refusal: every open epic in the order
+# they come off each other, the startable ones marked. Marked rather than
+# filtered, because a caller shown only what is startable parents the work under
+# whichever epic happens to be unblocked — which is the queue jump the refusal
+# exists to stop, wearing a legitimate parent. Non-zero means the read failed,
+# which is a different answer from a chain that has no head yet.
+epic_chain() {
+  fetch_open | jq -r "$JQ_LIB"'
     [.[] | shape] | with_gates | epic_order
-    | map(select(((.blockers | length) == 0) and (.gated_by == null)))
-    | .[] | "  #\(.num)  \(.title)"' 2>/dev/null || true
+    | .[] | "  \(if epic_is_current then "▸" else " " end) #\(.num)  \(.title)"'
 }
 
 # GNU date takes -d, BSD date takes -j -f. A timestamp that parses under neither
@@ -544,7 +546,7 @@ cmd_plan() {
             done: $e.subs.completed, of: $e.subs.total,
             review: ([ $kids[] | select(.review) ] | length),
             waits: $e.blockers,
-            current: ((($e.blockers | length) == 0) and ($e.gated_by == null)),
+            current: ($e | epic_is_current),
             children:
               ( $kids
                 | map(. as $c
@@ -1048,7 +1050,7 @@ add_flag_list() {   # $1 = flag, $2 = comma list; appends to GH_ARGS
 
 cmd_add() {
   local title="" body="" bodyfile="" area="" kind="" size=""
-  local bby="" bing="" parent="" selftest=0 url num rc=0 chains
+  local bby="" bing="" parent="" selftest=0 url num rc=0 chains guide
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--title)     [ $# -ge 2 ] || die "-t needs a value"; title="$2"; shift 2 ;;
@@ -1059,7 +1061,9 @@ cmd_add() {
       --size)         [ $# -ge 2 ] || die "--size needs a value"; size="$2"; shift 2 ;;
       --blocked-by)   [ $# -ge 2 ] || die "--blocked-by needs a value"; bby="$2"; shift 2 ;;
       --blocking)     [ $# -ge 2 ] || die "--blocking needs a value"; bing="$2"; shift 2 ;;
-      --parent)       [ $# -ge 2 ] || die "--parent needs a value"; parent="${2#\#}"; shift 2 ;;
+      --parent)       [ $# -ge 2 ] || die "--parent needs a value"; parent="${2#\#}"
+                      case "$parent" in *[!0-9]*) die "--parent: '$2' is not an issue number." ;; esac
+                      shift 2 ;;
       --selftest)     selftest=1; shift ;;
       *)              die "unknown flag for add: $1" ;;
     esac
@@ -1076,17 +1080,27 @@ cmd_add() {
   # filed and well formed, and it has quietly jumped the queue. Refuse before
   # the write, so the silent success is unreachable rather than reported.
   if [ "$size" != l ] && [ -z "$parent" ]; then
-    chains="$(current_epics)"
-    [ -n "$chains" ] || chains="  (could not read them — scripts/track.sh plan)"
-    die "add: '$title' is not an epic, so it needs --parent.
-Readiness is inherited through the parent, so an issue filed without one is
-startable ahead of the whole chain it belongs to — filed, well formed, carrying
-all three labels, and at the front of \`ready\`.
-The chains open right now, in the order they come off each other:
+    if chains="$(epic_chain)"; then
+      if [ -n "$chains" ]; then
+        guide="The chain, in the order the epics come off each other — ▸ is startable now:
 $chains
-Re-run with --parent <n> for the one this belongs under.
-  scripts/track.sh plan       the whole order
-  scripts/track.sh show <n>   one epic in full"
+Re-run with --parent <n> for the one this work belongs under, startable or not.
+  scripts/track.sh plan   the same chain, with the work under each epic"
+      else
+        guide="No epic is open, so the chain has no head to file under yet. An epic is a
+root and takes no parent, so file the head first:
+  scripts/track.sh add -t '<the chain this belongs to>' --area $area --kind $kind --size l
+then re-run this with --parent <that number>."
+      fi
+    else
+      guide="The open chains could not be read just now.
+  scripts/track.sh plan   the chain, and which epics are startable
+Re-run with --parent <n> for the one this work belongs under."
+    fi
+    die "add: '$title' is not an epic, so it needs --parent.
+Readiness is inherited through the parent: without one this is gated by nothing,
+and startable ahead of the whole chain it belongs to.
+$guide"
   fi
 
   GH_ARGS=(issue create --title "$title"
@@ -1402,6 +1416,9 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; out="$(AS_JSON=0 cmd_add -t "selftest root epic" --area infra --kind chore --size l --selftest)" || rc=$?
   Z="$(st_num "$out")"
   st_assert "$rc" "add files size:l epic #$Z as a root, with no parent"
+  # Every issue below hangs off $Z. Empty, they would all be refused for the
+  # want of a parent, and one real failure would read as forty.
+  [ -n "$Z" ] || die "selftest: the root epic was not created — nothing below can run."
 
   # Readiness is inherited, so an issue filed with no parent is startable ahead
   # of the whole chain it belongs to — filed, well formed, and at the front of
@@ -1409,7 +1426,7 @@ Re-run with:  scripts/track.sh selftest --yes"
   # exists to prevent has already happened by the time it is reported.
   rc=0; out="$(AS_JSON=0 cmd_add -t "selftest parentless" --area infra --kind chore --size s --selftest 2>&1 >/dev/null)" || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "add refuses a non-epic with no parent (got $rc)"
-  rc=0; printf '%s' "$out" | grep -q "#$Z" || rc=1
+  rc=0; printf '%s' "$out" | grep -q " #$Z  " || rc=1
   st_assert "$rc" "add's refusal names open epic #$Z as a chain to file under"
   rc=0; printf '%s' "$out" | grep -q "track.sh plan" || rc=1
   st_assert "$rc" "add's refusal says how to look the chain up"
@@ -1624,6 +1641,19 @@ Re-run with:  scripts/track.sh selftest --yes"
   rc=0; printf '%s' "$out" | jq -e --argjson n "$N" --argjson r "$R" '
     any(.num == $n and (.children | any(.num == $r and .stance == "waiting")))' >/dev/null || rc=1
   st_assert "$rc" "plan carries #$R under #$N as waiting on its gated epic"
+
+  # #$N is an epic behind a blocker, so it is real work with a real place in the
+  # chain that nobody can start yet. A refusal listing only the startable epics
+  # would send work belonging under it to whichever epic happens to be
+  # unblocked, which is the queue jump the refusal exists to stop.
+  rc=0; out="$(AS_JSON=0 cmd_add -t "selftest parentless again" --area infra --kind chore --size s --selftest 2>&1 >/dev/null)" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "add still refuses once a blocked epic exists (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q " #$N  " || rc=1
+  st_assert "$rc" "add's refusal lists blocked epic #$N, not just the startable ones"
+  rc=0; printf '%s' "$out" | grep -q "▸ #$N  " && rc=1
+  st_assert "$rc" "add's refusal leaves blocked epic #$N unmarked"
+  rc=0; printf '%s' "$out" | grep -q "▸ #$J  " || rc=1
+  st_assert "$rc" "add's refusal marks startable epic #$J"
 
   # Between a draft pull request going up and a human merging it, the work is
   # finished and the issue is still held. "Leave it alone" and "there is nothing
