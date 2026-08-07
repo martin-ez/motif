@@ -10,8 +10,9 @@
 //! Every fixture is timed as well as scored, against a [`deadline`] taken as a
 //! share of the take, so each fixture sets its own.
 //!
-//! A candidate arrives as beats, chords or notes, so nothing here knows about
-//! analysers or audio.
+//! A candidate answers in beats, chords or notes, so nothing here knows what
+//! produced them. Off disk it is asked about an annotation alone; over a set
+//! rendered in memory it is handed the fixture, audio and all.
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -20,7 +21,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use super::{Agreement, Annotation, AnnotationError, Chord, Comparison, Note, Score};
+use super::synth::Fixture;
+use super::{Agreement, Annotation, AnnotationError, Axis, Beat, Chord, Comparison, Note};
+use super::{Recipe, Score};
 
 const ANNOTATION_EXTENSION: &str = "beats";
 
@@ -92,9 +95,16 @@ impl Target {
     /// # Ok::<(), motif::fixtures::AnnotationError>(())
     /// ```
     pub fn positions<'a>(&self, annotation: &'a Annotation) -> impl Iterator<Item = Duration> + 'a {
+        self.among(annotation.beats())
+    }
+
+    /// The positions among `beats` this target is measured against.
+    ///
+    /// What [`positions`](Self::positions) reads off an annotation, for a
+    /// fixture rendered in memory that never became one.
+    pub fn among<'a>(&self, beats: &'a [Beat]) -> impl Iterator<Item = Duration> + 'a {
         let only_downbeats = matches!(self, Self::Downbeats);
-        annotation
-            .beats()
+        beats
             .iter()
             .filter(move |beat| beat.is_downbeat || !only_downbeats)
             .map(|beat| beat.at)
@@ -229,6 +239,56 @@ pub fn measure_notes(
     )
 }
 
+/// Score `candidate` against every fixture in `set`, which was rendered rather
+/// than read.
+///
+/// The candidate is handed the fixture itself, so it hears the audio as well as
+/// the beats behind it, and each row records the [`Recipe`] its fixture came
+/// from so the report can be banded. Nothing is read, so nothing can fail;
+/// scoring an empty set reports a mean of zero over no rows.
+///
+/// ```
+/// use motif::fixtures::harness::{self, Target};
+/// use motif::fixtures::synth;
+///
+/// let set = synth::drawn(synth::DEVELOPMENT[0], 2);
+/// let report = harness::measure_rendered(&set, Target::Downbeats, |fixture| {
+///     Target::Downbeats.among(fixture.beats()).collect()
+/// });
+///
+/// assert_eq!(report.mean(), 1.0);
+/// ```
+pub fn measure_rendered(
+    set: &[Fixture],
+    target: Target,
+    mut candidate: impl FnMut(&Fixture) -> Vec<Duration>,
+) -> Report {
+    let rows = set
+        .iter()
+        .map(|fixture| {
+            let annotated: Vec<Duration> = target.among(fixture.beats()).collect();
+            let (detected, elapsed) = timed(|| candidate(fixture));
+
+            Row {
+                name: fixture.name().to_owned(),
+                score: Score::of(&annotated, &detected),
+                elapsed,
+                deadline: deadline(last_beat(fixture)),
+                recipe: Some(*fixture.recipe()),
+            }
+        })
+        .collect();
+
+    Report { rows }
+}
+
+fn last_beat(fixture: &Fixture) -> Duration {
+    fixture
+        .beats()
+        .last()
+        .map_or(Duration::ZERO, |beat| beat.at)
+}
+
 fn measure_with<S>(
     directory: &Path,
     annotates: impl Fn(&GroundTruth) -> bool,
@@ -252,6 +312,7 @@ fn measure_with<S>(
                 score,
                 elapsed,
                 deadline: allowed,
+                recipe: None,
             }
         })
         .collect();
@@ -313,9 +374,11 @@ fn fixture_name(path: &Path) -> Option<String> {
 ///
 /// The mean is the figure to quote; the rows are what make a change in it
 /// diagnosable, since a mean that drops says something broke and the row that
-/// moved says what.
+/// moved says what. [`by`](Self::by) is the same argument one level up: it says
+/// which kind of fixture the candidate lost on rather than which one.
 ///
-/// Rows are ordered by fixture name, so two reports are diffable.
+/// Rows come in the order the set gave them, which off disk is by name, so two
+/// reports are diffable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Report<S = Score> {
     rows: Vec<Row<S>>,
@@ -339,6 +402,29 @@ impl<S: Measured> Report<S> {
         }
 
         self.rows.iter().map(|row| row.score.quoted()).sum::<f64>() / self.rows.len() as f64
+    }
+
+    /// What the candidate scored on each level of `axis`, in level order.
+    ///
+    /// This is what ranks two approaches rather than merely separating them: an
+    /// aggregate says one lost, and a band says where. A row recording no
+    /// recipe, or one the axis does not describe, is in no band at all — a mean
+    /// over fixtures whose parameter is unknown says nothing.
+    pub fn by(&self, axis: Axis) -> Vec<Band> {
+        let mut bands: Vec<Band> = Vec::new();
+
+        for row in &self.rows {
+            let Some(level) = row.recipe.as_ref().and_then(|recipe| axis.level(recipe)) else {
+                continue;
+            };
+            match bands.iter_mut().find(|band| band.level == level) {
+                Some(band) => band.take(row.score.quoted()),
+                None => bands.push(Band::opened(level, row.score.quoted())),
+            }
+        }
+        bands.sort_by(|one, other| one.level.cmp(&other.level));
+
+        bands
     }
 
     /// The tightest headroom any fixture left against its own deadline.
@@ -369,6 +455,7 @@ impl<S: Measured> fmt::Display for Report<S> {
             score,
             elapsed,
             deadline,
+            ..
         } in &self.rows
         {
             writeln!(
@@ -389,12 +476,13 @@ impl<S: Measured> fmt::Display for Report<S> {
 }
 
 /// What a candidate scored on one fixture, and what it spent doing it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Row<S = Score> {
     name: String,
     score: S,
     elapsed: Duration,
     deadline: Duration,
+    recipe: Option<Recipe>,
 }
 
 impl<S: Measured> Row<S> {
@@ -421,6 +509,71 @@ impl<S: Measured> Row<S> {
     /// What is left of that deadline, and zero where the candidate spent it.
     pub fn headroom(&self) -> Duration {
         self.deadline.saturating_sub(self.elapsed)
+    }
+
+    /// What the fixture was rendered from, where that is recorded.
+    ///
+    /// A fixture read off disk is an annotation and the audio beside it, and
+    /// nothing says what produced either, so it records none.
+    pub fn recipe(&self) -> Option<&Recipe> {
+        self.recipe.as_ref()
+    }
+}
+
+/// What a candidate scored over the fixtures sharing one level of an axis.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Band {
+    level: String,
+    total: f64,
+    fixtures: usize,
+}
+
+impl Band {
+    /// Which level of the axis these fixtures share.
+    pub fn level(&self) -> &str {
+        &self.level
+    }
+
+    /// How many fixtures the band covers.
+    ///
+    /// Reported beside the mean because a mean over two fixtures and the same
+    /// mean over twenty are not the same evidence.
+    pub fn fixtures(&self) -> usize {
+        self.fixtures
+    }
+
+    /// The mean of their figures, from zero to one.
+    pub fn mean(&self) -> f64 {
+        if self.fixtures == 0 {
+            return 0.0;
+        }
+
+        self.total / self.fixtures as f64
+    }
+
+    fn opened(level: String, quoted: f64) -> Self {
+        Self {
+            level,
+            total: quoted,
+            fixtures: 1,
+        }
+    }
+
+    fn take(&mut self, quoted: f64) {
+        self.total += quoted;
+        self.fixtures += 1;
+    }
+}
+
+impl fmt::Display for Band {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}  mean {:.3} over {} fixtures",
+            self.level,
+            self.mean(),
+            self.fixtures
+        )
     }
 }
 

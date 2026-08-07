@@ -7,6 +7,10 @@
 //! request rather than taken on trust. [`Score`] and [`Agreement`] are what turn
 //! an accuracy claim into a number a reviewer can check, and [`harness`] is what
 //! runs one over the whole set.
+//!
+//! [`Recipe`] runs the other way: the parameters a fixture was rendered from,
+//! which is what lets a report say which kind of fixture a candidate lost on
+//! rather than only that it lost.
 
 pub mod harness;
 pub mod synth;
@@ -16,9 +20,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 mod chord;
+mod recipe;
 mod scoring;
 
 pub use chord::{Agreement, Chord, ChordLabel, Comparison, PitchClass, Quality};
+pub use recipe::{Axis, Drift, Recipe, Texture};
 pub use scoring::Score;
 
 /// One annotated beat.
