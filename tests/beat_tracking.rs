@@ -21,9 +21,23 @@ const SHARP: f64 = 1.0;
 const ONE_TO_THE_BEAT: usize = 1;
 const NONE_UNSOUNDED: f64 = 0.0;
 const ON_THE_BEAT: f64 = 0.0;
+const TWICE_TO_THE_BEAT: usize = 2;
+const HALF_OFF_THE_BEAT: f64 = 0.5;
 const A_BAR_OF_SILENCE: Duration = Duration::from_secs(2);
 
 fn clicks(tempo: f64, meter: usize, drift: Drift) -> Fixture {
+    struck(tempo, meter, drift, ONE_TO_THE_BEAT, ON_THE_BEAT)
+}
+
+fn subdivided(tempo: f64, meter: usize) -> Fixture {
+    struck(tempo, meter, Drift::Steady, TWICE_TO_THE_BEAT, ON_THE_BEAT)
+}
+
+fn syncopated(tempo: f64, meter: usize) -> Fixture {
+    struck(tempo, meter, Drift::Steady, ONE_TO_THE_BEAT, HALF_OFF_THE_BEAT)
+}
+
+fn struck(tempo: f64, meter: usize, drift: Drift, density: usize, syncopation: f64) -> Fixture {
     synth::rendered(
         "tracked",
         Recipe {
@@ -33,9 +47,9 @@ fn clicks(tempo: f64, meter: usize, drift: Drift) -> Fixture {
             drift,
             texture: Texture::Percussion {
                 sharpness: SHARP,
-                density: ONE_TO_THE_BEAT,
+                density,
                 dropout: NONE_UNSOUNDED,
-                syncopation: ON_THE_BEAT,
+                syncopation,
             },
         },
     )
@@ -188,4 +202,66 @@ fn a_take_that_speeds_up_is_followed_rather_than_averaged() {
         last < first,
         "the grid did not speed up: {first:?} then {last:?}"
     );
+}
+
+#[test]
+fn the_bar_count_prior_pins_a_take_that_sounds_twice_to_the_beat() {
+    let fixture = subdivided(80.0, FOUR_FOUR);
+    let told = Priors::of_take(take(&fixture)).with_meter(FOUR_FOUR);
+    let found = tracked(&fixture, told.with_bars(BARS));
+
+    assert_eq!(found.beats().len(), BARS * FOUR_FOUR);
+    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+}
+
+#[test]
+fn a_take_of_no_bars_is_not_a_take() {
+    let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
+    let told = Priors::of_take(take(&fixture)).with_meter(FOUR_FOUR);
+    let found = tracked(&fixture, told.with_bars(0));
+
+    assert_eq!(found.beats(), tracked(&fixture, told).beats());
+}
+
+#[test]
+fn knowing_the_meter_puts_a_whole_number_of_bars_in_the_take() {
+    let fixture = clicks(BRISK, THREE_FOUR, Drift::Steady);
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture)).with_meter(THREE_FOUR),
+    );
+
+    assert_eq!(found.beats().len() % THREE_FOUR, 0, "{} beats", found.beats().len());
+}
+
+#[test]
+fn a_take_played_off_the_beat_keeps_its_pulse() {
+    let fixture = syncopated(MODERATE, FOUR_FOUR);
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture))
+            .with_meter(FOUR_FOUR)
+            .with_bars(BARS),
+    );
+
+    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+}
+
+#[test]
+fn a_steady_take_does_not_wander_off_its_pulse() {
+    let fixture = struck(
+        80.0,
+        FOUR_FOUR,
+        Drift::Steady,
+        TWICE_TO_THE_BEAT,
+        HALF_OFF_THE_BEAT,
+    );
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture))
+            .with_meter(FOUR_FOUR)
+            .with_bars(BARS),
+    );
+
+    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
 }

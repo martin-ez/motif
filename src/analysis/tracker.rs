@@ -1,9 +1,10 @@
 //! Placing a grid of beats over a take, and finding which of them begin a bar.
 //!
 //! A pulse is chosen by how much of the take's onset strength the grid it
-//! implies explains, and then each beat is placed on the strongest onset near
-//! where the pulse expects it, which is what lets the grid follow a take that
-//! speeds up or breathes rather than averaging over it.
+//! implies explains, and the grid itself is the best path through that
+//! envelope at the pulse — best over the whole take rather than beat by beat,
+//! which is what stops one onset played early from taking the beats after it
+//! with it.
 
 use std::time::Duration;
 
@@ -22,9 +23,8 @@ pub const FASTEST: f64 = 200.0;
 
 const PREFERRED: f64 = 120.0;
 const SPREAD: f64 = 0.9;
+const TIGHTNESS: f64 = 6.0;
 const WANDER: f64 = 0.25;
-const PHASE_STEP: f64 = 0.125;
-const FOLLOW: f64 = 0.5;
 const SWEEP_STEP: f64 = 1.03;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
@@ -32,13 +32,14 @@ const SECONDS_PER_MINUTE: f64 = 60.0;
 ///
 /// The player closed the loop, so its length is a fact rather than an
 /// estimate, and a pulse has to divide it into a whole number of beats. How
-/// many of those go to a bar is the other half, and nothing in the engine
-/// carries it yet, so it is optional and [`ASSUMED_BAR`](Self::ASSUMED_BAR)
-/// stands in.
+/// the take divides into bars is the other half, and nothing in the engine
+/// carries it yet, so both halves of that are optional and
+/// [`ASSUMED_BAR`](Self::ASSUMED_BAR) stands in for the first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Priors {
     length: Option<Duration>,
     beats_per_bar: Option<usize>,
+    bars: Option<usize>,
 }
 
 impl Priors {
@@ -54,6 +55,7 @@ impl Priors {
         Self {
             length: None,
             beats_per_bar: None,
+            bars: None,
         }
     }
 
@@ -61,7 +63,7 @@ impl Priors {
     pub fn of_take(length: Duration) -> Self {
         Self {
             length: Some(length),
-            beats_per_bar: None,
+            ..Self::blind()
         }
     }
 
@@ -76,8 +78,30 @@ impl Priors {
         }
     }
 
+    /// Also knowing that the take runs `bars` bars.
+    ///
+    /// Together with a meter this is the whole of the pulse but its phase: the
+    /// take holds one known number of beats, so nothing is left to choose
+    /// between a pulse and its own double. A take of no bars is refused, as a
+    /// bar of no beats is.
+    pub fn with_bars(self, bars: usize) -> Self {
+        Self {
+            bars: (bars > 0).then_some(bars),
+            ..self
+        }
+    }
+
     fn bar(&self) -> usize {
         self.beats_per_bar.unwrap_or(Self::ASSUMED_BAR)
+    }
+
+    fn counted(&self) -> Option<usize> {
+        self.bars.map(|bars| bars * self.bar())
+    }
+
+    fn whole_bars(&self, beats: u32) -> bool {
+        self.beats_per_bar
+            .is_none_or(|per_bar| beats as usize % per_bar == 0)
     }
 }
 
@@ -117,13 +141,14 @@ impl Tracked {
 
 /// Find the beats of a take, and which of them begin a bar.
 ///
-/// Where two grids explain the audio equally well — one at twice the rate of
-/// the other — the tie is broken by a log-Gaussian preference for 120 BPM nine
-/// tenths of an octave wide, as Ellis's dynamic-programming beat tracker breaks
-/// it. Without one, nothing prefers a pulse to its own double.
-///
-/// A take whose audio explains no grid at all yields no beats, rather than a
-/// grid laid over silence.
+/// The grid is the path through the onset envelope that best trades landing on
+/// what was played against holding the interval it was placed at, weighed as
+/// Ellis's dynamic-programming beat tracker weighs it: six times the squared
+/// log of the ratio an interval bears to the pulse, over an envelope
+/// normalised by its strongest rise. The pulse itself is chosen under a
+/// log-Gaussian preference for 120 BPM nine tenths of an octave wide, without
+/// which nothing prefers a pulse to its own double. A take that rose nowhere
+/// yields no beats rather than a grid over silence.
 ///
 /// ```
 /// use motif::analysis::{Priors, track};
@@ -151,109 +176,113 @@ pub fn track(
     }
 }
 
-struct Candidate {
-    period: Duration,
-    beats: Option<usize>,
-}
-
 fn strongest_grid(envelope: &Envelope, priors: Priors) -> Option<Vec<Duration>> {
+    let onsets = normalised(envelope)?;
+    let hop = envelope.hop();
     let mut strongest: Option<(f64, Vec<Duration>)> = None;
 
-    for candidate in candidates(priors) {
-        let step = candidate.period.mul_f64(PHASE_STEP);
-        let mut phase = Duration::ZERO;
-        while phase < candidate.period {
-            let (beats, explained) = place(envelope, &candidate, phase);
-            let score = explained * preference(candidate.period);
-            if score > strongest.as_ref().map_or(0.0, |(best, _)| *best) {
-                strongest = Some((score, beats));
-            }
-            phase += step;
+    for period in candidates(priors) {
+        let (frames, explained) = best_path(&onsets, frames_in(period, hop));
+        let score = explained * preference(period);
+        if score > strongest.as_ref().map_or(0.0, |(best, _)| *best) {
+            let beats = frames.into_iter().map(|frame| hop * frame as u32).collect();
+            strongest = Some((score, beats));
         }
     }
 
     strongest.map(|(_, beats)| beats)
 }
 
-fn candidates(priors: Priors) -> Vec<Candidate> {
-    match priors.length {
-        Some(length) => dividing(length),
-        None => sweeping(),
+fn normalised(envelope: &Envelope) -> Option<Vec<f64>> {
+    let strength = envelope.strength();
+    let strongest = strength
+        .iter()
+        .fold(0.0_f32, |strongest, risen| strongest.max(*risen));
+
+    (strongest > 0.0).then(|| {
+        strength
+            .iter()
+            .map(|risen| f64::from(*risen / strongest))
+            .collect()
+    })
+}
+
+fn best_path(onsets: &[f64], period: usize) -> (Vec<usize>, f64) {
+    let shortest = period.saturating_sub(wander(period)).max(1);
+    let longest = period + wander(period);
+    let mut score = vec![0.0; onsets.len()];
+    let mut before: Vec<Option<usize>> = vec![None; onsets.len()];
+
+    for frame in 0..onsets.len() {
+        let mut best = 0.0;
+        for interval in shortest..=longest.min(frame) {
+            let kept = score[frame - interval] - TIGHTNESS * regularity(interval, period);
+            if kept > best {
+                best = kept;
+                before[frame] = Some(frame - interval);
+            }
+        }
+        score[frame] = best + onsets[frame];
+    }
+
+    walked_back(onsets, &score, &before)
+}
+
+fn wander(period: usize) -> usize {
+    ((period as f64 * WANDER).round() as usize).max(1)
+}
+
+fn regularity(interval: usize, period: usize) -> f64 {
+    (interval as f64 / period as f64).ln().powi(2)
+}
+
+fn walked_back(onsets: &[f64], score: &[f64], before: &[Option<usize>]) -> (Vec<usize>, f64) {
+    let mut frame = (0..score.len()).max_by(|one, other| score[*one].total_cmp(&score[*other]));
+    let mut beats = Vec::new();
+    let mut explained = 0.0;
+
+    while let Some(at) = frame {
+        beats.push(at);
+        explained += onsets[at];
+        frame = before[at];
+    }
+    beats.reverse();
+
+    (beats, explained)
+}
+
+fn candidates(priors: Priors) -> Vec<Duration> {
+    match (priors.length, priors.counted()) {
+        (Some(length), Some(beats)) => vec![length / beats as u32],
+        (Some(length), None) => dividing(length, priors),
+        (None, _) => sweeping(),
     }
 }
 
-fn dividing(length: Duration) -> Vec<Candidate> {
+fn dividing(length: Duration, priors: Priors) -> Vec<Duration> {
     (1..)
         .map(|beats| (beats, length / beats))
         .take_while(|(_, period)| *period >= briskest())
         .filter(|(_, period)| *period <= slowest())
-        .map(|(beats, period)| Candidate {
-            period,
-            beats: Some(beats as usize),
-        })
+        .filter(|(beats, _)| priors.whole_bars(*beats))
+        .map(|(_, period)| period)
         .collect()
 }
 
-fn sweeping() -> Vec<Candidate> {
+fn sweeping() -> Vec<Duration> {
     let mut period = briskest();
     let mut swept = Vec::new();
 
     while period <= slowest() {
-        swept.push(Candidate {
-            period,
-            beats: None,
-        });
+        swept.push(period);
         period = period.mul_f64(SWEEP_STEP);
     }
 
     swept
 }
 
-fn place(envelope: &Envelope, candidate: &Candidate, phase: Duration) -> (Vec<Duration>, f64) {
-    let reach = candidate.period.mul_f64(WANDER);
-    let mut beats: Vec<Duration> = Vec::new();
-    let mut explained = 0.0;
-    let mut running = candidate.period;
-    let mut expected = phase;
-
-    while expected <= envelope.span() && candidate.beats.is_none_or(|count| beats.len() < count) {
-        let (at, strength) = strongest_near(envelope, expected, reach);
-        if let Some(last) = beats.last() {
-            running = following(running, at - *last);
-        }
-        beats.push(at);
-        explained += f64::from(strength);
-        expected = at + running;
-    }
-
-    (beats, explained)
-}
-
-fn following(running: Duration, taken: Duration) -> Duration {
-    let followed = running.mul_f64(1.0 - FOLLOW) + taken.mul_f64(FOLLOW);
-
-    followed.clamp(briskest(), slowest())
-}
-
-fn strongest_near(envelope: &Envelope, expected: Duration, reach: Duration) -> (Duration, f32) {
-    let hop = envelope.hop();
-    let first = frames_in(expected.saturating_sub(reach), hop);
-    let last = frames_in(expected + reach, hop);
-    let mut strongest = (expected, envelope.at(expected));
-
-    for frame in first..=last {
-        let at = hop * frame;
-        let strength = envelope.at(at);
-        if strength > strongest.1 {
-            strongest = (at, strength);
-        }
-    }
-
-    strongest
-}
-
-fn frames_in(span: Duration, hop: Duration) -> u32 {
-    (span.as_nanos() / hop.as_nanos()) as u32
+fn frames_in(span: Duration, hop: Duration) -> usize {
+    ((span.as_nanos() / hop.as_nanos()) as usize).max(1)
 }
 
 fn preference(period: Duration) -> f64 {
