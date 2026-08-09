@@ -1,0 +1,191 @@
+//! Finding the beats of a take, and which of them begin a bar.
+//!
+//! The facts worth stating are that a click track is found beat for beat with
+//! or without what the looper knows, that the length prior puts a whole number
+//! of beats in the take, that a bar is four beats until something says
+//! otherwise, that a take which speeds up is followed rather than averaged,
+//! and that a take with nothing in it yields nothing rather than a grid over
+//! silence.
+
+use motif::analysis::{Priors, Tracked, track};
+use motif::fixtures::synth::{self, Fixture, SAMPLE_RATE};
+use motif::fixtures::{Drift, Recipe, Score, Texture};
+use std::time::Duration;
+
+const FOUR_FOUR: usize = 4;
+const THREE_FOUR: usize = 3;
+const BARS: usize = 4;
+const MODERATE: f64 = 120.0;
+const BRISK: f64 = 150.0;
+const SHARP: f64 = 1.0;
+const ONE_TO_THE_BEAT: usize = 1;
+const NONE_UNSOUNDED: f64 = 0.0;
+const ON_THE_BEAT: f64 = 0.0;
+const A_BAR_OF_SILENCE: Duration = Duration::from_secs(2);
+
+fn clicks(tempo: f64, meter: usize, drift: Drift) -> Fixture {
+    synth::rendered(
+        "tracked",
+        Recipe {
+            tempo,
+            meter,
+            bars: BARS,
+            drift,
+            texture: Texture::Percussion {
+                sharpness: SHARP,
+                density: ONE_TO_THE_BEAT,
+                dropout: NONE_UNSOUNDED,
+                syncopation: ON_THE_BEAT,
+            },
+        },
+    )
+}
+
+fn heard(fixture: &Fixture) -> impl Iterator<Item = f32> + '_ {
+    fixture
+        .samples()
+        .iter()
+        .map(|sample| f32::from(*sample) / f32::from(i8::MAX))
+}
+
+/// What the looper knows: the take runs to one interval past its last beat,
+/// because the loop wraps to bar one there.
+fn take(fixture: &Fixture) -> Duration {
+    let beats = fixture.beats();
+    let last = beats.last().expect("the fixture has beats").at;
+
+    last + last / (beats.len() as u32 - 1)
+}
+
+fn tracked(fixture: &Fixture, priors: Priors) -> Tracked {
+    track(heard(fixture), SAMPLE_RATE, priors)
+}
+
+fn annotated(fixture: &Fixture) -> Vec<Duration> {
+    fixture.beats().iter().map(|beat| beat.at).collect()
+}
+
+fn scored(fixture: &Fixture, found: &Tracked) -> Score {
+    Score::of(&annotated(fixture), found.beats())
+}
+
+fn intervals(found: &Tracked) -> Vec<Duration> {
+    found
+        .beats()
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .collect()
+}
+
+#[test]
+fn a_click_track_is_found_beat_for_beat() {
+    let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture)).with_meter(FOUR_FOUR),
+    );
+
+    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+}
+
+#[test]
+fn a_click_track_is_found_beat_for_beat_knowing_nothing_about_it() {
+    let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::blind());
+
+    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+}
+
+#[test]
+fn the_take_length_prior_puts_a_whole_number_of_beats_in_the_take() {
+    let fixture = clicks(BRISK, FOUR_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::of_take(take(&fixture)));
+
+    assert_eq!(found.beats().len(), BARS * FOUR_FOUR);
+}
+
+#[test]
+fn beats_come_back_in_the_order_they_fall() {
+    let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::of_take(take(&fixture)));
+
+    assert!(
+        found.beats().windows(2).all(|pair| pair[0] < pair[1]),
+        "{:?} does not rise",
+        found.beats()
+    );
+}
+
+#[test]
+fn a_waltz_starts_a_bar_every_third_beat() {
+    let fixture = clicks(BRISK, THREE_FOUR, Drift::Steady);
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture)).with_meter(THREE_FOUR),
+    );
+    let bars: Vec<Duration> = fixture.beats().iter().filter(|beat| beat.is_downbeat).map(|beat| beat.at).collect();
+
+    assert_eq!(found.beats_per_bar(), THREE_FOUR);
+    assert_eq!(
+        Score::of(&bars, &found.downbeats().collect::<Vec<_>>()).f1(),
+        1.0
+    );
+}
+
+#[test]
+fn every_downbeat_is_one_of_the_beats() {
+    let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture)).with_meter(FOUR_FOUR),
+    );
+
+    assert!(
+        found.downbeats().all(|at| found.beats().contains(&at)),
+        "a downbeat fell where no beat did"
+    );
+    assert_eq!(found.downbeats().count(), BARS);
+}
+
+#[test]
+fn a_bar_is_four_beats_until_something_says_otherwise() {
+    let fixture = clicks(BRISK, THREE_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::of_take(take(&fixture)));
+
+    assert_eq!(found.beats_per_bar(), Priors::ASSUMED_BAR);
+    assert_eq!(Priors::ASSUMED_BAR, FOUR_FOUR);
+}
+
+#[test]
+fn a_bar_of_no_beats_is_not_a_bar() {
+    let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::blind().with_meter(0));
+
+    assert_eq!(found.beats_per_bar(), Priors::ASSUMED_BAR);
+}
+
+#[test]
+fn a_take_with_nothing_in_it_has_no_beats() {
+    let silence = vec![0.0; (A_BAR_OF_SILENCE.as_secs_f64() * f64::from(SAMPLE_RATE)) as usize];
+    let found = track(
+        silence.into_iter(),
+        SAMPLE_RATE,
+        Priors::of_take(A_BAR_OF_SILENCE),
+    );
+
+    assert_eq!(found.beats(), &[] as &[Duration]);
+    assert_eq!(found.downbeats().count(), 0);
+}
+
+#[test]
+fn a_take_that_speeds_up_is_followed_rather_than_averaged() {
+    let fixture = clicks(100.0, FOUR_FOUR, Drift::Ramp { to: 140.0 });
+    let found = tracked(&fixture, Priors::of_take(take(&fixture)));
+    let intervals = intervals(&found);
+    let (first, last) = (intervals[0], intervals[intervals.len() - 1]);
+
+    assert!(
+        last < first,
+        "the grid did not speed up: {first:?} then {last:?}"
+    );
+}
