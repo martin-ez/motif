@@ -34,7 +34,13 @@ fn subdivided(tempo: f64, meter: usize) -> Fixture {
 }
 
 fn syncopated(tempo: f64, meter: usize) -> Fixture {
-    struck(tempo, meter, Drift::Steady, ONE_TO_THE_BEAT, HALF_OFF_THE_BEAT)
+    struck(
+        tempo,
+        meter,
+        Drift::Steady,
+        ONE_TO_THE_BEAT,
+        HALF_OFF_THE_BEAT,
+    )
 }
 
 fn struck(tempo: f64, meter: usize, drift: Drift, density: usize, syncopation: f64) -> Fixture {
@@ -99,7 +105,12 @@ fn a_click_track_is_found_beat_for_beat() {
         Priors::of_take(take(&fixture)).with_meter(FOUR_FOUR),
     );
 
-    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
 }
 
 #[test]
@@ -107,7 +118,12 @@ fn a_click_track_is_found_beat_for_beat_knowing_nothing_about_it() {
     let fixture = clicks(MODERATE, FOUR_FOUR, Drift::Steady);
     let found = tracked(&fixture, Priors::blind());
 
-    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
 }
 
 #[test]
@@ -137,7 +153,12 @@ fn a_waltz_starts_a_bar_every_third_beat() {
         &fixture,
         Priors::of_take(take(&fixture)).with_meter(THREE_FOUR),
     );
-    let bars: Vec<Duration> = fixture.beats().iter().filter(|beat| beat.is_downbeat).map(|beat| beat.at).collect();
+    let bars: Vec<Duration> = fixture
+        .beats()
+        .iter()
+        .filter(|beat| beat.is_downbeat)
+        .map(|beat| beat.at)
+        .collect();
 
     assert_eq!(found.beats_per_bar(), THREE_FOUR);
     assert_eq!(
@@ -181,11 +202,7 @@ fn a_bar_of_no_beats_is_not_a_bar() {
 #[test]
 fn a_take_with_nothing_in_it_has_no_beats() {
     let silence = vec![0.0; (A_BAR_OF_SILENCE.as_secs_f64() * f64::from(SAMPLE_RATE)) as usize];
-    let found = track(
-        silence.into_iter(),
-        SAMPLE_RATE,
-        Priors::of_take(A_BAR_OF_SILENCE),
-    );
+    let found = track(silence, SAMPLE_RATE, Priors::of_take(A_BAR_OF_SILENCE));
 
     assert_eq!(found.beats(), &[] as &[Duration]);
     assert_eq!(found.downbeats().count(), 0);
@@ -211,7 +228,12 @@ fn the_bar_count_prior_pins_a_take_that_sounds_twice_to_the_beat() {
     let found = tracked(&fixture, told.with_bars(BARS));
 
     assert_eq!(found.beats().len(), BARS * FOUR_FOUR);
-    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
 }
 
 #[test]
@@ -231,7 +253,12 @@ fn knowing_the_meter_puts_a_whole_number_of_bars_in_the_take() {
         Priors::of_take(take(&fixture)).with_meter(THREE_FOUR),
     );
 
-    assert_eq!(found.beats().len() % THREE_FOUR, 0, "{} beats", found.beats().len());
+    assert_eq!(
+        found.beats().len() % THREE_FOUR,
+        0,
+        "{} beats",
+        found.beats().len()
+    );
 }
 
 #[test]
@@ -244,7 +271,12 @@ fn a_take_played_off_the_beat_keeps_its_pulse() {
             .with_bars(BARS),
     );
 
-    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
 }
 
 #[test]
@@ -263,5 +295,10 @@ fn a_steady_take_does_not_wander_off_its_pulse() {
             .with_bars(BARS),
     );
 
-    assert_eq!(scored(&fixture, &found).f1(), 1.0, "{}", scored(&fixture, &found));
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
 }

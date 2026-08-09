@@ -23,8 +23,8 @@ pub const FASTEST: f64 = 200.0;
 
 const PREFERRED: f64 = 120.0;
 const SPREAD: f64 = 0.9;
-const TIGHTNESS: f64 = 6.0;
-const WANDER: f64 = 0.25;
+const TIGHTNESS: f64 = 10.0;
+const WANDER: f64 = 0.20;
 const SWEEP_STEP: f64 = 1.03;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
@@ -82,8 +82,9 @@ impl Priors {
     ///
     /// Together with a meter this is the whole of the pulse but its phase: the
     /// take holds one known number of beats, so nothing is left to choose
-    /// between a pulse and its own double. A take of no bars is refused, as a
-    /// bar of no beats is.
+    /// between a pulse and its own double, and the grid is laid holding
+    /// exactly that many beats rather than as many as the take has room for.
+    /// A take of no bars is refused, as a bar of no beats is.
     pub fn with_bars(self, bars: usize) -> Self {
         Self {
             bars: (bars > 0).then_some(bars),
@@ -101,7 +102,7 @@ impl Priors {
 
     fn whole_bars(&self, beats: u32) -> bool {
         self.beats_per_bar
-            .is_none_or(|per_bar| beats as usize % per_bar == 0)
+            .is_none_or(|per_bar| (beats as usize).is_multiple_of(per_bar))
     }
 }
 
@@ -141,14 +142,13 @@ impl Tracked {
 
 /// Find the beats of a take, and which of them begin a bar.
 ///
-/// The grid is the path through the onset envelope that best trades landing on
-/// what was played against holding the interval it was placed at, weighed as
-/// Ellis's dynamic-programming beat tracker weighs it: six times the squared
-/// log of the ratio an interval bears to the pulse, over an envelope
-/// normalised by its strongest rise. The pulse itself is chosen under a
-/// log-Gaussian preference for 120 BPM nine tenths of an octave wide, without
-/// which nothing prefers a pulse to its own double. A take that rose nowhere
-/// yields no beats rather than a grid over silence.
+/// The grid is the path through the onset envelope that best trades landing
+/// on what was played against holding the interval it was placed at, as
+/// Ellis's beat tracker weighs it: the squared log of the ratio an interval
+/// bears to the pulse, at a tightness of ten — his six, stiffened against the
+/// development fixtures, where six let a grid slip onto a syncopated
+/// subdivision and back. The pulse is chosen under a log-Gaussian preference
+/// for 120 BPM nine tenths of an octave wide, or nothing prefers its double.
 ///
 /// ```
 /// use motif::analysis::{Priors, track};
@@ -160,11 +160,7 @@ impl Tracked {
 ///
 /// assert_eq!(found.beats().len(), 8);
 /// ```
-pub fn track(
-    samples: impl IntoIterator<Item = f32>,
-    sample_rate: u32,
-    priors: Priors,
-) -> Tracked {
+pub fn track(samples: impl IntoIterator<Item = f32>, sample_rate: u32, priors: Priors) -> Tracked {
     let envelope = Envelope::of(samples, sample_rate);
     let beats = strongest_grid(&envelope, priors).unwrap_or_default();
     let downbeat = bar_phase(&envelope, &beats, priors.bar());
@@ -182,7 +178,11 @@ fn strongest_grid(envelope: &Envelope, priors: Priors) -> Option<Vec<Duration>> 
     let mut strongest: Option<(f64, Vec<Duration>)> = None;
 
     for period in candidates(priors) {
-        let (frames, explained) = best_path(&onsets, frames_in(period, hop));
+        let over = frames_in(period, hop);
+        let (frames, explained) = match priors.counted() {
+            Some(count) => counted_path(&onsets, over, count),
+            None => best_path(&onsets, over),
+        };
         let score = explained * preference(period);
         if score > strongest.as_ref().map_or(0.0, |(best, _)| *best) {
             let beats = frames.into_iter().map(|frame| hop * frame as u32).collect();
@@ -226,6 +226,55 @@ fn best_path(onsets: &[f64], period: usize) -> (Vec<usize>, f64) {
     }
 
     walked_back(onsets, &score, &before)
+}
+
+fn counted_path(onsets: &[f64], period: usize, count: usize) -> (Vec<usize>, f64) {
+    let shortest = period.saturating_sub(wander(period)).max(1);
+    let longest = period + wander(period);
+    let mut score = vec![vec![f64::NEG_INFINITY; onsets.len()]; count + 1];
+    let mut before: Vec<Vec<Option<usize>>> = vec![vec![None; onsets.len()]; count + 1];
+
+    score[1].copy_from_slice(onsets);
+
+    for placed in 2..=count {
+        for frame in 0..onsets.len() {
+            let mut best = f64::NEG_INFINITY;
+            for interval in shortest..=longest.min(frame) {
+                let kept =
+                    score[placed - 1][frame - interval] - TIGHTNESS * regularity(interval, period);
+                if kept > best {
+                    best = kept;
+                    before[placed][frame] = Some(frame - interval);
+                }
+            }
+            score[placed][frame] = best + onsets[frame];
+        }
+    }
+
+    walked_back_counting(onsets, &score, &before, count)
+}
+
+fn walked_back_counting(
+    onsets: &[f64],
+    score: &[Vec<f64>],
+    before: &[Vec<Option<usize>>],
+    count: usize,
+) -> (Vec<usize>, f64) {
+    let last = &score[count];
+    let mut frame = (0..onsets.len()).max_by(|one, other| last[*one].total_cmp(&last[*other]));
+    let mut placed = count;
+    let mut beats = Vec::new();
+    let mut explained = 0.0;
+
+    while let Some(at) = frame {
+        beats.push(at);
+        explained += onsets[at];
+        frame = before[placed][at];
+        placed -= 1;
+    }
+    beats.reverse();
+
+    (beats, explained)
 }
 
 fn wander(period: usize) -> usize {
@@ -294,8 +343,12 @@ fn preference(period: Duration) -> f64 {
 fn bar_phase(envelope: &Envelope, beats: &[Duration], beats_per_bar: usize) -> usize {
     (0..beats_per_bar)
         .max_by(|one, other| {
-            accented(envelope, beats, *one, beats_per_bar)
-                .total_cmp(&accented(envelope, beats, *other, beats_per_bar))
+            accented(envelope, beats, *one, beats_per_bar).total_cmp(&accented(
+                envelope,
+                beats,
+                *other,
+                beats_per_bar,
+            ))
         })
         .unwrap_or_default()
 }

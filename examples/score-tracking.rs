@@ -19,6 +19,8 @@ use std::time::Duration;
 
 const SET: usize = 48;
 
+type Told = fn(&Fixture) -> Priors;
+
 fn heard(fixture: &Fixture) -> impl Iterator<Item = f32> + '_ {
     fixture
         .samples()
@@ -55,7 +57,7 @@ fn banded(report: &Report<Score>) {
 
 fn main() {
     let set = synth::drawn(synth::EVALUATION, SET);
-    let told: [(&str, fn(&Fixture) -> Priors); 4] = [
+    let told: [(&str, Told); 4] = [
         ("blind", |_| Priors::blind()),
         ("length", |fixture| Priors::of_take(take(fixture))),
         ("length + meter", |fixture| {

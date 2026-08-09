@@ -27,9 +27,13 @@ fn silence(length: Duration) -> Vec<f32> {
 }
 
 fn struck(signal: &mut [f32], at: Duration, level: f32) {
-    let alternating = |offset: usize| if offset % 2 == 0 { 1.0 } else { -1.0 };
+    let alternating = |offset: usize| if offset.is_multiple_of(2) { 1.0 } else { -1.0 };
 
-    for (offset, frame) in signal[frames(at)..].iter_mut().take(frames(BURST)).enumerate() {
+    for (offset, frame) in signal[frames(at)..]
+        .iter_mut()
+        .take(frames(BURST))
+        .enumerate()
+    {
         let elapsed = offset as f32 / SAMPLE_RATE as f32;
         *frame = level * (-elapsed / DECAY).exp() * alternating(offset);
     }
@@ -147,7 +151,10 @@ fn strength_at_a_moment_is_the_frame_covering_it() {
     let frame = frames(HALFWAY) / frames(envelope.hop());
 
     assert_eq!(envelope.at(HALFWAY), envelope.strength()[frame]);
-    assert_eq!(envelope.at(HALFWAY + envelope.hop() / 3), envelope.at(HALFWAY));
+    assert_eq!(
+        envelope.at(HALFWAY + envelope.hop() / 3),
+        envelope.at(HALFWAY)
+    );
 }
 
 #[test]
