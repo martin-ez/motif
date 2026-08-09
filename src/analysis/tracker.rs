@@ -27,6 +27,7 @@ const TIGHTNESS: f64 = 10.0;
 const WANDER: f64 = 0.20;
 const SWEEP_STEP: f64 = 1.03;
 const MOST_SWEPT: i32 = 256;
+const MOST_BEATS: u32 = 4_096;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// What a manual looper knows about a take that a beat tracker does not.
@@ -310,13 +311,19 @@ fn candidates(priors: Priors) -> Vec<Duration> {
 }
 
 fn dividing(length: Duration, priors: Priors) -> Vec<Duration> {
-    (1..)
+    (1..=most_beats_in(length))
         .map(|beats| (beats, length / beats))
-        .take_while(|(_, period)| *period >= briskest())
+        .filter(|(_, period)| *period >= briskest())
         .filter(|(_, period)| *period <= slowest())
         .filter(|(beats, _)| priors.whole_bars(*beats))
         .map(|(_, period)| period)
         .collect()
+}
+
+fn most_beats_in(length: Duration) -> u32 {
+    let beats = length.as_secs_f64() / briskest().as_secs_f64();
+
+    (beats as u32).clamp(1, MOST_BEATS)
 }
 
 fn sweeping() -> Vec<Duration> {
