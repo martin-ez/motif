@@ -5,6 +5,7 @@
 
 mod closed_set;
 
+pub mod analysis;
 pub mod audio;
 pub mod device;
 pub mod fixtures;
