@@ -25,6 +25,12 @@ TITLE_MAX="${TRACK_TITLE_MAX:-70}"
 MIN_WRITE_GAP="${TRACK_MIN_WRITE_GAP:-1}"
 STALE_HOURS="${TRACK_STALE_HOURS:-24}"
 
+# The open set every derivation reads, when the selftest is supplying one. Set
+# from a literal here rather than the environment on purpose: sourced from
+# `${...:-}` an exported variable would make `ready` answer off a fixture and
+# report a queue that does not exist.
+ST_FIXTURE=""
+
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
 
@@ -354,9 +360,10 @@ def cycle_nodes:
   | map(.num) | sort;
 def has_cycle: ((cycle_nodes | length) > 0);
 
-# The graph the repository owns. A selftest run opens a real 3-cycle to prove
-# cycle_nodes finds one and holds it open until cleanup, so a check that fails
-# on any cycle anywhere fails every other run started inside that window.
+# The graph the repository owns. A selftest run files a chain of throwaway
+# issues and edits their edges, and a run that dies partway leaves them behind
+# until someone cleans up, so a check that fails on any fault anywhere fails
+# every other run over work it did not create and cannot see.
 # Throwaway issues carry a label saying whose they are, and are nobody elses.
 def repo_own: map(select(_has("track:selftest") | not));
 
@@ -427,7 +434,10 @@ def submitted:
 # `find` matches locally over fetch_all for the same reason readiness is derived
 # locally — the legacy index answers `is:blocked` wrongly with a 200, and there is
 # no reason to trust its title matching any further than that.
-fetch_open()  { gh issue list --state open --limit "$LIST_LIMIT" --json "$ISSUE_FIELDS"; }
+fetch_open()  {
+  if [ -n "$ST_FIXTURE" ]; then printf '%s' "$ST_FIXTURE"; return 0; fi
+  gh issue list --state open --limit "$LIST_LIMIT" --json "$ISSUE_FIELDS"
+}
 fetch_all()   { gh issue list --state all  --limit "$LIST_LIMIT" --json "$ISSUE_FIELDS"; }
 fetch_issue() { gh issue view "$1" --json "$ISSUE_FIELDS,body,comments"; }
 
@@ -1711,20 +1721,57 @@ st_lock_recovers() {
   return "$rc"
 }
 
-# Three issues in a 3-cycle, shaped as `gh issue list` returns them and carrying
-# the labels given as JSON. A cycle among the repository's own issues has to stay
-# a doctor failure, and filing one to prove it would leave a real fault in a real
-# graph for every other run to read.
+# An open set shaped as `gh issue list` returns it, built from compact rows so a
+# graph states only what it is about. A row is {n}, plus any of: size, wip, blk
+# (numbers that block it), sub (its open children), par (its parent), closed,
+# lbl (extra labels), trunc (more relations than gh returned).
+#
+# `blocking` is inverted from `blk` over the set rather than given, so a fixture
+# cannot state an edge in one direction only -- `unblocks` reads that side, and
+# a hand-written half-edge would sort `ready` by a number no real payload can
+# hold. Everything else the derivations touch is spelled out, because a default
+# that happens to suit today's assertion is one the next reader has to go and
+# discover.
+st_fixture() {   # st_fixture <rows-json>
+  jq -cn --argjson rows "$1" '
+    def relation($ns; $extra):
+      {totalCount: (($ns | length) + $extra),
+       nodes: [$ns[] | {number: ., state: "OPEN"}]};
+    (INDEX($rows[]; .n | tostring)) as $by
+    | $rows
+    | map((.n) as $me
+        | ([$rows[] | select((.blk // []) | index($me)) | .n]) as $blocking
+        | (if .trunc then 1 else 0 end) as $extra
+        | { number: $me,
+            title: "fixture \($me)",
+            state: (if .closed then "CLOSED" else "OPEN" end),
+            url: "",
+            labels: ([{name: "area:infra"}, {name: "kind:chore"}]
+                     + (if .size then [{name: "size:\(.size)"}] else [] end)
+                     + (if .wip then [{name: "wip"}] else [] end)
+                     + ((.lbl // []) | map({name: .}))),
+            blockedBy:  relation((.blk // []); $extra),
+            blocking:   relation($blocking; 0),
+            subIssues:  relation((.sub // []); 0),
+            subIssuesSummary: {total: ((.sub // []) | length), completed: 0},
+            parent: (if .par == null then null
+                     else {number: .par,
+                           title: "fixture \(.par)",
+                           state: (if ($by[.par | tostring].closed // false)
+                                   then "CLOSED" else "OPEN" end)} end) })'
+}
+
+# Three issues in a 3-cycle, carrying the labels given as JSON. A cycle among
+# the repository's own issues has to stay a doctor failure, and filing one to
+# prove it would leave a real fault in a real graph for every other run to read.
 st_cycle_fixture() {   # st_cycle_fixture <labels-json>
-  jq -cn --argjson l "$1" '
-    [ {number: 9000, blk: null, lbl: []},
-      {number: 9001, blk: 9003, lbl: $l},
-      {number: 9002, blk: 9001, lbl: $l},
-      {number: 9003, blk: 9002, lbl: $l} ]
-    | map({ number: .number, title: "selftest cycle fixture", state: "OPEN",
-            url: "", labels: .lbl,
-            blockedBy: (if .blk == null then {totalCount: 0, nodes: []}
-                        else {totalCount: 1, nodes: [{number: .blk, state: "OPEN"}]} end) })'
+  local lbl="$1"
+  st_fixture "$(jq -cn --argjson l "$lbl" '
+    [ {n: 9000, lbl: []},
+      {n: 9001, blk: [9003], lbl: $l},
+      {n: 9002, blk: [9001], lbl: $l},
+      {n: 9003, blk: [9002], lbl: $l} ]
+    | map(.lbl = (.lbl | map(.name)))')"
 }
 
 # Files one throwaway issue under the marker of a second, imaginary run. What
@@ -1790,7 +1837,7 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   esac
 
   local t0 A B C D E F G H I J K L M N P Q R S T U V W1 W2 X1 X2 Y Z
-  local out rc loc adv dt bn ob scratch ids head
+  local out rc rc2 loc adv dt bn ob scratch ids head
   t0="$(date +%s)"
   ST_RUN="$(st_run_id)"
   # Drawn fresh rather than derived from $ST_RUN: anything sharing a prefix with
@@ -1819,6 +1866,92 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_assert "$rc" "a lock with no readable holder is left to the delayed path"
   rc=0; st_lock_recovers || rc=$?
   st_assert "$rc" "lock_acquire takes a lock this run left behind"
+
+  # ------------------------------------------------------------ derivation ---
+  # Everything below is a fact about the shape `gh issue list` returns, so it is
+  # stated as a shape and nothing is filed. A fixture also holds graphs the live
+  # one cannot be asked for: relations gh truncated, and a cycle, which filed for
+  # real is a fault left in a real graph for every other run to read.
+  note "  deriving over fixtures …"
+
+  ST_FIXTURE="$(st_fixture '[
+    {"n": 9101, "size": "s", "sub": [9102]},
+    {"n": 9102, "size": "s", "par": 9101},
+    {"n": 9103, "size": "s", "blk": [9101]},
+    {"n": 9104, "size": "l"},
+    {"n": 9105, "size": "s", "blk": [9101], "trunc": true},
+    {"n": 9106, "size": "s", "wip": true}
+  ]')"
+
+  rc=0; out="$(AS_JSON=1 cmd_ready)" || rc=$?
+  st_assert "$rc" "ready derives a queue from a fixture, with nothing filed"
+  rc=0; printf '%s' "$out" | jq -e 'any(.num == 9102)' >/dev/null || rc=1
+  st_assert "$rc" "ready includes the leaf under an unblocked parent"
+  rc=0; printf '%s' "$out" | jq -e 'all(.num != 9101)' >/dev/null || rc=1
+  st_assert "$rc" "ready excludes a container with an open child"
+  rc=0; printf '%s' "$out" | jq -e 'all(.num != 9103)' >/dev/null || rc=1
+  st_assert "$rc" "ready excludes a blocked issue"
+  rc=0; printf '%s' "$out" | jq -e 'all(.num != 9104)' >/dev/null || rc=1
+  st_assert "$rc" "ready excludes a size:l issue claim would refuse"
+  rc=0; printf '%s' "$out" | jq -e 'all(.num != 9106)' >/dev/null || rc=1
+  st_assert "$rc" "ready excludes an issue another agent holds"
+
+  rc=0; out="$(AS_JSON=0 cmd_ready)" || rc=$?
+  rc2=0; printf '%s' "$out" | grep -q "SPLIT:.*#9104" || rc2=1
+  st_assert "$rc2" "ready names the size:l issue under SPLIT"
+  # Truncation has no live assertion at all: gh returns every relation of an
+  # issue this size, so the case can only be stated as a shape.
+  rc2=0; printf '%s' "$out" | grep -q "TRUNCATED:.*#9105" || rc2=1
+  st_assert "$rc2" "ready flags an issue whose relations gh truncated"
+
+  rc=0; out="$(AS_JSON=1 cmd_blocked)" || rc=$?
+  rc2=0; printf '%s' "$out" \
+    | jq -e 'any(.num == 9103 and (.blockers | index(9101) != null))' >/dev/null || rc2=1
+  st_assert "$rc2" "blocked lists #9103 <- #9101"
+
+  # Inherited readiness, at a depth the live graph is never built to: the leaf
+  # is clear, its parent is clear, and the blocker is two levels up.
+  ST_FIXTURE="$(st_fixture '[
+    {"n": 9201, "size": "s"},
+    {"n": 9202, "size": "l", "blk": [9201]},
+    {"n": 9203, "size": "s", "par": 9202},
+    {"n": 9204, "size": "s", "par": 9203}
+  ]')"
+
+  rc=0; out="$(AS_JSON=1 cmd_ready)" || rc=$?
+  rc2=0; printf '%s' "$out" | jq -e 'all(.num != 9204)' >/dev/null || rc2=1
+  st_assert "$rc2" "ready excludes a leaf gated two levels up"
+  rc=0; out="$(AS_JSON=1 cmd_blocked)" || rc=$?
+  rc2=0; printf '%s' "$out" | jq -e 'any(.num == 9204 and .gated_by == 9202)' >/dev/null || rc2=1
+  st_assert "$rc2" "blocked names the ancestor carrying the blocker, not the blocker"
+  rc2=0; printf '%s' "$out" | jq -e 'any(.num == 9203 and .gated_by == 9202)' >/dev/null || rc2=1
+  st_assert "$rc2" "blocked gates the intermediate parent through the same ancestor"
+
+  # A cycle has to be found while unrelated work is still ready — exactly the
+  # case a naive "no source anywhere" check misses.
+  ST_FIXTURE="$(st_fixture '[
+    {"n": 9301, "size": "s"},
+    {"n": 9302, "size": "s", "blk": [9304]},
+    {"n": 9303, "size": "s", "blk": [9302]},
+    {"n": 9304, "size": "s", "blk": [9303]}
+  ]')"
+
+  # NOTE: the library and the expression must be ONE argument. Passing them as
+  # two makes jq treat the second as an input filename.
+  rc=0; out="$(AS_JSON=1 cmd_graph)" || rc=$?
+  rc2=0; printf '%s' "$out" | jq -e "$JQ_LIB"'cycle_nodes == [9302, 9303, 9304]' \
+    >/dev/null 2>&1 || rc2=1
+  st_assert "$rc2" "cycle_nodes finds the 3-cycle and nothing else"
+
+  # Capture first: piping into `grep -q` closes the pipe early and SIGPIPEs the
+  # producer under `set -o pipefail`.
+  rc=0; out="$(AS_JSON=0 cmd_ready)" || rc=$?
+  rc2=0; printf '%s' "$out" | grep -q "CYCLE:.*#9302" || rc2=1
+  st_assert "$rc2" "ready reports the cycle on stdout"
+  rc2=0; printf '%s' "$out" | grep -q "^  #9301 " || rc2=1
+  st_assert "$rc2" "unrelated work is still ready despite the cycle"
+
+  ST_FIXTURE=""
 
   note "  creating throwaway issues …"
   head="$(st_chain_head)"
@@ -1888,17 +2021,7 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   X2="$ST_NUM"
 
   rc=0; out="$(AS_JSON=1 cmd_ready)" || rc=$?
-  st_assert "$rc" "ready runs with #$A, #$C and #$B filed"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$C" 'any(.num == $n)' >/dev/null || rc=1
-  st_assert "$rc" "ready includes leaf #$C"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$A" 'all(.num != $n)' >/dev/null || rc=1
-  st_assert "$rc" "ready excludes container #$A"
-  rc=0; printf '%s' "$out" | jq -e --argjson n "$B" 'all(.num != $n)' >/dev/null || rc=1
-  st_assert "$rc" "ready excludes blocked #$B"
-
-  rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$B" --argjson a "$A" \
-      'any(.num == $n and (.blockers | index($a) != null))' >/dev/null || rc=1
-  st_assert "$rc" "blocked lists #$B <- #$A"
+  st_assert "$rc" "ready runs against the repository's own open set"
 
   # Readiness is inherited, so a leaf under a blocked epic is not startable even
   # though nothing points at it. This is the whole of the epic ordering: the
@@ -1909,13 +2032,6 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_add "add files a child under gated #$L" \
     -t "selftest child of gated $L" --area infra --kind chore --size s --parent "$L"
   M="$ST_NUM"
-
-  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$M" 'all(.num != $n)' >/dev/null || rc=1
-  st_assert "$rc" "ready excludes #$M under blocked parent #$L"
-
-  rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$M" --argjson l "$L" \
-      'any(.num == $n and .gated_by == $l)' >/dev/null || rc=1
-  st_assert "$rc" "blocked names #$L as what gates #$M"
 
   rc=0; ( MOTIF_AGENT=selftest-3 cmd_claim "$M" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
@@ -2420,45 +2536,15 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
 
   # GitHub rejects a direct 2-cycle server-side but does NOT check transitively,
   # so a 3-cycle is reachable and is what we must detect. Verified 2026-08-03.
-  st_add "add files the first link of the 3-cycle" \
-    -t "selftest cycle D" --area infra --kind chore --size s --parent "$Z"
-  D="$ST_NUM"
-  st_add "add files the second link, behind #$D" \
-    -t "selftest cycle E" --area infra --kind chore --size s --blocked-by "$D" --parent "$Z"
-  E="$ST_NUM"
-  st_add "add files the third link, behind #$E" \
-    -t "selftest cycle F" --area infra --kind chore --size s --blocked-by "$E" --parent "$Z"
-  F="$ST_NUM"
-
-  rc=0; ( cmd_dep "$D" --needs "$F" ) >/dev/null 2>&1 || rc=$?
-  st_assert "$rc" "closed the 3-cycle #$D <- #$F <- #$E <- #$D"
-
-  # The cycle must be found even though unrelated work (#B) is still ready —
-  # exactly the case a naive "no source anywhere" check misses.
-  # NOTE: the library and the expression must be ONE argument. Passing them as
-  # two makes jq treat the second as an input filename.
-  rc=0; out="$(AS_JSON=1 cmd_graph)" || rc=$?
-  printf '%s' "$out" \
-    | jq -e --argjson d "$D" --argjson e "$E" --argjson f "$F" \
-        "$JQ_LIB"'cycle_nodes as $c
-         | ($c | index($d) != null) and ($c | index($e) != null) and ($c | index($f) != null)' \
-        >/dev/null 2>&1 || rc=1
-  st_assert "$rc" "cycle #$D/#$E/#$F detected while #$B is still ready"
-
-  # Capture first: piping into `grep -q` closes the pipe early and SIGPIPEs the
-  # producer under `set -o pipefail`.
-  rc=0; out="$(AS_JSON=0 cmd_ready)" || rc=$?
-  printf '%s' "$out" | grep -q "CYCLE:.*#$D" || rc=1
-  st_assert "$rc" "ready reports the cycle on stdout"
-
-  rc=0; printf '%s' "$out" | grep -q "^  #$B " || rc=1
-  st_assert "$rc" "#$B still listed as ready despite the cycle"
-
-  # This run's 3-cycle is open from here until cleanup, the last quarter of the
-  # run. A gate that fails on any cycle anywhere fails every run started inside
-  # that window, over a fault it did not create and cannot see.
-  rc=0; ( AS_JSON=0 cmd_doctor >/dev/null ) || rc=$?
-  st_assert "$rc" "doctor passes while this run's own 3-cycle is open"
+  # The 3-cycle is derived over a fixture above: filed for real it is a fault
+  # left in the repository's own graph until cleanup, and every run started
+  # inside that window reads it as one of its own.
+  #
+  # What is left here is the half a fixture cannot state — that the server
+  # refuses the direct case at all. It runs over two issues this run already
+  # filed, so proving it costs an edge rather than three more issues.
+  rc=0; ( cmd_dep "$L" --needs "$M" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$rc" "dep points #$L at #$M, leaving the reverse edge a 2-cycle"
 
   rc=0; out="$(st_cycle_fixture '[]' | own_cycle)" || rc=1
   [ "$out" = true ] || rc=1
@@ -2469,7 +2555,7 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_assert "$rc" "a cycle among throwaway issues is not the repository's"
 
   # A direct 2-cycle is refused by the server; the wrapper must surface that.
-  rc=0; ( cmd_dep "$E" --needs "$F" ) >/dev/null 2>&1 || rc=$?
+  rc=0; ( cmd_dep "$M" --needs "$L" ) >/dev/null 2>&1 || rc=$?
   st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "server rejects a direct 2-cycle, wrapper exits non-zero (got $rc)"
 
   # ---------------------------------------------------------- run scoping ---
