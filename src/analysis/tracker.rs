@@ -26,6 +26,7 @@ const SPREAD: f64 = 0.9;
 const TIGHTNESS: f64 = 10.0;
 const WANDER: f64 = 0.20;
 const SWEEP_STEP: f64 = 1.03;
+const MOST_SWEPT: i32 = 256;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// What a manual looper knows about a take that a beat tracker does not.
@@ -319,15 +320,15 @@ fn dividing(length: Duration, priors: Priors) -> Vec<Duration> {
 }
 
 fn sweeping() -> Vec<Duration> {
-    let mut period = briskest();
-    let mut swept = Vec::new();
+    (0..=swept_steps())
+        .map(|step| briskest().mul_f64(SWEEP_STEP.powi(step)))
+        .collect()
+}
 
-    while period <= slowest() {
-        swept.push(period);
-        period = period.mul_f64(SWEEP_STEP);
-    }
+fn swept_steps() -> i32 {
+    let span = slowest().as_secs_f64() / briskest().as_secs_f64();
 
-    swept
+    (span.log(SWEEP_STEP).floor() as i32).clamp(0, MOST_SWEPT)
 }
 
 fn frames_in(span: Duration, hop: Duration) -> usize {
