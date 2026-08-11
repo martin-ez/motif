@@ -126,10 +126,8 @@ impl TakeWriter {
     pub fn begin(&mut self, buffer: &LoopBuffer, bars: Option<Bars>) {
         let frames = buffer.len().min(self.shared.slots[self.writing].len());
 
-        self.shared.bars[self.writing].store(
-            bars.map_or(UNCOUNTED, Bars::to_bits),
-            Ordering::Relaxed,
-        );
+        self.shared.bars[self.writing]
+            .store(bars.map_or(UNCOUNTED, Bars::to_bits), Ordering::Relaxed);
         self.crossing = (frames > 0).then_some(Crossing { frames, cursor: 0 });
     }
 
