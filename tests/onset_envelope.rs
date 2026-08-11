@@ -174,7 +174,7 @@ fn a_hop_carries_the_mean_energy_of_its_samples_rather_than_the_total() {
 
     let first_rise = |rate: u32| {
         let held = vec![HELD_AT; (rate / A_TENTH) as usize];
-        let envelope = Envelope::of(held.into_iter(), rate);
+        let envelope = Envelope::of(held, rate);
 
         envelope.strength()[0]
     };
