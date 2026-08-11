@@ -52,7 +52,7 @@ pub enum Texture {
     },
     /// A chord to the bar, struck on every beat.
     Chords,
-    /// A monophonic line.
+    /// A monophonic line: a fixed phrase, as much of it as the beats carry.
     Line,
 }
 

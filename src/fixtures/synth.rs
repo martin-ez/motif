@@ -568,6 +568,7 @@ fn a_monophonic_line(beats: &[Beat]) -> Content {
     let lasting = lasting(beats);
     let notes: Vec<Note> = LINE
         .into_iter()
+        .take_while(|(index, length, _)| index + length <= lasting.len())
         .map(|(index, length, pitch)| Note {
             pitch,
             onset: beats[index].at,
