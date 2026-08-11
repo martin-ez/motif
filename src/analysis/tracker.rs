@@ -209,7 +209,7 @@ fn normalised(envelope: &Envelope) -> Option<Vec<f64>> {
 
 fn best_path(onsets: &[f64], period: usize) -> (Vec<usize>, f64) {
     let shortest = period.saturating_sub(wander(period)).max(1);
-    let longest = period + wander(period);
+    let longest = period.saturating_add(wander(period));
     let mut score = vec![0.0; onsets.len()];
     let mut before: Vec<Option<usize>> = vec![None; onsets.len()];
 
@@ -232,7 +232,7 @@ fn best_path(onsets: &[f64], period: usize) -> (Vec<usize>, f64) {
 
 fn counted_path(onsets: &[f64], period: usize, count: usize) -> Vec<usize> {
     let shortest = period.saturating_sub(wander(period)).max(1);
-    let longest = period + wander(period);
+    let longest = period.saturating_add(wander(period));
     let mut score = vec![vec![f64::NEG_INFINITY; onsets.len()]; count + 1];
     let mut before: Vec<Vec<Option<usize>>> = vec![vec![None; onsets.len()]; count + 1];
 

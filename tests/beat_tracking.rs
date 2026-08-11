@@ -360,3 +360,48 @@ fn a_take_played_off_the_beat_is_not_counted_in_its_subdivisions() {
 
     assert_eq!(found.beats().len(), BARS * FOUR_FOUR);
 }
+
+#[test]
+fn a_waltz_told_only_its_length_is_found_beat_for_beat() {
+    const UNHURRIED: f64 = 90.0;
+
+    let fixture = clicks(UNHURRIED, THREE_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::of_take(take(&fixture)));
+
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
+}
+
+#[test]
+fn a_take_that_breathes_is_found_against_the_bars_it_was_told() {
+    const FIVE_FOUR: usize = 5;
+    const UNHURRIED: f64 = 90.0;
+    const PUSHED_AND_PULLED: f64 = 0.15;
+
+    let fixture = struck(
+        UNHURRIED,
+        FIVE_FOUR,
+        Drift::Rubato {
+            pull: PUSHED_AND_PULLED,
+        },
+        ONE_TO_THE_BEAT,
+        ON_THE_BEAT,
+    );
+    let found = tracked(
+        &fixture,
+        Priors::of_take(take(&fixture))
+            .with_meter(FIVE_FOUR)
+            .with_bars(BARS),
+    );
+
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
+}
