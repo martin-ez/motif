@@ -302,3 +302,36 @@ fn a_steady_take_does_not_wander_off_its_pulse() {
         scored(&fixture, &found)
     );
 }
+
+#[test]
+fn a_bar_begins_where_the_take_is_accented_rather_than_where_it_starts() {
+    const A_BEAT: usize = SAMPLE_RATE as usize;
+    const STRUCK_FOR: usize = 100;
+    const ACCENTED: f32 = 0.9;
+    const UNACCENTED: f32 = 0.3;
+    const SECOND_OF_THE_BAR: usize = 1;
+    const EIGHT_BEATS: Duration = Duration::from_secs(8);
+
+    let played = |frame: usize| {
+        let accented = (frame / A_BEAT) % FOUR_FOUR == SECOND_OF_THE_BAR;
+        match (frame % A_BEAT < STRUCK_FOR, accented) {
+            (false, _) => 0.0,
+            (true, true) => ACCENTED,
+            (true, false) => UNACCENTED,
+        }
+    };
+    let found = track(
+        (0..A_BEAT * 8).map(played),
+        SAMPLE_RATE,
+        Priors::of_take(EIGHT_BEATS)
+            .with_meter(FOUR_FOUR)
+            .with_bars(2),
+    );
+
+    assert_eq!(
+        found.downbeats().next(),
+        Some(Duration::from_secs(SECOND_OF_THE_BAR as u64)),
+        "bars began at {:?}",
+        found.downbeats().collect::<Vec<_>>()
+    );
+}
