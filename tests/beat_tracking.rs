@@ -335,3 +335,28 @@ fn a_bar_begins_where_the_take_is_accented_rather_than_where_it_starts() {
         found.downbeats().collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_take_off_the_preferred_tempo_is_not_tracked_at_twice_its_pulse() {
+    const UNDER_PREFERRED: f64 = 100.0;
+
+    let fixture = clicks(UNDER_PREFERRED, FOUR_FOUR, Drift::Steady);
+    let found = tracked(&fixture, Priors::blind());
+
+    assert_eq!(
+        scored(&fixture, &found).f1(),
+        1.0,
+        "{}",
+        scored(&fixture, &found)
+    );
+}
+
+#[test]
+fn a_take_played_off_the_beat_is_not_counted_in_its_subdivisions() {
+    const BETWEEN_THE_TWO: f64 = 130.0;
+
+    let fixture = syncopated(BETWEEN_THE_TWO, FOUR_FOUR);
+    let found = tracked(&fixture, Priors::of_take(take(&fixture)));
+
+    assert_eq!(found.beats().len(), BARS * FOUR_FOUR);
+}
