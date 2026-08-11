@@ -1890,7 +1890,7 @@ Or name one run's marker:  scripts/track.sh selftest --clean <marker> --yes"
 Re-run with:  scripts/track.sh selftest --yes" ;;
   esac
 
-  local t0 A B C D E F G H I J K L M N P Q R S T U V W1 W2 X1 X2 Y Z
+  local t0 A B C D E F G H J K L M N Q R S T U V X1 X2 Y Z
   local out rc rc2 loc adv dt bn ob scratch ids head now
   t0="$(date +%s)"
   ST_RUN="$(st_run_id)"
@@ -2042,8 +2042,9 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_add "add files a size:l epic off closed #$head, with no parent" \
     -t "selftest root epic" --area infra --kind chore --size l --blocked-by "$head"
   Z="$ST_NUM"
-  # Every issue below hangs off $Z. Empty, they would all be refused for the
-  # want of a parent, and one real failure would read as forty.
+  # Nearly everything below hangs off $Z, directly or through something that
+  # does. Empty, those would all be refused for the want of a parent, and one
+  # real failure would read as most of the run.
   [ -n "$Z" ] || die "selftest: the root epic was not created — nothing below can run."
 
   # Readiness is inherited, so an issue filed with no parent is startable ahead
@@ -2233,34 +2234,6 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   rc=0; AS_JSON=1 cmd_show "$C" | jq -e '.state == "CLOSED" and (.wip | not)' >/dev/null || rc=1
   st_assert "$rc" "done closes #$C and clears wip"
 
-  # The merge path. `tracking.yml` sets MOTIF_AGENT to the head ref, which is
-  # the agent id `start` derived the branch from, so it matches the claim on
-  # the issue the branch was started from and no other. Every later number on
-  # a `Tracks` line therefore reaches `done` held by nobody -- and refusing
-  # those leaves the run red and the issue open for a second agent to rebuild.
-  st_add "add files the issue a merge settles for nobody" \
-    -t "selftest unheld at merge" --area infra --kind chore --size s --parent "$Z"
-  W1="$ST_NUM"
-  rc=0; ( MOTIF_AGENT=selftest-merge cmd_done "$W1" ) >/dev/null || rc=$?
-  st_assert "$rc" "done settles unheld #$W1, the way a merge reaches it"
-  rc=0; AS_JSON=1 cmd_show "$W1" | jq -e '.state == "CLOSED"' >/dev/null || rc=1
-  st_assert "$rc" "done closes unheld #$W1"
-
-  # The half that must not move with it: what the claim check is for is one
-  # agent not closing another's work, and that is a held issue, not an unheld
-  # one. `release` draws the same line on the unmerged path.
-  st_add "add files the issue another agent holds" \
-    -t "selftest held elsewhere at done" --area infra --kind chore --size s --parent "$Z"
-  W2="$ST_NUM"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$W2" ) >/dev/null || rc=$?
-  st_assert "$rc" "claim #$W2 as the agent that holds it"
-  rc=0; ( MOTIF_AGENT=selftest-2 cmd_done "$W2" ) >/dev/null 2>&1 || rc=$?
-  st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "done still refuses #$W2 held by another agent (got $rc)"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$W2" ) >/dev/null || rc=$?
-  st_assert "$rc" "release returns #$W2 to nobody"
-  rc=0; ( MOTIF_AGENT=selftest-merge cmd_release "$W2" ) >/dev/null || rc=$?
-  st_assert "$rc" "release settles unheld #$W2, the way an unmerged close reaches it"
-
   # The reason find exists: a duplicate check that cannot see closed issues is
   # exactly the check that lets a closed issue be filed again.
   rc=0; out="$(AS_JSON=1 cmd_find "selftest child of")" || rc=$?
@@ -2283,27 +2256,64 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$M" 'any(.num == $n)' >/dev/null || rc=1
   st_assert "$rc" "#$M becomes ready once the ancestor gating it is unblocked"
 
-  # An issue with two blockers must not be announced when only one closes:
-  # the caller would claim it and get a fatal exit 1.
+  # The merge path, and the gate behind two blockers, on #$K -- which the
+  # section above handed back open and unheld. `tracking.yml` sets MOTIF_AGENT
+  # to the head ref, which is the agent id `start` derived the branch from, so
+  # it matches the claim on the issue the branch was started from and no other.
+  # Every later number on a `Tracks` line therefore reaches `done` held by
+  # nobody -- and refusing those leaves the run red and the issue open for a
+  # second agent to rebuild.
+  #
+  # The half that must not move with it: what the claim check is for is one
+  # agent not closing another's work, and that is a held issue, not an unheld
+  # one. `release` draws the same line on the unmerged path. #$K leaves this
+  # open and unheld, the way it arrived.
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$K" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$K as the agent that holds it"
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_done "$K" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" != 0 ] && echo 0 || echo 1)" "done still refuses #$K held by another agent (got $rc)"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$K" ) >/dev/null || rc=$?
+  st_assert "$rc" "release returns #$K to nobody"
+  rc=0; ( MOTIF_AGENT=selftest-merge cmd_release "$K" ) >/dev/null || rc=$?
+  st_assert "$rc" "release settles unheld #$K, the way an unmerged close reaches it"
+
+  # An issue with two blockers must not be announced when only one closes: the
+  # caller would claim it and get a fatal exit 1. #$K stands behind them rather
+  # than a third issue filed to be pointed at, borrowed for the two closes and
+  # handed back with both edges dropped. `claim` refuses a blocked issue, which
+  # is why the borrow above runs before the edges go on and not after.
+  #
+  # #$G is closed by an agent holding nothing, which is the merge's own half of
+  # the path above: a squash merge reaches every number on a `Tracks` line that
+  # way, and a close that refused them would leave the run red.
   st_add "add files the first of two blockers" \
     -t "selftest gate G" --area infra --kind chore --size s --parent "$Z"
   G="$ST_NUM"
   st_add "add files the second of two blockers" \
     -t "selftest gate H" --area infra --kind chore --size s --parent "$Z"
   H="$ST_NUM"
-  st_add "add files an issue needing both #$G and #$H" \
-    -t "selftest needs G and H" --area infra --kind chore --size s --blocked-by "$G,$H" --parent "$Z"
-  I="$ST_NUM"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$G" ) >/dev/null || rc=$?
-  st_assert "$rc" "claim #$G"
-  rc=0; out="$(MOTIF_AGENT=selftest-1 cmd_done "$G")" || rc=$?
-  printf '%s' "$out" | grep -q "unblocked:" && rc=1
-  st_assert "$rc" "done #$G stays quiet: #$I still needs #$H"
+  rc=0; ( cmd_dep "$K" --needs "$G" --needs "$H" ) >/dev/null || rc=$?
+  st_assert "$rc" "dep puts #$K behind both #$G and #$H"
+  rc=0; AS_JSON=1 cmd_show "$K" | jq -e --argjson g "$G" --argjson h "$H" \
+    '.blockers | (index($g) != null) and (index($h) != null)' >/dev/null || rc=1
+  st_assert "$rc" "#$K stands behind both edges, not just the last one written"
+  rc=0; out="$(MOTIF_AGENT=selftest-merge cmd_done "$G")" || rc=$?
+  st_assert "$rc" "done settles unheld #$G, the way a merge reaches it"
+  rc=0; AS_JSON=1 cmd_show "$G" | jq -e '.state == "CLOSED"' >/dev/null || rc=1
+  st_assert "$rc" "done closes unheld #$G"
+  rc=0; printf '%s' "$out" | grep -q "unblocked:" && rc=1
+  st_assert "$rc" "done #$G stays quiet: #$K still needs #$H"
   rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$H" ) >/dev/null || rc=$?
   st_assert "$rc" "claim #$H"
   rc=0; out="$(MOTIF_AGENT=selftest-1 cmd_done "$H")" || rc=$?
-  printf '%s' "$out" | grep -q "unblocked: #$I" || rc=1
-  st_assert "$rc" "done #$H reports #$I once its last blocker closes"
+  printf '%s' "$out" | grep -q "unblocked: #$K" || rc=1
+  st_assert "$rc" "done #$H reports #$K once its last blocker closes"
+  rc=0; ( cmd_dep "$K" --drop-needs "$G" --drop-needs "$H" ) >/dev/null || rc=$?
+  st_assert "$rc" "dep hands #$K back with both edges dropped"
+  rc=0; AS_JSON=1 cmd_show "$K" | jq -e --argjson g "$G" --argjson h "$H" \
+    '(.blockers + .done_deps) | (index($g) == null) and (index($h) == null)' \
+    >/dev/null || rc=1
+  st_assert "$rc" "#$K carries neither edge once both are dropped"
 
   # size:l is refused by claim, so it must not be offered by ready.
   st_add "add files a size:l epic off closed #$head" \
@@ -2366,6 +2376,94 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_assert "$rc" "add's refusal leaves blocked epic #$N unmarked"
   rc=0; printf '%s' "$out" | grep -q "▸ #$J  " || rc=1
   st_assert "$rc" "add's refusal marks startable epic #$J"
+
+  # Between a draft pull request going up and a human merging it, the work is
+  # finished and the issue is still held. "Leave it alone" and "there is nothing
+  # left to do here" are opposite answers, so they must not read the same.
+  #
+  # The board is read off #$J rather than an epic filed to be read off. It is
+  # unblocked, so its children are claimable, and it is childless until the
+  # `dep` moves below hand it #$K and #$R -- which is why this sits here and not
+  # after them: the board is an assertion about the whole of an epic's children,
+  # so it has to be the whole of them.
+  st_add "add files the child that will be submitted" \
+    -t "selftest submitted child of $J" --area infra --kind chore --size s --parent "$J"
+  S="$ST_NUM"
+  st_add "add files a child waiting behind #$S" \
+    -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$J" --blocked-by "$S"
+  T="$ST_NUM"
+  st_add "add files a ready child under #$J" \
+    -t "selftest ready child of $J" --area infra --kind chore --size s --parent "$J"
+  U="$ST_NUM"
+  st_add "add files a child to be claimed under #$J" \
+    -t "selftest claimed child of $J" --area infra --kind chore --size s --parent "$J"
+  V="$ST_NUM"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$S before submitting it"
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_claim "$V" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$V as a second agent"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null || rc=$?
+  st_assert "$rc" "submit puts #$S into review"
+
+  rc=0; AS_JSON=1 cmd_show "$S" \
+    | jq -e '.review and .wip and .submit.pr == 4242' >/dev/null || rc=1
+  st_assert "$rc" "show reports #$S in review on #4242, and still claimed"
+
+  # Work is unblocked when its blocker reaches main, not when a draft exists.
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$T" 'all(.num != $n)' >/dev/null || rc=1
+  st_assert "$rc" "ready still excludes #$T behind submitted #$S"
+
+  rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$T" --argjson s "$S" \
+      'any(.num == $n and (.blockers | index($s) != null))' >/dev/null || rc=1
+  st_assert "$rc" "blocked still lists #$T <- #$S"
+
+  rc=0; out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)" || rc=$?
+  printf '%s' "$out" | jq -e --argjson n "$S" \
+      'any(.num == $n and .review)' >/dev/null || rc=1
+  st_assert "$rc" "mine separates submitted #$S from work still being built"
+
+  rc=0; out="$(AS_JSON=1 cmd_plan)" || rc=$?
+  st_assert "$rc" "plan runs with #$S in review under #$J"
+  rc=0; printf '%s' "$out" | jq -e --argjson j "$J" --argjson s "$S" '
+    any(.num == $j and (.children | any(.num == $s and .stance == "review")))' >/dev/null || rc=1
+  st_assert "$rc" "plan carries #$S under #$J as in review"
+
+  rc=0; printf '%s' "$out" \
+    | jq -e --argjson j "$J" --argjson s "$S" --argjson t "$T" \
+           --argjson u "$U" --argjson v "$V" '
+        any(.num == $j and ([.children[].num] == [$u, $v, $s, $t]))' >/dev/null || rc=1
+  st_assert "$rc" "plan boards #$J ready, claimed, review, waiting — not by number"
+
+  # An epic reading n/n done while nothing has reached main is the tracker
+  # asserting exactly what `next` forbids an agent from asserting.
+  rc=0; printf '%s' "$out" | jq -e --argjson j "$J" \
+      'any(.num == $j and .review == 1 and .done == 0)' >/dev/null || rc=1
+  st_assert "$rc" "plan counts #$S in review rather than done"
+
+  rc=0; ( MOTIF_AGENT=selftest-2 cmd_submit "$T" ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "submit refuses #$T, which nobody holds (got $rc)"
+
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "release settles submitted #$S"
+  rc=0; AS_JSON=1 cmd_show "$S" | jq -e '(.review | not) and (.wip | not)' >/dev/null || rc=1
+  st_assert "$rc" "release clears review from #$S"
+
+  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$S" 'any(.num == $n)' >/dev/null || rc=1
+  st_assert "$rc" "release returns submitted #$S to ready"
+
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "claim #$S back for the done path"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null || rc=$?
+  st_assert "$rc" "submit #$S again before closing it"
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_done "$S" ) >/dev/null || rc=$?
+  st_assert "$rc" "done settles submitted #$S"
+  rc=0; AS_JSON=1 cmd_show "$S" \
+    | jq -e '.state == "CLOSED" and (.review | not)' >/dev/null || rc=1
+  st_assert "$rc" "done clears review and closes #$S"
+
+  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null 2>&1 || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "submit refuses closed #$S (got $rc)"
 
   # A closed parent is not a parent: the walk stops there, so #$K would be gated
   # by nothing and startable ahead of the chain, and `plan` would list it under
@@ -2493,91 +2591,6 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_assert "$rc" "dep still drops epic #$N out of #$J"
   rc=0; AS_JSON=1 cmd_show "$N" | jq -e '.parent == null' >/dev/null || rc=1
   st_assert "$rc" "show reports epic #$N back at the head of its own chain"
-
-  # Between a draft pull request going up and a human merging it, the work is
-  # finished and the issue is still held. "Leave it alone" and "there is nothing
-  # left to do here" are opposite answers, so they must not read the same.
-  st_add "add files the epic the review board is read off" \
-    -t "selftest review epic" --area infra --kind chore --size l --blocked-by "$head"
-  P="$ST_NUM"
-  st_add "add files the child that will be submitted" \
-    -t "selftest submitted child of $P" --area infra --kind chore --size s --parent "$P"
-  S="$ST_NUM"
-  st_add "add files a child waiting behind #$S" \
-    -t "selftest behind submitted $S" --area infra --kind chore --size s --parent "$P" --blocked-by "$S"
-  T="$ST_NUM"
-  st_add "add files a ready child under #$P" \
-    -t "selftest ready child of $P" --area infra --kind chore --size s --parent "$P"
-  U="$ST_NUM"
-  st_add "add files a child to be claimed under #$P" \
-    -t "selftest claimed child of $P" --area infra --kind chore --size s --parent "$P"
-  V="$ST_NUM"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$S" ) >/dev/null || rc=$?
-  st_assert "$rc" "claim #$S before submitting it"
-  rc=0; ( MOTIF_AGENT=selftest-2 cmd_claim "$V" ) >/dev/null || rc=$?
-  st_assert "$rc" "claim #$V as a second agent"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null || rc=$?
-  st_assert "$rc" "submit puts #$S into review"
-
-  rc=0; AS_JSON=1 cmd_show "$S" \
-    | jq -e '.review and .wip and .submit.pr == 4242' >/dev/null || rc=1
-  st_assert "$rc" "show reports #$S in review on #4242, and still claimed"
-
-  # Work is unblocked when its blocker reaches main, not when a draft exists.
-  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$T" 'all(.num != $n)' >/dev/null || rc=1
-  st_assert "$rc" "ready still excludes #$T behind submitted #$S"
-
-  rc=0; AS_JSON=1 cmd_blocked | jq -e --argjson n "$T" --argjson s "$S" \
-      'any(.num == $n and (.blockers | index($s) != null))' >/dev/null || rc=1
-  st_assert "$rc" "blocked still lists #$T <- #$S"
-
-  rc=0; out="$(MOTIF_AGENT=selftest-1 AS_JSON=1 cmd_mine)" || rc=$?
-  printf '%s' "$out" | jq -e --argjson n "$S" \
-      'any(.num == $n and .review)' >/dev/null || rc=1
-  st_assert "$rc" "mine separates submitted #$S from work still being built"
-
-  rc=0; out="$(AS_JSON=1 cmd_plan)" || rc=$?
-  st_assert "$rc" "plan runs with #$S in review under #$P"
-  rc=0; printf '%s' "$out" | jq -e --argjson p "$P" --argjson s "$S" '
-    any(.num == $p and (.children | any(.num == $s and .stance == "review")))' >/dev/null || rc=1
-  st_assert "$rc" "plan carries #$S under #$P as in review"
-
-  rc=0; printf '%s' "$out" \
-    | jq -e --argjson p "$P" --argjson s "$S" --argjson t "$T" \
-           --argjson u "$U" --argjson v "$V" '
-        any(.num == $p and ([.children[].num] == [$u, $v, $s, $t]))' >/dev/null || rc=1
-  st_assert "$rc" "plan boards #$P ready, claimed, review, waiting — not by number"
-
-  # An epic reading n/n done while nothing has reached main is the tracker
-  # asserting exactly what `next` forbids an agent from asserting.
-  rc=0; printf '%s' "$out" | jq -e --argjson p "$P" \
-      'any(.num == $p and .review == 1 and .done == 0)' >/dev/null || rc=1
-  st_assert "$rc" "plan counts #$S in review rather than done"
-
-  rc=0; ( MOTIF_AGENT=selftest-2 cmd_submit "$T" ) >/dev/null 2>&1 || rc=$?
-  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
-    "submit refuses #$T, which nobody holds (got $rc)"
-
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_release "$S" ) >/dev/null || rc=$?
-  st_assert "$rc" "release settles submitted #$S"
-  rc=0; AS_JSON=1 cmd_show "$S" | jq -e '(.review | not) and (.wip | not)' >/dev/null || rc=1
-  st_assert "$rc" "release clears review from #$S"
-
-  rc=0; AS_JSON=1 cmd_ready | jq -e --argjson n "$S" 'any(.num == $n)' >/dev/null || rc=1
-  st_assert "$rc" "release returns submitted #$S to ready"
-
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_claim "$S" ) >/dev/null || rc=$?
-  st_assert "$rc" "claim #$S back for the done path"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null || rc=$?
-  st_assert "$rc" "submit #$S again before closing it"
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_done "$S" ) >/dev/null || rc=$?
-  st_assert "$rc" "done settles submitted #$S"
-  rc=0; AS_JSON=1 cmd_show "$S" \
-    | jq -e '.state == "CLOSED" and (.review | not)' >/dev/null || rc=1
-  st_assert "$rc" "done clears review and closes #$S"
-
-  rc=0; ( MOTIF_AGENT=selftest-1 cmd_submit "$S" --pr 4242 ) >/dev/null 2>&1 || rc=$?
-  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" "submit refuses closed #$S (got $rc)"
 
   # A whitespace agent id would produce an unmatchable claim marker.
   rc=0; ( MOTIF_AGENT="bad id" cmd_claim "$J" ) >/dev/null 2>&1 || rc=$?
