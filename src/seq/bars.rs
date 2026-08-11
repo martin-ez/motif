@@ -64,7 +64,7 @@ impl Bars {
     }
 
     pub(crate) const fn to_bits(self) -> u32 {
-        ((self.count.get() as u32) << HALF) | self.beats_each.get() as u32
+        ((self.count.get() as u32) << HALF) + self.beats_each.get() as u32
     }
 
     pub(crate) fn from_bits(bits: u32) -> Option<Self> {
