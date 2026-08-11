@@ -59,10 +59,11 @@ So the design analyses **retrospectively**: capture first, analyse afterwards.
 That is not a compromise, it is the more accurate path, and it is worth about
 25–30 percentage points on the metric that matters most.
 
-It works because the loop length is set in bars up front, which means no causal
-model is needed at all — there is a *deadline*, not a latency budget. At four
-bars that is several seconds of thinking time, and once the loop closes, tempo
-becomes exactly derivable (duration ÷ beat count) rather than estimated.
+It works because capture ends before analysis begins: there is a *deadline*, not
+a latency budget, and a loop of a few bars leaves seconds of thinking time. Two
+things a manual looper knows shrink the offline problem further — the take's
+length is exact, since the player closed the loop, and its bar count is stated
+rather than inferred.
 
 ## Design invariants
 

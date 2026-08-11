@@ -33,11 +33,12 @@ const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// What a manual looper knows about a take that a beat tracker does not.
 ///
-/// The player closed the loop, so its length is a fact rather than an
-/// estimate, and a pulse has to divide it into a whole number of beats. How
-/// the take divides into bars is the other half, and nothing in the engine
-/// carries it yet, so both halves of that are optional and
-/// [`ASSUMED_BAR`](Self::ASSUMED_BAR) stands in for the first.
+/// The player closed the loop, so its length is a fact rather than an estimate,
+/// and a pulse has to divide it into a whole number of beats. How the take
+/// divides into bars is the other half, and the player states it — as
+/// [`Bars`](crate::seq::Bars), which is what the engine carries. A take nobody
+/// counted arrives with neither half rather than a likely one, since a guessed
+/// count places downbeats worse than no count at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Priors {
     length: Option<Duration>,

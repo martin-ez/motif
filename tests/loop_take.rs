@@ -6,6 +6,9 @@
 //! it crosses in bounded steps rather than one copy, and that nothing partial
 //! is ever visible.
 //!
+//! What the player states about the take travels with it, since the thread
+//! that analyses it has no other way to learn it.
+//!
 //! The other half is what happens when the player carries on. A take being read
 //! belongs to the reader until it lets go, and the takes published behind it
 //! neither wait for it nor disturb it.
@@ -18,6 +21,7 @@ use std::hint::black_box;
 
 use motif::device::AudioProfile;
 use motif::looper::{FinishedTake, LoopBuffer, TakeWriter, take_handoff};
+use motif::seq::Bars;
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -140,7 +144,16 @@ const A_BLOCK: usize = 4;
 /// Hand `buffer`'s loop across, `handed` frames of it a block, as a callback
 /// given that many frames does, and report how many blocks that took.
 fn cross_in_blocks_of(writer: &mut TakeWriter, buffer: &LoopBuffer, handed: usize) -> usize {
-    writer.begin(buffer);
+    crossing(writer, buffer, handed, None)
+}
+
+fn crossing(
+    writer: &mut TakeWriter,
+    buffer: &LoopBuffer,
+    handed: usize,
+    bars: Option<Bars>,
+) -> usize {
+    writer.begin(buffer, bars);
 
     for advance in 0..ADVANCES_ALLOWED {
         if !writer.advance(buffer, handed) {
@@ -149,6 +162,11 @@ fn cross_in_blocks_of(writer: &mut TakeWriter, buffer: &LoopBuffer, handed: usiz
     }
 
     panic!("the handoff never finished crossing");
+}
+
+/// Hand `buffer`'s loop across a block at a time, counted as `bars`.
+fn cross_counted(writer: &mut TakeWriter, buffer: &LoopBuffer, bars: Option<Bars>) -> usize {
+    crossing(writer, buffer, A_BLOCK, bars)
 }
 
 /// Hand `buffer`'s loop across a block at a time, as the callback does, and
@@ -221,6 +239,42 @@ fn a_take_carries_the_frames_it_crossed_with() {
 }
 
 #[test]
+fn a_take_carries_the_count_it_was_handed_over_with() {
+    let (mut writer, mut reader) = take_handoff(eight_frame_profile());
+    let buffer = recorded(&[0.25, 0.5, 0.75]);
+    let counted = Bars::of(7, 5);
+
+    cross_counted(&mut writer, &buffer, counted);
+
+    let take = reader.claim().expect("the take crossed");
+    assert_eq!(take.bars(), counted);
+}
+
+#[test]
+fn a_take_nobody_counted_crosses_uncounted() {
+    let (mut writer, mut reader) = take_handoff(eight_frame_profile());
+    let buffer = recorded(&[0.25, 0.5, 0.75]);
+
+    cross_counted(&mut writer, &buffer, None);
+
+    let take = reader.claim().expect("the take crossed");
+    assert_eq!(take.bars(), None);
+}
+
+#[test]
+fn the_count_of_a_take_being_read_is_not_the_one_behind_it() {
+    let (mut writer, mut reader) = take_handoff(eight_frame_profile());
+    let first = recorded(&[0.25, 0.5]);
+    let second = recorded(&[0.75, 1.0]);
+
+    cross_counted(&mut writer, &first, Bars::of(7, 5));
+    let take = reader.claim().expect("the first take crossed");
+    cross_counted(&mut writer, &second, Bars::of(2, 3));
+
+    assert_eq!(take.bars(), Bars::of(7, 5));
+}
+
+#[test]
 fn the_layers_of_a_take_cross_summed_into_one_signal() {
     let (mut writer, mut reader) = take_handoff(eight_frame_profile());
     let mut buffer = recorded(&[0.25, 0.5]);
@@ -267,7 +321,7 @@ fn half_a_take_is_not_a_take() {
     let (mut writer, mut reader) = take_handoff(eight_frame_profile());
     let buffer = recorded(&[0.25, 0.5, 0.75, 1.0]);
 
-    writer.begin(&buffer);
+    writer.begin(&buffer, None);
     writer.advance(&buffer, A_BLOCK);
 
     assert!(reader.claim().is_none());
@@ -278,7 +332,7 @@ fn an_abandoned_crossing_hands_over_nothing() {
     let (mut writer, mut reader) = take_handoff(eight_frame_profile());
     let buffer = recorded(&[0.25, 0.5, 0.75, 1.0]);
 
-    writer.begin(&buffer);
+    writer.begin(&buffer, None);
     writer.advance(&buffer, A_BLOCK);
     writer.abandon();
     for _ in 0..ADVANCES_ALLOWED {
@@ -295,7 +349,7 @@ fn an_abandoned_crossing_leaves_the_take_before_it_where_it_was() {
     let abandoned = recorded(&[0.75, 1.0]);
 
     cross(&mut writer, &crossed);
-    writer.begin(&abandoned);
+    writer.begin(&abandoned, None);
     writer.advance(&abandoned, A_BLOCK);
     writer.abandon();
 
@@ -414,7 +468,7 @@ fn a_block_of_no_frames_carries_none_of_the_take_across() {
     let (mut writer, mut reader) = take_handoff(profile);
     let buffer = full_loop(profile);
 
-    writer.begin(&buffer);
+    writer.begin(&buffer, None);
     for _ in 0..ADVANCES_ALLOWED {
         assert!(writer.advance(&buffer, 0), "the crossing gave up");
     }
