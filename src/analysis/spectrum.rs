@@ -73,10 +73,14 @@ impl Transform {
         }
 
         Some(
-            (0..=self.window / 2)
+            (0..=self.nyquist())
                 .map(|bin| real[bin].hypot(imaginary[bin]))
                 .collect(),
         )
+    }
+
+    fn nyquist(&self) -> usize {
+        self.twiddles.len()
     }
 
     fn butterflies(&self, span: usize, real: &mut [f32], imaginary: &mut [f32]) {

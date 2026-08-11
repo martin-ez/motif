@@ -12,10 +12,11 @@ against.
 - `generate-fixtures` — render the synthetic fixture set into `tests/fixtures`.
 - `loopback` — time the round trip out of the output and back into the input.
 - `crossing` — time a finished take crossing off the audio thread.
+- `spectrum` — time the spectral front end's transform over a whole take.
 
 Each one's own module doc says what it does and how to run it. What follows is
-the part of `loopback` and `crossing` that belongs to the repository rather than
-to the programs: the procedures, and the figures they produce.
+the part of `loopback`, `crossing` and `spectrum` that belongs to the repository
+rather than to the programs: the procedures, and the figures they produce.
 
 ## Measuring the round trip
 
@@ -125,3 +126,56 @@ deadline analysis has, because it is spent before analysis can start.
 
 No run on the target has been recorded. A run adds a row, with the median and
 worst from the output above.
+
+## Measuring the transform
+
+The spectral front end reads every frame of a take through a Fourier transform,
+and that transform is hand-rolled rather than bought. What justifies not buying
+one is partly that its output is checkable against its own definition, which
+`tests/spectrum.rs` does, and partly that it is cheap enough that the speed a
+tuned library would buy is speed nothing needs. The second half is a claim about
+a number.
+
+```sh
+cargo run --release --example spectrum
+```
+
+No hardware is needed and nothing is heard. It plays a 110 Hz note over the
+longest loop the target profile allows, transforms every frame of it at each
+window the front end might be built on, and reports what the lot took against
+the budget below.
+
+Run it on the target board rather than on a development machine, for the reason
+`crossing` gives: the `aarch64` corollary makes the laptop the optimistic case.
+`--release` matters as much, since an unoptimised build of a butterfly loop
+measures the build.
+
+It hops a quarter of a window, which is the densest overlap in conventional use
+and so the most expensive frame count a front end built on this would ask for.
+The hop the front end actually uses is not settled here.
+
+The strongest bin is printed beside each figure. A 110 Hz note was played, so a
+transform that is working puts it within one bin of 110 — which at a 1024-sample
+window is 47 Hz wide, and at 8192 is 6 Hz. That column is the run's own check
+that it measured a transform rather than a loop over nothing.
+
+### The budget
+
+**A tenth of the analysis deadline**, which over the profile's longest loop is
+1.6 s. It is stated as a share rather than a duration because both sides of it
+scale with the take: `harness::deadline` is half of what the player looped, and
+the number of frames an STFT takes over a take scales with its length too, so
+the ratio holds whatever was played.
+
+A tenth rather than the whole because the transform is the front end of the
+analysers rather than the work itself. Everything read out of the spectrum is
+still to come, and leaving that nine times the room is what keeps the transform
+from being the reason an answer is late.
+
+### Measurements
+
+| Date | Machine | Window | Frames | Each | Total | Within budget |
+| ---- | ------- | ------ | ------ | ---- | ----- | ------------- |
+
+No run on the target has been recorded. A run adds a row per window, with the
+figures from the output above.
