@@ -177,22 +177,19 @@ pub fn track(samples: impl IntoIterator<Item = f32>, sample_rate: u32, priors: P
 fn strongest_grid(envelope: &Envelope, priors: Priors) -> Option<Vec<Duration>> {
     let onsets = normalised(envelope)?;
     let hop = envelope.hop();
-    let mut strongest: Option<(f64, Vec<Duration>)> = None;
+    candidates(priors)
+        .into_iter()
+        .map(|period| {
+            let over = frames_in(period, hop);
+            let (frames, explained) = match priors.counted() {
+                Some(count) => counted_path(&onsets, over, count),
+                None => best_path(&onsets, over),
+            };
 
-    for period in candidates(priors) {
-        let over = frames_in(period, hop);
-        let (frames, explained) = match priors.counted() {
-            Some(count) => counted_path(&onsets, over, count),
-            None => best_path(&onsets, over),
-        };
-        let score = explained * preference(period);
-        if score > strongest.as_ref().map_or(0.0, |(best, _)| *best) {
-            let beats = frames.into_iter().map(|frame| hop * frame as u32).collect();
-            strongest = Some((score, beats));
-        }
-    }
-
-    strongest.map(|(_, beats)| beats)
+            (explained * preference(period), frames)
+        })
+        .max_by(|(one, _), (other, _)| one.total_cmp(other))
+        .map(|(_, frames)| frames.into_iter().map(|frame| hop * frame as u32).collect())
 }
 
 fn normalised(envelope: &Envelope) -> Option<Vec<f64>> {
@@ -216,14 +213,16 @@ fn best_path(onsets: &[f64], period: usize) -> (Vec<usize>, f64) {
     let mut before: Vec<Option<usize>> = vec![None; onsets.len()];
 
     for frame in 0..onsets.len() {
-        let mut best = 0.0;
-        for interval in shortest..=longest.min(frame) {
-            let kept = score[frame - interval] - TIGHTNESS * regularity(interval, period);
-            if kept > best {
-                best = kept;
-                before[frame] = Some(frame - interval);
-            }
-        }
+        let (from, best) = std::iter::once((None, 0.0))
+            .chain((shortest..=longest.min(frame)).map(|interval| {
+                let kept = score[frame - interval] - TIGHTNESS * regularity(interval, period);
+
+                (Some(frame - interval), kept)
+            }))
+            .max_by(|(_, one), (_, other)| one.total_cmp(other))
+            .unwrap_or((None, 0.0));
+
+        before[frame] = from;
         score[frame] = best + onsets[frame];
     }
 
@@ -240,15 +239,17 @@ fn counted_path(onsets: &[f64], period: usize, count: usize) -> (Vec<usize>, f64
 
     for placed in 2..=count {
         for frame in 0..onsets.len() {
-            let mut best = f64::NEG_INFINITY;
-            for interval in shortest..=longest.min(frame) {
-                let kept =
-                    score[placed - 1][frame - interval] - TIGHTNESS * regularity(interval, period);
-                if kept > best {
-                    best = kept;
-                    before[placed][frame] = Some(frame - interval);
-                }
-            }
+            let (from, best) = (shortest..=longest.min(frame))
+                .map(|interval| {
+                    let kept = score[placed - 1][frame - interval]
+                        - TIGHTNESS * regularity(interval, period);
+
+                    (Some(frame - interval), kept)
+                })
+                .max_by(|(_, one), (_, other)| one.total_cmp(other))
+                .unwrap_or((None, f64::NEG_INFINITY));
+
+            before[placed][frame] = from;
             score[placed][frame] = best + onsets[frame];
         }
     }
