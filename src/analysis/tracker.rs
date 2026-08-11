@@ -28,6 +28,7 @@ const WANDER: f64 = 0.20;
 const SWEEP_STEP: f64 = 1.03;
 const MOST_SWEPT: i32 = 256;
 const MOST_BEATS: u32 = 4_096;
+const MOST_WANDER: usize = 64;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
 /// What a manual looper knows about a take that a beat tracker does not.
@@ -280,7 +281,7 @@ fn walked_back_counting(
 }
 
 fn wander(period: usize) -> usize {
-    ((period as f64 * WANDER).round() as usize).max(1)
+    ((period as f64 * WANDER).round() as usize).clamp(1, MOST_WANDER)
 }
 
 fn regularity(interval: usize, period: usize) -> f64 {
