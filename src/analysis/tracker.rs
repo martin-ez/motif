@@ -372,9 +372,13 @@ fn accented(envelope: &Envelope, beats: &[Duration], phase: usize, beats_per_bar
 }
 
 fn briskest() -> Duration {
-    Duration::from_secs_f64(SECONDS_PER_MINUTE / FASTEST)
+    period_of(FASTEST)
 }
 
 fn slowest() -> Duration {
-    Duration::from_secs_f64(SECONDS_PER_MINUTE / SLOWEST)
+    period_of(SLOWEST)
+}
+
+fn period_of(tempo: f64) -> Duration {
+    Duration::from_secs_f64(SECONDS_PER_MINUTE / tempo)
 }
