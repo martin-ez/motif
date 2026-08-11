@@ -11,10 +11,13 @@ use std::f64::consts::PI;
 
 /// A Fourier transform planned for one window length.
 ///
-/// Radix-2 Cooley-Tukey over a power-of-two window, handing back the magnitude
-/// of each bin. The twiddle factors are planned once, because the front end
-/// runs the same window over every frame of a take and a sine computed per
-/// butterfly would cost more than the transform around it.
+/// Radix-2 Cooley-Tukey over a power-of-two window. The twiddle factors are
+/// planned once, because the front end runs the same window over every frame
+/// and a sine computed per butterfly would cost more than the transform.
+///
+/// Magnitude is all it hands back, so the transform's sense is not fixed:
+/// conjugating every bin would leave the output unchanged, and a caller that
+/// comes to want phase has to settle the sign first.
 ///
 /// ```
 /// use motif::analysis::Transform;
@@ -106,7 +109,7 @@ impl Transform {
 }
 
 fn twiddle(step: usize, window: usize) -> (f32, f32) {
-    let turn = -2.0 * PI * step as f64 / window as f64;
+    let turn = 2.0 * PI * step as f64 / window as f64;
 
     (turn.cos() as f32, turn.sin() as f32)
 }
@@ -120,5 +123,5 @@ fn bit_reversed(frame: &[f32]) -> Vec<f32> {
 }
 
 fn reversing(index: usize, bits: u32) -> usize {
-    (0..bits).fold(0, |reversed, bit| (reversed << 1) | ((index >> bit) & 1))
+    (0..bits).fold(0, |reversed, bit| (reversed << 1) + ((index >> bit) & 1))
 }
