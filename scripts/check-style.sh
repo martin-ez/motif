@@ -246,4 +246,38 @@ else
 	pass "a refusal fails one selftest assertion rather than ending the run"
 fi
 
+# --- scripts/track.sh — a selftest run has an issue budget --------------------
+#
+# Every throwaway issue a run files is a paced create, a paced delete at
+# cleanup, and a read on the way in to check the parent it names is open — so
+# the count is a real share of what a run costs in wall clock and in the
+# account's hourly GraphQL budget. It creeps up one section at a time: a
+# section that needs something to point at files its own rather than borrowing
+# a fixture the run already has, and nothing says otherwise.
+#
+# The number is the rule. Changing it here changes what a run is allowed to
+# cost, so change it only with a section that genuinely needs a shape none of
+# the others hold.
+SELFTEST_ISSUE_BUDGET=20
+found=$(awk -v budget="$SELFTEST_ISSUE_BUDGET" '
+	/^cmd_selftest\(\) \{/ { inside = 1 }
+	inside && /^\}/         { inside = 0 }
+	!inside                  { next }
+	/^[ \t]*#/               { next }
+	/^[ \t]*st_add(_foreign)? / { filed++ }
+	END {
+		if (filed > budget)
+			printf "%d issues filed, and the budget is %d\n", filed, budget
+	}
+' scripts/track.sh)
+if [ -n "$found" ]; then
+	report "cmd_selftest files more throwaway issues than its budget" "$found
+Borrow a fixture the run has already built rather than filing another. A
+section that claims or closes one has to hand it back the way it found it, or
+take its own — a borrowed issue left mutated fails a section further down for a
+reason nothing there can explain."
+else
+	pass "a selftest run files no more issues than its budget"
+fi
+
 exit $status
