@@ -165,3 +165,36 @@ fn an_envelope_of_nothing_has_no_frames() {
     assert_eq!(envelope.span(), Duration::ZERO);
     assert_eq!(envelope.at(Duration::ZERO), 0.0);
 }
+
+#[test]
+fn a_hop_carries_the_mean_energy_of_its_samples_rather_than_the_total() {
+    const HELD_AT: f32 = 0.5;
+    const A_TENTH: u32 = 10;
+    const TWICE_AS_OFTEN: u32 = SAMPLE_RATE * 2;
+
+    let first_rise = |rate: u32| {
+        let held = vec![HELD_AT; (rate / A_TENTH) as usize];
+        let envelope = Envelope::of(held.into_iter(), rate);
+
+        envelope.strength()[0]
+    };
+
+    assert_eq!(
+        first_rise(SAMPLE_RATE),
+        first_rise(TWICE_AS_OFTEN),
+        "the same tone read at two rates rose by different amounts"
+    );
+}
+
+#[test]
+fn the_part_hop_a_take_ends_on_is_measured_like_a_whole_one() {
+    const HELD_AT: f32 = 0.5;
+    const WHOLE_HOPS: usize = 8;
+
+    let per_hop = frames(Envelope::HOP);
+    let held = vec![HELD_AT; per_hop * WHOLE_HOPS + per_hop / 2];
+    let envelope = envelope_of(&held);
+
+    assert_eq!(envelope.strength().len(), WHOLE_HOPS + 1);
+    assert_eq!(envelope.strength().last(), Some(&0.0));
+}
