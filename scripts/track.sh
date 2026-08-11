@@ -25,11 +25,24 @@ TITLE_MAX="${TRACK_TITLE_MAX:-70}"
 MIN_WRITE_GAP="${TRACK_MIN_WRITE_GAP:-1}"
 STALE_HOURS="${TRACK_STALE_HOURS:-24}"
 
+# What one selftest run spends of the account's 5000-point hourly GraphQL
+# budget: 751 points, measured across a full run against this repository. The
+# headroom above that is for the graph, which every `ready` in a run reads whole
+# and which is what the figure scales with, so a run against a larger tracker
+# costs more than the one this was measured on.
+SELFTEST_COST="${TRACK_SELFTEST_COST:-1000}"
+
 # The open set every derivation reads, when the selftest is supplying one. Set
 # from a literal here rather than the environment on purpose: sourced from
 # `${...:-}` an exported variable would make `ready` answer off a fixture and
 # report a queue that does not exist.
 ST_FIXTURE=""
+
+# The rate limit the budget preflight reads, when the selftest is supplying
+# one. A literal here for the same reason as ST_FIXTURE: sourced from the
+# environment, a figure left over in a shell would talk a real run out of
+# starting, or into one the hour cannot pay for.
+ST_RATE=""
 
 die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
@@ -571,6 +584,47 @@ iso_epoch() {
   date -u -d "$1" +%s 2>/dev/null \
     || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null \
     || echo 0
+}
+
+# Points left on this hour's GraphQL budget and the epoch it turns over at, as
+# "<remaining> <reset>". Asking is free: the rate_limit endpoint is charged
+# against no limit, and it is not the issue search index this file's header
+# forbids.
+graphql_budget() {
+  if [ -n "$ST_RATE" ]; then printf '%s' "$ST_RATE"; return 0; fi
+  gh api rate_limit --jq '.resources.graphql | "\(.remaining) \(.reset)"'
+}
+
+# When a rate limit window turns over, as the phrase that follows "resets".
+# Rounded up, because the number is read as how long there is to wait.
+until_reset() {   # until_reset <reset-epoch> <now-epoch>
+  local left at
+  left=$(( $1 - $2 ))
+  if [ "$left" -le 0 ]; then printf 'now'; return 0; fi
+  at="$(date -u -d "@$1" +%H:%MZ 2>/dev/null \
+        || date -u -r "$1" +%H:%MZ 2>/dev/null \
+        || printf '??:??Z')"
+  printf '%s (in %dm)' "$at" $(( (left + 59) / 60 ))
+}
+
+# Refuse a selftest run this hour's budget cannot cover, while it has still
+# filed nothing. A run that exhausts the budget half way through dies where
+# cleanup needs the points it has just spent, so it leaves its throwaway issues
+# behind -- and every assertion after the failure reports against an issue that
+# was never created, which reads exactly like a concurrent run deleting
+# fixtures rather than like a rate limit.
+budget_preflight() {
+  local b remaining reset
+  b="$(graphql_budget)" || b=""
+  remaining="${b%% *}"
+  reset="${b##* }"
+  case "$remaining" in ''|*[!0-9]*) die "cannot read the GraphQL rate limit: '$b'" ;; esac
+  case "$reset"     in ''|*[!0-9]*) die "cannot read the GraphQL rate limit: '$b'" ;; esac
+  [ "$remaining" -ge "$SELFTEST_COST" ] && return 0
+  die "this hour's GraphQL budget will not cover a selftest run.
+$remaining point(s) left, and a run costs about $SELFTEST_COST. Nothing has been filed.
+The budget resets $(until_reset "$reset" "$(date -u +%s)").
+Or set TRACK_SELFTEST_COST to a cost you have measured yourself."
 }
 
 # --------------------------------------------------------------- commands ---
@@ -1837,7 +1891,7 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   esac
 
   local t0 A B C D E F G H I J K L M N P Q R S T U V W1 W2 X1 X2 Y Z
-  local out rc rc2 loc adv dt bn ob scratch ids head
+  local out rc rc2 loc adv dt bn ob scratch ids head now
   t0="$(date +%s)"
   ST_RUN="$(st_run_id)"
   # Drawn fresh rather than derived from $ST_RUN: anything sharing a prefix with
@@ -1848,6 +1902,8 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   note "selftest $ST_RUN"
   note "  preflight: doctor"
   ( AS_JSON=0 cmd_doctor >/dev/null ) || die "doctor failed — fix that first."
+  note "  preflight: budget"
+  budget_preflight
 
   trap 'st_cleanup; st_delete_run "$ST_FOREIGN_RUN" >/dev/null; lock_release' EXIT
   # Without an explicit exit, bash runs the handler and then RESUMES, so a Ctrl-C
@@ -1866,6 +1922,33 @@ Re-run with:  scripts/track.sh selftest --yes" ;;
   st_assert "$rc" "a lock with no readable holder is left to the delayed path"
   rc=0; st_lock_recovers || rc=$?
   st_assert "$rc" "lock_acquire takes a lock this run left behind"
+
+  # The budget preflight, over a rate-limit payload rather than the live one: a
+  # real budget low enough to assert a refusal against is one no run could then
+  # be made from, and the point of the refusal is that it never gets there.
+  note "  budget preflight …"
+  now="$(date -u +%s)"
+  rc=0; out="$( ST_RATE="10 $((now + 1800))"; budget_preflight 2>&1 )" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "selftest refuses a budget a run's cost would outrun (got $rc)"
+  rc=0; printf '%s' "$out" | grep -q "10 point" || rc=1
+  st_assert "$rc" "the refusal says how little is left"
+  rc=0; printf '%s' "$out" | grep -q "in 30m" || rc=1
+  st_assert "$rc" "the refusal names when the window resets"
+  rc=0; ( ST_RATE="$SELFTEST_COST $((now + 1800))"; budget_preflight >/dev/null 2>&1 ) || rc=$?
+  st_assert "$rc" "a budget of exactly a run's cost is one to start on"
+  rc=0; ( ST_RATE="5000 $((now + 1800))"; budget_preflight >/dev/null 2>&1 ) || rc=$?
+  st_assert "$rc" "a full budget starts a run"
+  rc=0; out="$( ST_RATE="not a payload"; budget_preflight 2>&1 )" || rc=$?
+  st_assert "$([ "$rc" = 1 ] && echo 0 || echo 1)" \
+    "a rate limit it cannot read refuses rather than compares (got $rc)"
+
+  rc=0; out="$( until_reset "$((now + 1800))" "$now" )" || rc=$?
+  rc2=0; printf '%s' "$out" | grep -q "(in 30m)" || rc2=1
+  st_assert "$rc2" "a window still open reads as the minutes left on it"
+  rc=0; out="$( until_reset "$((now - 60))" "$now" )" || rc=$?
+  rc2=0; [ "$out" = "now" ] || rc2=1
+  st_assert "$rc2" "a window already turned over reads as now (got '$out')"
 
   # ------------------------------------------------------------ derivation ---
   # Everything below is a fact about the shape `gh issue list` returns, so it is
