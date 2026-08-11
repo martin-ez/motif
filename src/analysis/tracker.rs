@@ -35,9 +35,12 @@ const SECONDS_PER_MINUTE: f64 = 60.0;
 ///
 /// The player closed the loop, so its length is a fact rather than an
 /// estimate, and a pulse has to divide it into a whole number of beats. How
-/// the take divides into bars is the other half, and nothing in the engine
-/// carries it yet, so both halves of that are optional and
-/// [`ASSUMED_BAR`](Self::ASSUMED_BAR) stands in for the first.
+/// the take divides into bars is the other half, and the player states that:
+/// [`Bars`](crate::seq::Bars) is what the engine carries it as. A take nobody
+/// counted arrives with neither half rather than a likely one, since a guessed
+/// count places downbeats worse than no count does, and
+/// [`ASSUMED_BAR`](Self::ASSUMED_BAR) is only what a bar is divided by where
+/// the meter went unstated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Priors {
     length: Option<Duration>,

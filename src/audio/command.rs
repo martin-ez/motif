@@ -19,14 +19,24 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::looper::Transport;
+use crate::seq::Bars;
 
 const TRANSPORT: u64 = 0;
 const MUTED: u64 = 1;
 const GAIN: u64 = 2;
 const UNDO: u64 = 3;
 const CLEAR: u64 = 4;
+const BARS: u64 = 5;
 const TAG_SHIFT: u32 = 32;
 const NO_PAYLOAD: u32 = 0;
+
+fn bars_from_bits(payload: u32) -> Option<Option<Bars>> {
+    if payload == NO_PAYLOAD {
+        return Some(None);
+    }
+
+    Bars::from_bits(payload).map(Some)
+}
 
 /// A change to what the callback does.
 ///
@@ -43,6 +53,11 @@ pub enum Command {
     /// Set the gain applied to the input, as a linear multiplier where `1.0` is
     /// unity and `0.0` is silence.
     SetGain(f32),
+    /// State how the take divides, or that nobody has stated it.
+    ///
+    /// A count nobody gave is carried as one nobody gave: a guessed one tracks
+    /// worse than none at all, so there is no default to fall back on.
+    SetBars(Option<Bars>),
     /// Take the most recent overdub off the loop, keeping the take under it.
     Undo,
     /// Empty the loop, back to nothing recorded.
@@ -58,6 +73,7 @@ impl Command {
             Self::SetTransport(transport) => (TRANSPORT, transport_bits(transport)),
             Self::SetMuted(muted) => (MUTED, u32::from(muted)),
             Self::SetGain(gain) => (GAIN, gain.to_bits()),
+            Self::SetBars(bars) => (BARS, bars.map_or(NO_PAYLOAD, Bars::to_bits)),
             Self::Undo => (UNDO, NO_PAYLOAD),
             Self::Clear => (CLEAR, NO_PAYLOAD),
         };
@@ -77,6 +93,7 @@ impl Command {
             TRANSPORT => transport_from_bits(payload).map(Self::SetTransport),
             MUTED if payload <= 1 => Some(Self::SetMuted(payload != 0)),
             GAIN => Some(Self::SetGain(f32::from_bits(payload))),
+            BARS => bars_from_bits(payload).map(Self::SetBars),
             UNDO if payload == NO_PAYLOAD => Some(Self::Undo),
             CLEAR if payload == NO_PAYLOAD => Some(Self::Clear),
             _ => None,

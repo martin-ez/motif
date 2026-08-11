@@ -24,6 +24,7 @@ use motif::looper::{
     LoopBuffer, LoopEngine, PositionReader, TakeReader, TakeWriter, Transport, WaveformReader,
     position_meter, take_handoff, waveform_meter,
 };
+use motif::seq::Bars;
 
 thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
@@ -303,6 +304,18 @@ fn crossed(engine: &mut Commanded<LoopEngine>, takes: &mut TakeReader) -> Vec<f3
     panic!("no take crossed");
 }
 
+/// Render blocks until a take crosses, and return the count it crossed with.
+fn crossed_counting(engine: &mut Commanded<LoopEngine>, takes: &mut TakeReader) -> Option<Bars> {
+    for _ in 0..BLOCKS_ALLOWED {
+        heard(engine, 4);
+        if let Some(take) = takes.claim() {
+            return take.bars();
+        }
+    }
+
+    panic!("no take crossed");
+}
+
 #[test]
 fn the_allocation_counter_counts_an_allocation() {
     let before = allocations();
@@ -353,6 +366,7 @@ fn an_engine_answers_every_command_there_is() {
     assert!(engine.apply(Command::SetTransport(Transport::Recording)));
     assert!(engine.apply(Command::SetGain(0.5)));
     assert!(engine.apply(Command::SetMuted(true)));
+    assert!(engine.apply(Command::SetBars(Bars::of(4, 4))));
     assert!(engine.apply(Command::Undo));
     assert!(engine.apply(Command::Clear));
 }
@@ -1111,6 +1125,42 @@ fn healing_the_shape_after_an_undo_does_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "healing the shape allocated");
+}
+
+#[test]
+fn a_take_carries_the_count_the_player_stated() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetBars(Bars::of(7, 5)));
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    assert_eq!(crossed_counting(&mut engine, &mut takes), Bars::of(7, 5));
+}
+
+#[test]
+fn a_take_nobody_counted_crosses_uncounted() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    assert_eq!(crossed_counting(&mut engine, &mut takes), None);
+}
+
+#[test]
+fn a_count_the_player_took_back_leaves_the_next_take_uncounted() {
+    let (mut engine, mut sender, mut takes) = engine_handing_takes();
+    press(&mut sender, Command::SetBars(Bars::of(7, 5)));
+    press(&mut sender, Command::SetBars(None));
+    press(&mut sender, Command::SetTransport(Transport::Recording));
+    played(&mut engine, &[0.25, 0.5]);
+
+    press(&mut sender, Command::SetTransport(Transport::Stopped));
+
+    assert_eq!(crossed_counting(&mut engine, &mut takes), None);
 }
 
 #[test]

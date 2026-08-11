@@ -17,16 +17,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crate::device::AudioProfile;
+use crate::seq::Bars;
 
 use super::LoopBuffer;
 
 const SLOT_COUNT: usize = 3;
 const CROSSING_BLOCK_COUNT: usize = 64;
 const UNREAD: usize = SLOT_COUNT;
+const UNCOUNTED: u32 = 0;
 
 struct Shared {
     slots: [Box<[AtomicU32]>; SLOT_COUNT],
     frames: [AtomicUsize; SLOT_COUNT],
+    bars: [AtomicU32; SLOT_COUNT],
     published: AtomicUsize,
 }
 
@@ -57,7 +60,7 @@ struct Crossing {
 /// let mut buffer = LoopBuffer::for_profile(profile);
 /// buffer.record(&[0.25, 0.5]);
 ///
-/// writer.begin(&buffer);
+/// writer.begin(&buffer, None);
 /// for _ in 0..TakeWriter::CROSSING_BLOCKS {
 ///     writer.advance(&buffer, profile.block_size as usize);
 /// }
@@ -74,6 +77,7 @@ pub fn take_handoff(profile: AudioProfile) -> (TakeWriter, TakeReader) {
     let shared = Arc::new(Shared {
         slots: array::from_fn(|_| (0..capacity).map(|_| AtomicU32::new(0)).collect()),
         frames: [const { AtomicUsize::new(0) }; SLOT_COUNT],
+        bars: [const { AtomicU32::new(UNCOUNTED) }; SLOT_COUNT],
         published: AtomicUsize::new(SLOT_COUNT - 1),
     });
 
@@ -119,9 +123,13 @@ impl TakeWriter {
     /// The length is taken now, so what crosses is the take as it stood at the
     /// boundary the player just left. A loop of no frames begins nothing, and
     /// one longer than the handoff was built for crosses as much as fits.
-    pub fn begin(&mut self, buffer: &LoopBuffer) {
+    pub fn begin(&mut self, buffer: &LoopBuffer, bars: Option<Bars>) {
         let frames = buffer.len().min(self.shared.slots[self.writing].len());
 
+        self.shared.bars[self.writing].store(
+            bars.map_or(UNCOUNTED, Bars::to_bits),
+            Ordering::Relaxed,
+        );
         self.crossing = (frames > 0).then_some(Crossing { frames, cursor: 0 });
     }
 
@@ -217,6 +225,7 @@ impl TakeReader {
 
         Some(FinishedTake {
             samples: &self.shared.slots[self.reading][..frames],
+            bars: Bars::from_bits(self.shared.bars[self.reading].load(Ordering::Relaxed)),
         })
     }
 }
@@ -229,12 +238,21 @@ impl TakeReader {
 /// callback.
 pub struct FinishedTake<'a> {
     samples: &'a [AtomicU32],
+    bars: Option<Bars>,
 }
 
 impl FinishedTake<'_> {
     /// How many frames the take holds.
     pub fn frames(&self) -> usize {
         self.samples.len()
+    }
+
+    /// How the player said the take divides, where they said.
+    ///
+    /// Nothing infers it and nothing defaults it: a take nobody counted comes
+    /// back uncounted, because a guessed count tracks worse than no count.
+    pub const fn bars(&self) -> Option<Bars> {
+        self.bars
     }
 
     /// The take's samples, one a frame, from its first to its last.

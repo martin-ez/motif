@@ -14,6 +14,7 @@
 
 use crate::audio::{AudioPath, Command, Gain, StreamConfig, held};
 use crate::device::AudioProfile;
+use crate::seq::Bars;
 
 use super::{LoopBuffer, LoopPosition, PositionWriter, TakeWriter, Transport, WaveformWriter};
 
@@ -62,6 +63,7 @@ pub struct LoopEngine {
     layer_open: bool,
     gain: Gain,
     output: Gain,
+    bars: Option<Bars>,
 }
 
 impl LoopEngine {
@@ -99,6 +101,7 @@ impl LoopEngine {
             layer_open: true,
             gain,
             output,
+            bars: None,
         }
     }
 
@@ -128,7 +131,7 @@ impl LoopEngine {
         if self.writing_the_loop() {
             self.takes.abandon();
         } else {
-            self.takes.begin(&self.buffer);
+            self.takes.begin(&self.buffer, self.bars);
         }
     }
 
@@ -217,6 +220,7 @@ impl AudioPath for LoopEngine {
             Command::SetTransport(transport) => self.move_to(transport),
             Command::SetMuted(muted) => self.output.set_muted(muted),
             Command::SetGain(gain) => self.gain.set_target(gain),
+            Command::SetBars(bars) => self.bars = bars,
             Command::Undo => {
                 if self.buffer.undo() {
                     self.layer_open = false;

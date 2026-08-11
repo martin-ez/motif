@@ -48,7 +48,7 @@ fn worst_case_loop(profile: AudioProfile) -> LoopBuffer {
 /// Cross `buffer`'s take a block at a time, and report what each block took.
 fn time_each_block(writer: &mut TakeWriter, buffer: &LoopBuffer, block: usize) -> Vec<Duration> {
     let mut blocks = Vec::with_capacity(TakeWriter::CROSSING_BLOCKS);
-    writer.begin(buffer);
+    writer.begin(buffer, None);
 
     loop {
         let started = Instant::now();

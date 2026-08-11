@@ -187,7 +187,9 @@ impl AudioPath for InputMonitor {
         match command {
             Command::SetGain(gain) => self.gain.set_target(gain),
             Command::SetMuted(muted) => self.gain.set_muted(muted),
-            Command::SetTransport(_) | Command::Undo | Command::Clear => return false,
+            Command::SetTransport(_) | Command::SetBars(_) | Command::Undo | Command::Clear => {
+                return false;
+            }
         }
 
         true

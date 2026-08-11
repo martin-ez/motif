@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use motif::audio::{Command, SendError, command_channel};
 use motif::looper::Transport;
+use motif::seq::Bars;
 
 /// How long a concurrent test goes without moving a single command before it
 /// decides the queue has stalled. It bounds a run of fruitless attempts rather
@@ -193,11 +194,60 @@ fn a_gain_survives_the_crossing_at_the_edges_of_its_range() {
 }
 
 #[test]
+fn a_bar_count_carries_both_of_its_halves() {
+    let (mut sender, mut receiver) = command_channel(8);
+    let counted = Bars::of(7, 5);
+
+    sender
+        .send(Command::SetBars(counted))
+        .expect("a queue with room accepts a command");
+
+    assert_eq!(receiver.recv(), Some(Command::SetBars(counted)));
+}
+
+#[test]
+fn a_take_nobody_counted_crosses_as_uncounted() {
+    let (mut sender, mut receiver) = command_channel(8);
+
+    sender
+        .send(Command::SetBars(None))
+        .expect("a queue with room accepts a command");
+
+    assert_eq!(receiver.recv(), Some(Command::SetBars(None)));
+}
+
+#[test]
+fn a_bar_count_survives_the_crossing_at_the_edges_of_its_range() {
+    let (mut sender, mut receiver) = command_channel(8);
+    let edges = [Bars::of(1, 1), Bars::of(Bars::MOST, Bars::MOST)];
+
+    for bars in edges {
+        sender
+            .send(Command::SetBars(bars))
+            .expect("a queue with room accepts a command");
+    }
+
+    let received: Vec<Command> = receiver.drain().collect();
+    assert_eq!(received, edges.map(Command::SetBars));
+}
+
+#[test]
+fn a_bar_count_missing_one_of_its_halves_is_refused() {
+    let uncounted = Command::SetBars(None).to_bits();
+    let one_bar_of_one = Command::SetBars(Bars::of(1, 1)).to_bits();
+
+    assert_eq!(Command::from_bits(uncounted + 1), None);
+    assert_eq!(Command::from_bits(one_bar_of_one - 1), None);
+}
+
+#[test]
 fn every_command_round_trips_through_its_bits() {
     let commands = [
         Command::SetTransport(Transport::Overdubbing),
         Command::SetMuted(true),
         Command::SetGain(0.375),
+        Command::SetBars(Bars::of(7, 5)),
+        Command::SetBars(None),
         Command::Undo,
         Command::Clear,
     ];
