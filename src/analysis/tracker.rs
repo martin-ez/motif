@@ -101,11 +101,6 @@ impl Priors {
     fn counted(&self) -> Option<usize> {
         self.bars.map(|bars| bars * self.bar())
     }
-
-    fn whole_bars(&self, beats: u32) -> bool {
-        self.beats_per_bar
-            .is_none_or(|per_bar| (beats as usize).is_multiple_of(per_bar))
-    }
 }
 
 /// The beats found in a take, and where its bars begin.
@@ -306,17 +301,16 @@ fn walked_back(onsets: &[f64], score: &[f64], before: &[Option<usize>]) -> (Vec<
 fn candidates(priors: Priors) -> Vec<Duration> {
     match (priors.length, priors.counted()) {
         (Some(length), Some(beats)) => vec![length / beats as u32],
-        (Some(length), None) => dividing(length, priors),
+        (Some(length), None) => dividing(length),
         (None, _) => sweeping(),
     }
 }
 
-fn dividing(length: Duration, priors: Priors) -> Vec<Duration> {
+fn dividing(length: Duration) -> Vec<Duration> {
     (1..=most_beats_in(length))
         .map(|beats| (beats, length / beats))
         .filter(|(_, period)| *period >= briskest())
         .filter(|(_, period)| *period <= slowest())
-        .filter(|(beats, _)| priors.whole_bars(*beats))
         .map(|(_, period)| period)
         .collect()
 }
