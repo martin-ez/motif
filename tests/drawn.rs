@@ -327,6 +327,48 @@ fn a_softer_attack_takes_longer_to_reach_its_level() {
     );
 }
 
+fn a_line(bars: usize) -> Recipe {
+    Recipe {
+        tempo: 120.0,
+        meter: 4,
+        bars,
+        drift: Drift::Steady,
+        texture: Texture::Line,
+    }
+}
+
+fn pitches(fixture: &Fixture) -> Vec<u8> {
+    fixture.notes().iter().map(|note| note.pitch).collect()
+}
+
+#[test]
+fn a_line_shorter_than_the_phrase_plays_what_its_beats_carry() {
+    let fixture = synth::rendered("halved", a_line(2));
+
+    assert_eq!(pitches(&fixture), [60, 62, 64, 65, 64, 62]);
+}
+
+#[test]
+fn a_line_with_the_phrase_in_full_plays_all_of_it() {
+    let fixture = synth::rendered("whole", a_line(4));
+
+    assert_eq!(
+        pitches(&fixture),
+        [60, 62, 64, 65, 64, 62, 67, 65, 64, 62, 60, 55]
+    );
+}
+
+#[test]
+fn a_short_line_holds_no_note_past_the_end_of_its_grid() {
+    let fixture = synth::rendered("stopped", a_line(2));
+    let beats = fixture.beats();
+    let ends = beats[beats.len() - 1].at + (beats[beats.len() - 1].at - beats[beats.len() - 2].at);
+
+    for note in fixture.notes() {
+        assert!(note.offset <= ends, "{note:?} runs past {ends:?}");
+    }
+}
+
 #[test]
 fn a_drawn_fixture_describes_the_parameters_it_was_drawn_with() {
     let described = synth::drawn(A_SEED, 1)[0].description().to_owned();
