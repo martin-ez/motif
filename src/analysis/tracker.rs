@@ -172,19 +172,25 @@ pub fn track(samples: impl IntoIterator<Item = f32>, sample_rate: u32, priors: P
 fn strongest_grid(envelope: &Envelope, priors: Priors) -> Option<Vec<Duration>> {
     let onsets = normalised(envelope)?;
     let hop = envelope.hop();
-    candidates(priors)
-        .into_iter()
-        .map(|period| {
-            let over = frames_in(period, hop);
-            let (frames, explained) = match priors.counted() {
-                Some(count) => counted_path(&onsets, over, count),
-                None => best_path(&onsets, over),
-            };
+    let placed = |frames: Vec<usize>| -> Vec<Duration> {
+        frames.into_iter().map(|frame| hop * frame as u32).collect()
+    };
 
-            (explained * preference(period), frames)
-        })
-        .max_by(|(one, _), (other, _)| one.total_cmp(other))
-        .map(|(_, frames)| frames.into_iter().map(|frame| hop * frame as u32).collect())
+    match priors.counted() {
+        Some(count) => candidates(priors)
+            .into_iter()
+            .next()
+            .map(|period| placed(counted_path(&onsets, frames_in(period, hop), count))),
+        None => candidates(priors)
+            .into_iter()
+            .map(|period| {
+                let (frames, explained) = best_path(&onsets, frames_in(period, hop));
+
+                (explained * preference(period), frames)
+            })
+            .max_by(|(one, _), (other, _)| one.total_cmp(other))
+            .map(|(_, frames)| placed(frames)),
+    }
 }
 
 fn normalised(envelope: &Envelope) -> Option<Vec<f64>> {
@@ -224,7 +230,7 @@ fn best_path(onsets: &[f64], period: usize) -> (Vec<usize>, f64) {
     walked_back(onsets, &score, &before)
 }
 
-fn counted_path(onsets: &[f64], period: usize, count: usize) -> (Vec<usize>, f64) {
+fn counted_path(onsets: &[f64], period: usize, count: usize) -> Vec<usize> {
     let shortest = period.saturating_sub(wander(period)).max(1);
     let longest = period + wander(period);
     let mut score = vec![vec![f64::NEG_INFINITY; onsets.len()]; count + 1];
@@ -249,30 +255,28 @@ fn counted_path(onsets: &[f64], period: usize, count: usize) -> (Vec<usize>, f64
         }
     }
 
-    walked_back_counting(onsets, &score, &before, count)
+    walked_back_counting(&score, &before, count, onsets.len())
 }
 
 fn walked_back_counting(
-    onsets: &[f64],
     score: &[Vec<f64>],
     before: &[Vec<Option<usize>>],
     count: usize,
-) -> (Vec<usize>, f64) {
+    frames: usize,
+) -> Vec<usize> {
     let last = &score[count];
-    let mut frame = (0..onsets.len()).max_by(|one, other| last[*one].total_cmp(&last[*other]));
+    let mut frame = (0..frames).max_by(|one, other| last[*one].total_cmp(&last[*other]));
     let mut placed = count;
     let mut beats = Vec::new();
-    let mut explained = 0.0;
 
     while let Some(at) = frame {
         beats.push(at);
-        explained += onsets[at];
         frame = before[placed][at];
         placed -= 1;
     }
     beats.reverse();
 
-    (beats, explained)
+    beats
 }
 
 fn wander(period: usize) -> usize {
