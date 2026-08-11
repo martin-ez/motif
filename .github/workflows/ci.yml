@@ -147,7 +147,7 @@ jobs:
       - if: ${{ env.SWEEP == 'true' && steps.changed.outputs.rust != 'false' }}
         run: |
           git diff "origin/${{ github.base_ref }}"...HEAD > /tmp/pr.diff
-          cargo mutants --in-diff /tmp/pr.diff --no-shuffle --cap-lints=true -j 4
+          cargo mutants --in-diff /tmp/pr.diff --no-shuffle --cap-lints=true --minimum-test-timeout 120 -j 4
       - if: failure()
         uses: actions/upload-artifact@v4
         with:

@@ -229,9 +229,19 @@ note "sweeping the diff with $base ($(git rev-parse --short "$merge_base")) …"
 # counted: measured on src/ui/hold.rs, 10 of 11 mutants caught with the flag
 # and 5 of 11 without. The same flag is on ci.yml's invocation, and
 # scripts/gate.sh --selftest fails if the two stop agreeing.
+#
+# --minimum-test-timeout because the budget cargo-mutants derives is a multiple
+# of how fast the unmutated suite runs, and a mutant that changes what the code
+# costs does not get cheaper when that baseline does. CI measured a 2s baseline
+# and gave every mutant 20s; a hop of one frame per sample makes the envelope
+# thirty times longer, which takes 15s on one core, so the mutant that proves
+# the path search is bounded timed out deciding nothing while the same mutant
+# was caught here against an 84s budget. A floor is not a weaker sweep: a
+# survivor survives at any budget, and a mutant that truly hangs still reaches
+# it.
 jobs="$(sweep_jobs)"
 status=0
-cargo mutants --in-diff "$diff" --no-shuffle --cap-lints=true -j "$jobs" || status=$?
+cargo mutants --in-diff "$diff" --no-shuffle --cap-lints=true --minimum-test-timeout 120 -j "$jobs" || status=$?
 [ "$status" = 0 ] || die "$(explain "$status" "$jobs")"
 
 pass "every mutant in the diff was caught"
