@@ -18,7 +18,7 @@ use motif::audio::{
     StreamConfig, StreamRequest, sample_clock,
 };
 use motif::device::{AudioProfile, Button, DeviceProfile};
-use motif::looper::LooperPage;
+use motif::looper::{LooperPage, marks_handoff};
 use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Page};
 
@@ -271,7 +271,7 @@ fn a_stream_advances_the_clock_its_path_was_given() {
 #[test]
 fn a_tap_is_stamped_with_the_frames_the_stream_has_played() {
     let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
-    let (mut page, engine, _takes) = LooperPage::driving(AUDIO, elapsed);
+    let (mut page, engine, _takes) = LooperPage::driving(AUDIO, marks_handoff().1, elapsed);
     let mut stream = NullBackend::rounding(granted())
         .open(&selection(), request(), Counting::new(frames, engine))
         .expect("null backend opens");
@@ -310,7 +310,7 @@ fn a_clock_reports_the_rate_the_stream_granted() {
 #[test]
 fn a_tap_is_timed_at_the_rate_the_device_granted() {
     let (frames, elapsed) = sample_clock(AUDIO.sample_rate);
-    let (mut page, engine, _takes) = LooperPage::driving(AUDIO, elapsed);
+    let (mut page, engine, _takes) = LooperPage::driving(AUDIO, marks_handoff().1, elapsed);
     let mut stream = NullBackend::rounding(rounded())
         .open(&selection(), request(), Counting::new(frames, engine))
         .expect("null backend opens");

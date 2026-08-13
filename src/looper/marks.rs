@@ -12,6 +12,7 @@
 //! corner.
 
 use std::array;
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use super::LoopWaveform;
 
@@ -125,5 +126,64 @@ impl LoopMarks {
                 .map(|held| held.map_or(BLANK, Mark::glyph))
                 .collect()
         })
+    }
+}
+
+/// Build a marks handoff, and split it into the end an analyst publishes to and
+/// the end the page reads.
+///
+/// Neither end is the audio callback — a take has already crossed off it by the
+/// time anything here has marks to carry — so this crossing is free to allocate
+/// and to be as long as the analysis is deep.
+///
+/// ```
+/// use motif::looper::{LoopMarks, Mark, marks_handoff};
+///
+/// let (mut analyst, page) = marks_handoff();
+/// let mut found = LoopMarks::none();
+/// found.add(2, Mark::Downbeat);
+///
+/// analyst.publish(found.clone());
+///
+/// assert_eq!(page.read(), Some(found));
+/// assert_eq!(page.read(), None);
+/// ```
+pub fn marks_handoff() -> (MarksWriter, MarksReader) {
+    let (found, drawn) = channel();
+
+    (MarksWriter { found }, MarksReader { drawn })
+}
+
+/// The publishing end of a marks handoff, held by whichever thread analyses the
+/// loop.
+pub struct MarksWriter {
+    found: Sender<LoopMarks>,
+}
+
+impl MarksWriter {
+    /// Hand `marks` to whoever draws them.
+    ///
+    /// Returns without waiting, and without an answer: an analyst whose page
+    /// has gone has nothing to do differently, and a pass whose marks nobody
+    /// wants is one already made.
+    pub fn publish(&mut self, marks: LoopMarks) {
+        let _handed = self.found.send(marks);
+    }
+}
+
+/// The reading end of a marks handoff, held by whichever thread draws the loop.
+pub struct MarksReader {
+    drawn: Receiver<LoopMarks>,
+}
+
+impl MarksReader {
+    /// The newest analysis published since the last look, or nothing where
+    /// there has been none.
+    ///
+    /// Newest rather than next: a page draws what the loop is now, and an
+    /// analysis overtaken while nobody was looking describes a take the player
+    /// has already recorded over.
+    pub fn read(&self) -> Option<LoopMarks> {
+        self.drawn.try_iter().last()
     }
 }

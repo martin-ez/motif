@@ -23,7 +23,7 @@ use motif::audio::{
     Slack, StreamConfig, StreamRequest, StreamState, Xruns, sample_clock,
 };
 use motif::device::{Button, DeviceProfile};
-use motif::looper::LooperPage;
+use motif::looper::{LooperPage, marks_handoff};
 use motif::monitor::Monitor;
 use motif::settings::{AudioPage, AudioSetting};
 use motif::ui::{App, Cell as Glyph, ControlEvent, Frame, Scheme, Shell};
@@ -196,7 +196,8 @@ fn composed(live: &Live) -> Composed {
     )
     .expect("the counting backend has a device in each direction");
     let settings = AudioPage::listing(link.clone());
-    let (looper, _engine, _takes) = LooperPage::driving(audio, sample_clock(audio.sample_rate).1);
+    let (looper, _engine, _takes) =
+        LooperPage::driving(audio, marks_handoff().1, sample_clock(audio.sample_rate).1);
     let shell = Shell::navigated_by([Box::new(looper), Box::new(settings)], Scheme::scenes());
 
     Monitor::watching(shell, Some(link))

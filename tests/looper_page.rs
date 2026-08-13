@@ -11,8 +11,8 @@ use motif::audio::{
 };
 use motif::device::{Button, DeviceProfile, Encoder, ScreenProfile};
 use motif::looper::{
-    LoopBuffer, LoopMarks, LoopPosition, LoopWaveform, LooperPage, Mark, Transport, position_meter,
-    waveform_meter,
+    LoopBuffer, LoopMarks, LoopPosition, LoopWaveform, LooperPage, Mark, MarksWriter, Transport,
+    marks_handoff, position_meter, waveform_meter,
 };
 use motif::seq::TapTempo;
 use motif::ui::{ControlEvent, Frame, Page, Turn};
@@ -74,6 +74,7 @@ fn page() -> LooperPage {
     LooperPage::new(
         position_meter().1,
         waveform_meter().1,
+        marks_handoff().1,
         sample_clock(SECOND).1,
         sending(),
     )
@@ -86,6 +87,7 @@ fn page_ordering_with_room_for(commands: usize) -> (LooperPage, CommandReceiver)
         LooperPage::new(
             position_meter().1,
             waveform_meter().1,
+            marks_handoff().1,
             sample_clock(SECOND).1,
             sending,
         ),
@@ -104,6 +106,7 @@ fn page_showing(position: LoopPosition) -> LooperPage {
     LooperPage::new(
         reader,
         waveform_meter().1,
+        marks_handoff().1,
         sample_clock(SECOND).1,
         sending(),
     )
@@ -117,7 +120,13 @@ fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
     let (frames, elapsed) = sample_clock(sample_rate);
 
     (
-        LooperPage::new(position_meter().1, waveform_meter().1, elapsed, sending()),
+        LooperPage::new(
+            position_meter().1,
+            waveform_meter().1,
+            marks_handoff().1,
+            elapsed,
+            sending(),
+        ),
         frames,
     )
 }
@@ -215,8 +224,27 @@ fn page_drawing(waveform: &LoopWaveform) -> LooperPage {
     LooperPage::new(
         position_meter().1,
         reader,
+        marks_handoff().1,
         sample_clock(SECOND).1,
         sending(),
+    )
+}
+
+/// A page drawing `waveform`, and the end an analyst publishes its marks to.
+fn page_awaiting_analysis(waveform: &LoopWaveform) -> (LooperPage, MarksWriter) {
+    let (mut drawing, shape) = waveform_meter();
+    drawing.publish(waveform);
+    let (analyst, marks) = marks_handoff();
+
+    (
+        LooperPage::new(
+            position_meter().1,
+            shape,
+            marks,
+            sample_clock(SECOND).1,
+            sending(),
+        ),
+        analyst,
     )
 }
 
@@ -1014,6 +1042,31 @@ fn analysing_a_loop_again_replaces_the_marks_it_had() {
     let rows = drawn(&mut page);
 
     assert_eq!(columns_holding(&rows, &[BEAT]), []);
+    assert_eq!(columns_holding(&rows, &[ONSET]).len(), 1);
+}
+
+/// What the worker on the other end of the loop is for: what it found is on the
+/// screen without anything else being asked to fetch it.
+#[test]
+fn marks_an_analyst_published_are_drawn_over_the_loop() {
+    let (mut page, mut analyst) = page_awaiting_analysis(&recorded_loud_at(A_FRAME));
+    analyst.publish(found(&[(A_FRAME as u64, Mark::Beat)]));
+
+    let rows = drawn(&mut page);
+
+    assert_eq!(
+        columns_holding(&rows, &[BEAT]),
+        columns_holding(&rows, &BLOCKS)
+    );
+}
+
+#[test]
+fn a_page_no_analyst_has_published_to_keeps_the_marks_it_had() {
+    let (mut page, _analyst) = page_awaiting_analysis(&recorded_loud_at(A_FRAME));
+    page.analysed(found(&[(A_FRAME as u64, Mark::Onset)]));
+
+    let rows = drawn(&mut page);
+
     assert_eq!(columns_holding(&rows, &[ONSET]).len(), 1);
 }
 

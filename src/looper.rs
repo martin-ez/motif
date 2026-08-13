@@ -1,8 +1,8 @@
 //! What the player is doing with the loop, and where the loop is kept.
 //!
 //! [`Transport`] is the state a player drives, [`LoopBuffer`] holds the samples
-//! it governs, [`LoopEngine`] owns both of them on the audio thread, and
-//! [`take_handoff`] is how a finished take reaches the thread that analyses it.
+//! it governs, [`LoopEngine`] owns both on the audio thread, [`take_handoff`]
+//! carries a finished take off it, and [`analysing`] is the thread it reaches.
 //!
 //! [`LoopBuffer`] is sized from the device profile and allocated in setup, so
 //! the longest loop is a constraint the machine states rather than an accident
@@ -19,6 +19,7 @@ use std::ops::Range;
 use crate::audio::held;
 use crate::device::AudioProfile;
 
+mod analyst;
 mod engine;
 mod marks;
 mod page;
@@ -27,8 +28,9 @@ mod take;
 mod transport;
 mod waveform;
 
+pub use analyst::{analyse, analysing};
 pub use engine::LoopEngine;
-pub use marks::{LoopMarks, Mark};
+pub use marks::{LoopMarks, Mark, MarksReader, MarksWriter, marks_handoff};
 pub use page::LooperPage;
 pub use position::{LoopPosition, PositionReader, PositionWriter, position_meter};
 pub use take::{FinishedTake, TakeReader, TakeWriter, take_handoff};
