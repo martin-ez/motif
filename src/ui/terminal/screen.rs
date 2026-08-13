@@ -10,8 +10,7 @@ use std::io::{self, Stdin, Stdout, Write};
 use std::mem::MaybeUninit;
 
 use super::{KeyReader, Viewport};
-use crate::device::Control;
-use crate::ui::{ControlEvent, Controls, Frame, Hint, Panel, RenderError, Renderer};
+use crate::ui::{Frame, Panel, RenderError, Renderer};
 
 const ENTER_ALTERNATE_SCREEN: &str = "\u{1b}[?1049h";
 const LEAVE_ALTERNATE_SCREEN: &str = "\u{1b}[?1049l";
@@ -181,30 +180,6 @@ impl Renderer for CentredScreen<'_> {
 
     fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
         self.viewport.show_panel(panel)
-    }
-}
-
-impl Controls for TerminalScreen {
-    fn hint(&self, control: Control) -> Option<Hint> {
-        self.reader.hint(control)
-    }
-
-    fn poll(&mut self) -> Option<ControlEvent> {
-        self.reader.poll()
-    }
-
-    fn interrupted(&self) -> bool {
-        self.reader.interrupted()
-    }
-}
-
-impl Renderer for TerminalScreen {
-    fn render(&mut self, frame: &Frame) -> Result<(), RenderError> {
-        self.writer.render(frame)
-    }
-
-    fn show_panel(&mut self, panel: &Panel) -> Result<(), RenderError> {
-        self.writer.show_panel(panel)
     }
 }
 

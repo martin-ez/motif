@@ -9,7 +9,7 @@
 //! A frame is the size of the device's screen, taken from
 //! [`DeviceProfile::TARGET`]. What draws into it is handed a [`Region`] of it
 //! rather than the whole thing, so chrome and a page cannot claim the same
-//! cell. [`ListPage`], [`LevelMeter`] and [`Mode`] belong to no one screen.
+//! cell. [`LevelMeter`] and [`Mode`] belong to no one screen.
 //!
 //! A [`Page`] is one screen and a [`Shell`] holds one per [`Mode`], so an `App`
 //! is implemented once; what a [`Navigation`] makes an [`Intent`] of, it keeps.
@@ -38,7 +38,6 @@ mod clock;
 mod events;
 mod hold;
 mod input;
-mod list;
 mod marks;
 mod meter;
 mod mode;
@@ -55,7 +54,6 @@ pub use chrome::Chrome;
 pub use clock::{Clock, ScriptedClock, SystemClock};
 pub use events::{App, EVENTS_PER_FRAME, EventLoop, Flow, RunReport};
 pub use input::{ControlEvent, Controls, Hint, ScriptedControls, Turn};
-pub use list::ListPage;
 pub use marks::Marks;
 pub use meter::LevelMeter;
 pub use mode::Mode;
