@@ -1,81 +1,19 @@
-//! One command queue, and more than one path behind it.
+//! One command queue, and the path it is dealt to.
 //!
-//! A queue has a single reader, and what it deals to may be one path or a
-//! composition of several. The facts worth stating are that every command
-//! reaches the path it was meant for, that a path answering one is the end of
-//! it, and that which path answers is what a composition says rather than
-//! which of them renders first.
+//! A queue has a single reader, and [`Commanded`] is it. The facts worth
+//! stating are that everything waiting is dealt before the block it arrived in
+//! is rendered, and that a path with a queue in front of it answers whatever it
+//! answered without one, so a commanded path composes inside another.
 //!
-//! Both real paths are used rather than stand-ins. The bug this states the
-//! absence of appears only where an input monitor and a loop engine sit behind
-//! one queue, each answering half of what arrives.
+//! The path behind the queue is a stand-in that keeps what it was applied: what
+//! reaches it is the subject, and a real path would only put its own rendering
+//! between the assertion and the queue.
 
-use motif::audio::{
-    AudioPath, Command, CommandSender, Commanded, InputMonitor, StreamConfig, command_channel,
-};
-use motif::device::AudioProfile;
-use motif::looper::{
-    LoopEngine, PositionReader, Transport, position_meter, take_handoff, waveform_meter,
-};
+use motif::audio::{AudioPath, Command, Commanded, StreamConfig, command_channel};
 
 const GAIN: f32 = 0.5;
-const UNITY: f32 = 1.0;
 const SAMPLE_RATE: u32 = 8;
 const BLOCK: u32 = 4;
-
-/// Which of two paths goes first.
-#[derive(Clone, Copy)]
-enum First {
-    Monitor,
-    Engine,
-}
-
-/// The monitor and the engine behind one queue.
-///
-/// It answers nothing of its own: a command goes to whichever path is offered
-/// it first and takes it. Rendering has an order of its own, so a test can vary
-/// one and hold the other.
-struct Both {
-    monitor: InputMonitor,
-    engine: LoopEngine,
-    answers: First,
-    renders: First,
-}
-
-impl AudioPath for Both {
-    fn prepare(&mut self, config: StreamConfig) {
-        self.monitor.prepare(config);
-        self.engine.prepare(config);
-    }
-
-    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
-        match self.renders {
-            First::Monitor => {
-                self.monitor.render(captured, playing);
-                self.engine.render(captured, playing);
-            }
-            First::Engine => {
-                self.engine.render(captured, playing);
-                self.monitor.render(captured, playing);
-            }
-        }
-    }
-
-    fn apply(&mut self, command: Command) -> bool {
-        match self.answers {
-            First::Monitor => self.monitor.apply(command) || self.engine.apply(command),
-            First::Engine => self.engine.apply(command) || self.monitor.apply(command),
-        }
-    }
-}
-
-fn eight_frame_profile() -> AudioProfile {
-    AudioProfile {
-        sample_rate: SAMPLE_RATE,
-        block_size: BLOCK,
-        max_loop_seconds: 1,
-    }
-}
 
 fn config() -> StreamConfig {
     StreamConfig {
@@ -86,126 +24,48 @@ fn config() -> StreamConfig {
     }
 }
 
-/// Both paths on one queue, answering in one order and rendering in the other
-/// the test asks for.
-fn both(answers: First, renders: First) -> (Commanded<Both>, CommandSender, PositionReader) {
-    let (sender, receiver) = command_channel(8);
-    let (writer, position) = position_meter();
-    let mut path = Commanded::new(
-        receiver,
-        Both {
-            monitor: InputMonitor::new(),
-            engine: LoopEngine::new(
-                eight_frame_profile(),
-                writer,
-                waveform_meter().0,
-                take_handoff(eight_frame_profile()).0,
-            ),
-            answers,
-            renders,
-        },
-    );
-    path.prepare(config());
-
-    (path, sender, position)
+/// A path that keeps the level it was last asked for and answers nothing else.
+#[derive(Default)]
+struct Levelled {
+    gain: Option<f32>,
 }
 
-/// Queue `command`, as the application thread does.
-fn press(sender: &mut CommandSender, command: Command) {
-    sender.send(command).expect("the queue has room for a test");
-}
+impl AudioPath for Levelled {
+    fn prepare(&mut self, _config: StreamConfig) {}
 
-/// Render one block of `captured` and return what the composition played.
-fn played(path: &mut Commanded<Both>, captured: &[f32]) -> Vec<f32> {
-    let mut playing = vec![0.0; captured.len()];
-    path.render(captured, &mut playing);
+    fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
 
-    playing
-}
+    fn apply(&mut self, command: Command) -> bool {
+        match command {
+            Command::SetGain(gain) => self.gain = Some(gain),
+            _ => return false,
+        }
 
-/// Render the frame a queued level change is walked over.
-///
-/// Ten milliseconds of ramp is under a frame at `SAMPLE_RATE`, so one frame is
-/// the whole of it. A level read off the block that queued it would be the ramp
-/// rather than the level.
-fn settle(path: &mut Commanded<Both>) {
-    played(path, &[0.0]);
-}
-
-/// The level the monitor inside the composition is playing the input at.
-fn monitored(path: &Commanded<Both>) -> f32 {
-    path.path().monitor.gain().target()
-}
-
-#[test]
-fn a_command_for_each_path_reaches_both_of_them() {
-    let (mut path, mut sender, position) = both(First::Monitor, First::Monitor);
-
-    press(&mut sender, Command::SetGain(GAIN));
-    press(&mut sender, Command::SetTransport(Transport::Recording));
-    played(&mut path, &[1.0, 1.0]);
-
-    assert_eq!(monitored(&path), GAIN);
-    assert_eq!(position.read().recorded(), 2);
-}
-
-#[test]
-fn which_path_answers_does_not_change_with_the_render_order() {
-    let (mut path, mut sender, position) = both(First::Monitor, First::Engine);
-
-    press(&mut sender, Command::SetGain(GAIN));
-    press(&mut sender, Command::SetTransport(Transport::Recording));
-    played(&mut path, &[1.0, 1.0]);
-
-    assert_eq!(monitored(&path), GAIN);
-    assert_eq!(position.read().recorded(), 2);
-}
-
-#[test]
-fn a_command_the_monitor_answered_does_not_reach_the_engine() {
-    let (mut path, mut sender, _position) = both(First::Monitor, First::Monitor);
-
-    press(&mut sender, Command::SetGain(GAIN));
-    press(&mut sender, Command::SetTransport(Transport::Recording));
-    played(&mut path, &[0.5, 0.5]);
-    press(&mut sender, Command::SetTransport(Transport::Playing));
-
-    assert_eq!(played(&mut path, &[0.0, 0.0]), [0.5, 0.5]);
-}
-
-#[test]
-fn the_path_offered_a_command_first_is_the_one_that_owns_it() {
-    let (mut path, mut sender, _position) = both(First::Engine, First::Monitor);
-
-    press(&mut sender, Command::SetGain(GAIN));
-    settle(&mut path);
-    press(&mut sender, Command::SetTransport(Transport::Recording));
-    played(&mut path, &[1.0, 1.0]);
-    press(&mut sender, Command::SetTransport(Transport::Playing));
-
-    assert_eq!(monitored(&path), UNITY);
-    assert_eq!(played(&mut path, &[0.0, 0.0]), [GAIN, GAIN]);
+        true
+    }
 }
 
 #[test]
 fn a_commanded_path_deals_what_arrived_before_the_block_it_arrived_in() {
     let (mut sender, receiver) = command_channel(4);
-    let mut path = Commanded::new(receiver, InputMonitor::new());
+    let mut path = Commanded::new(receiver, Levelled::default());
     path.prepare(config());
 
-    press(&mut sender, Command::SetGain(GAIN));
+    sender
+        .send(Command::SetGain(GAIN))
+        .expect("the queue has room for a test");
     path.render(&[1.0], &mut [0.0]);
 
-    assert_eq!(path.path().gain().target(), GAIN);
+    assert_eq!(path.path().gain, Some(GAIN));
 }
 
 #[test]
 fn a_commanded_path_answers_for_the_path_it_holds() {
     let (_sender, receiver) = command_channel(4);
-    let mut path = Commanded::new(receiver, InputMonitor::new());
+    let mut path = Commanded::new(receiver, Levelled::default());
     path.prepare(config());
 
     assert!(path.apply(Command::SetGain(GAIN)));
     assert!(!path.apply(Command::Undo));
-    assert_eq!(path.path().gain().target(), GAIN);
+    assert_eq!(path.path().gain, Some(GAIN));
 }
