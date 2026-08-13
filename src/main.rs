@@ -1,13 +1,14 @@
 //! Entry point for the `motif` binary.
 //!
-//! Composition only: it builds the one link to the audio device and the pages,
-//! hands the pages and the scheme that moves between them to the shell, wraps
-//! that in the chrome and in the monitor that holds the link open, takes the
-//! terminal over, runs the event loop, and reports why the run ended. The link
-//! is built here because a run has one, whatever comes to share it, and it opens
-//! before the terminal does so that a host enumerating onto stderr does it to an
-//! ordinary screen. The shell owns the pages and keeps no gesture back, so what
-//! ends a run is the terminal's own interrupt.
+//! Composition only: it builds the one link to the audio device, the pages, and
+//! the worker that analyses what is recorded, hands the pages and the scheme
+//! that moves between them to the shell, wraps that in the chrome and in the
+//! monitor that holds the link open, takes the terminal over, runs the event
+//! loop, and reports why the run ended. The link is built here because a run has
+//! one, whatever comes to share it, and it opens before the terminal does so
+//! that a host enumerating onto stderr does it to an ordinary screen. The shell
+//! owns the pages and keeps no gesture back, so what ends a run is the
+//! terminal's own interrupt.
 //!
 //! The settings page is built before the monitor, because listing the devices
 //! has to happen before a stream holds one of them.
@@ -19,7 +20,7 @@ use motif::audio::{
     StreamRequest, sample_clock,
 };
 use motif::device::DeviceProfile;
-use motif::looper::LooperPage;
+use motif::looper::{LooperPage, analysing, marks_handoff};
 use motif::monitor::Monitor;
 use motif::settings::AudioPage;
 use motif::ui::{Chrome, EventLoop, RenderError, Scheme, Shell, TerminalScreen};
@@ -36,7 +37,9 @@ fn requested() -> StreamRequest {
 fn play() -> Result<(), RenderError> {
     let audio = DeviceProfile::TARGET.audio;
     let (frames, elapsed) = sample_clock(audio.sample_rate);
-    let (looper, engine, _takes) = LooperPage::driving(audio, elapsed);
+    let (found, marks) = marks_handoff();
+    let (looper, engine, takes) = LooperPage::driving(audio, marks, elapsed);
+    analysing(takes, audio.sample_rate, found);
     let playing = Escrow::holding(Counting::new(frames, engine));
     let backend = CpalBackend::new();
     let selection = backend

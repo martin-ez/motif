@@ -13,7 +13,7 @@
 
 use motif::audio::{AudioPath, Commanded, sample_clock};
 use motif::device::{AudioProfile, Button, DeviceProfile, ScreenProfile};
-use motif::looper::{LoopEngine, LooperPage};
+use motif::looper::{LoopEngine, LooperPage, marks_handoff};
 use motif::ui::{ControlEvent, Frame, Page};
 
 const AUDIO: AudioProfile = DeviceProfile::TARGET.audio;
@@ -29,7 +29,8 @@ fn pressed(button: Button) -> ControlEvent {
 }
 
 fn looper() -> (LooperPage, Commanded<LoopEngine>) {
-    let (page, engine, _takes) = LooperPage::driving(AUDIO, sample_clock(AUDIO.sample_rate).1);
+    let (page, engine, _takes) =
+        LooperPage::driving(AUDIO, marks_handoff().1, sample_clock(AUDIO.sample_rate).1);
 
     (page, engine)
 }
