@@ -10,8 +10,8 @@
 use std::sync::{Arc, Mutex};
 
 use motif::audio::{
-    AudioBackend, AudioPath, Command, DeviceSelection, InputMonitor, NullBackend, Passthrough,
-    StreamConfig, StreamRequest,
+    AudioBackend, AudioPath, Command, DeviceSelection, NullBackend, Passthrough, StreamConfig,
+    StreamRequest,
 };
 
 fn granted() -> StreamConfig {
@@ -77,6 +77,20 @@ impl AudioPath for FrameForFrame {
 
     fn apply(&mut self, _command: Command) -> bool {
         false
+    }
+}
+
+/// A path that answers what moves a level and nothing else, so that a test can
+/// tell a command that was taken from one that was passed over.
+struct Levelled;
+
+impl AudioPath for Levelled {
+    fn prepare(&mut self, _config: StreamConfig) {}
+
+    fn render(&mut self, _captured: &[f32], _playing: &mut [f32]) {}
+
+    fn apply(&mut self, command: Command) -> bool {
+        matches!(command, Command::SetGain(_))
     }
 }
 
@@ -260,7 +274,7 @@ fn a_path_that_was_taken_prepares_nothing() {
 
 #[test]
 fn a_path_that_is_there_answers_what_it_would_have_answered() {
-    let mut path = Some(InputMonitor::new());
+    let mut path = Some(Levelled);
 
     assert!(path.apply(Command::SetGain(0.5)));
     assert!(!path.apply(Command::Clear));
@@ -268,7 +282,7 @@ fn a_path_that_is_there_answers_what_it_would_have_answered() {
 
 #[test]
 fn a_path_that_was_taken_answers_nothing() {
-    let mut taken: Option<InputMonitor> = None;
+    let mut taken: Option<Levelled> = None;
 
     assert!(!taken.apply(Command::SetGain(0.5)));
 }

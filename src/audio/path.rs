@@ -6,9 +6,9 @@
 //! allocate, and the way anything a player is meant to hear — a loop, a
 //! metronome click, a monitored input — reaches the audio callback at all.
 //!
-//! [`Passthrough`] plays the frames it captured and [`InputMonitor`] is the same
-//! thing with a level on it, while [`Opening`] is the level a stream comes up to
-//! when it opens. A queue has one reader, and [`Commanded`] is it: it deals what
+//! [`Passthrough`] plays the frames it captured and is what a stream opens with
+//! before a caller has a path to give it, while [`Opening`] is the level it
+//! comes up to. A queue has one reader, and [`Commanded`] is it: it deals what
 //! arrived to the path it holds, which may be a composition of several. Which of
 //! them a command belongs to is that composition's to say in
 //! [`apply`](AudioPath::apply), settled where the paths are put together.
@@ -133,69 +133,6 @@ impl AudioPath for Passthrough {
     }
 }
 
-/// The path that plays the input at a level the player controls.
-///
-/// [`Passthrough`] with a hand on it: the same frames, scaled by a [`Gain`] the
-/// player moves and mutes from the panel. Those two commands are the whole of
-/// what it answers, so a composition holding it and something else is free to
-/// give the rest away.
-///
-/// It reads no queue of its own. [`Commanded`] is what puts one in front of it.
-pub struct InputMonitor {
-    gain: Gain,
-}
-
-impl InputMonitor {
-    /// A monitor at unity.
-    pub const fn new() -> Self {
-        Self {
-            gain: Gain::unity(),
-        }
-    }
-
-    /// The gain the input is being played at.
-    pub const fn gain(&self) -> &Gain {
-        &self.gain
-    }
-}
-
-impl Default for InputMonitor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl AudioPath for InputMonitor {
-    /// Puts the ramp in the frames the device granted, so a change takes the
-    /// same time whatever rate it was opened at.
-    fn prepare(&mut self, config: StreamConfig) {
-        self.gain.prepare(config.sample_rate);
-    }
-
-    /// Plays the captured frames at the gain the player left it on. Bounded by
-    /// the shorter of the two slices, as [`Passthrough`] is, and allocating
-    /// nothing.
-    fn render(&mut self, captured: &[f32], playing: &mut [f32]) {
-        let frames = playing.len().min(captured.len());
-        playing[..frames].copy_from_slice(&captured[..frames]);
-        self.gain.apply(&mut playing[..frames]);
-    }
-
-    /// Answers what moves the level the input is played at, and nothing about
-    /// the loop under it.
-    fn apply(&mut self, command: Command) -> bool {
-        match command {
-            Command::SetGain(gain) => self.gain.set_target(gain),
-            Command::SetMuted(muted) => self.gain.set_muted(muted),
-            Command::SetTransport(_) | Command::SetBars(_) | Command::Undo | Command::Clear => {
-                return false;
-            }
-        }
-
-        true
-    }
-}
-
 /// A path with the level its stream opens at in front of it.
 ///
 /// Two things a stream owes the room it plays into. It comes up from silence
@@ -275,15 +212,25 @@ impl<P: AudioPath> AudioPath for Opening<P> {
 /// what keeps a queue to a single reader however many paths are behind it.
 ///
 /// ```
-/// use motif::audio::{AudioPath, Command, Commanded, InputMonitor, SendError, command_channel};
+/// use motif::audio::{AudioPath, Command, Commanded, SendError, command_channel};
+/// use motif::device::DeviceProfile;
+/// use motif::looper::{LoopEngine, Transport, position_meter, take_handoff, waveform_meter};
 ///
 /// let (mut player, commands) = command_channel(4);
-/// let mut path = Commanded::new(commands, InputMonitor::new());
+/// let (writer, position) = position_meter();
+/// let (crossing, _takes) = take_handoff(DeviceProfile::TARGET.audio);
+/// let engine = LoopEngine::new(
+///     DeviceProfile::TARGET.audio,
+///     writer,
+///     waveform_meter().0,
+///     crossing,
+/// );
+/// let mut path = Commanded::new(commands, engine);
 ///
-/// player.send(Command::SetGain(0.5))?;
-/// path.render(&[1.0], &mut [0.0]);
+/// player.send(Command::SetTransport(Transport::Recording))?;
+/// path.render(&[0.25, 0.5], &mut [0.0; 2]);
 ///
-/// assert_eq!(path.path().gain().target(), 0.5);
+/// assert_eq!(position.read().recorded(), 2);
 /// # Ok::<(), SendError>(())
 /// ```
 pub struct Commanded<P> {
