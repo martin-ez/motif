@@ -275,13 +275,6 @@ fn skipping_does_not_allocate() {
 }
 
 #[test]
-fn a_ring_reports_the_capacity_it_was_built_with() {
-    let (producer, consumer) = sample_ring(64);
-
-    assert_eq!((producer.capacity(), consumer.capacity()), (64, 64));
-}
-
-#[test]
 fn vacant_slots_fall_as_the_ring_fills() {
     let (mut producer, _consumer) = sample_ring(8);
     producer.write(&[1.0, 2.0, 3.0]);

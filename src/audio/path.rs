@@ -243,11 +243,6 @@ impl<P: AudioPath> Commanded<P> {
     pub const fn new(commands: CommandReceiver, path: P) -> Self {
         Self { commands, path }
     }
-
-    /// The path the commands are dealt to.
-    pub const fn path(&self) -> &P {
-        &self.path
-    }
 }
 
 impl<P: AudioPath> AudioPath for Commanded<P> {

@@ -9,6 +9,8 @@
 //! reaches it is the subject, and a real path would only put its own rendering
 //! between the assertion and the queue.
 
+use std::sync::{Arc, Mutex};
+
 use motif::audio::{AudioPath, Command, Commanded, StreamConfig, command_channel};
 
 const GAIN: f32 = 0.5;
@@ -24,10 +26,15 @@ fn config() -> StreamConfig {
     }
 }
 
-/// A path that keeps the level it was last asked for and answers nothing else.
-#[derive(Default)]
-struct Levelled {
-    gain: Option<f32>,
+/// A path that keeps the level it was last asked for and answers nothing else,
+/// so that a test can read it back after the path has moved behind the queue.
+#[derive(Clone, Default)]
+struct Levelled(Arc<Mutex<Option<f32>>>);
+
+impl Levelled {
+    fn gain(&self) -> Option<f32> {
+        *self.0.lock().expect("no test holds this across a panic")
+    }
 }
 
 impl AudioPath for Levelled {
@@ -37,7 +44,9 @@ impl AudioPath for Levelled {
 
     fn apply(&mut self, command: Command) -> bool {
         match command {
-            Command::SetGain(gain) => self.gain = Some(gain),
+            Command::SetGain(gain) => {
+                *self.0.lock().expect("no test holds this across a panic") = Some(gain);
+            }
             _ => return false,
         }
 
@@ -48,7 +57,8 @@ impl AudioPath for Levelled {
 #[test]
 fn a_commanded_path_deals_what_arrived_before_the_block_it_arrived_in() {
     let (mut sender, receiver) = command_channel(4);
-    let mut path = Commanded::new(receiver, Levelled::default());
+    let levelled = Levelled::default();
+    let mut path = Commanded::new(receiver, levelled.clone());
     path.prepare(config());
 
     sender
@@ -56,16 +66,17 @@ fn a_commanded_path_deals_what_arrived_before_the_block_it_arrived_in() {
         .expect("the queue has room for a test");
     path.render(&[1.0], &mut [0.0]);
 
-    assert_eq!(path.path().gain, Some(GAIN));
+    assert_eq!(levelled.gain(), Some(GAIN));
 }
 
 #[test]
 fn a_commanded_path_answers_for_the_path_it_holds() {
     let (_sender, receiver) = command_channel(4);
-    let mut path = Commanded::new(receiver, Levelled::default());
+    let levelled = Levelled::default();
+    let mut path = Commanded::new(receiver, levelled.clone());
     path.prepare(config());
 
     assert!(path.apply(Command::SetGain(GAIN)));
     assert!(!path.apply(Command::Undo));
-    assert_eq!(path.path().gain, Some(GAIN));
+    assert_eq!(levelled.gain(), Some(GAIN));
 }

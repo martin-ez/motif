@@ -92,11 +92,6 @@ impl SampleProducer {
     pub fn vacant(&self) -> usize {
         self.ring.capacity() - self.ring.occupied()
     }
-
-    /// The most samples the ring can hold at once.
-    pub fn capacity(&self) -> usize {
-        self.ring.capacity()
-    }
 }
 
 /// The reading end of a ring, held by whichever thread consumes samples.
@@ -164,11 +159,6 @@ impl SampleConsumer {
     /// this many samples from this thread always succeeds.
     pub fn available(&self) -> usize {
         self.ring.occupied()
-    }
-
-    /// The most samples the ring can hold at once.
-    pub fn capacity(&self) -> usize {
-        self.ring.capacity()
     }
 }
 

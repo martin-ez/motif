@@ -23,7 +23,10 @@ use super::ChannelSelection;
 /// How loud a block of samples was.
 ///
 /// Both are linear amplitudes on the scale the samples themselves use, where
-/// 1.0 is full scale. A meter drawn in decibels converts on its own side.
+/// 1.0 is full scale, and a meter drawn in decibels converts on its own side. A
+/// sample that is not finite is left out of both: a driver may hand back
+/// whatever was in its buffer, and comparison ignores a NaN where addition
+/// carries it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Levels {
     /// The largest absolute sample in the block.
@@ -41,35 +44,12 @@ pub struct Levels {
 }
 
 impl Levels {
-    /// A block with no signal in it.
+    /// A block with no signal in it, and what a block holding no whole frame
+    /// measures as.
     pub const SILENT: Self = Self {
         peak: 0.0,
         rms: 0.0,
     };
-
-    /// Measure every sample in `samples`.
-    ///
-    /// Sample by sample rather than frame by frame: folding a frame's channels
-    /// together would let one at full scale hide in their mean. To measure some
-    /// channels of an interleaved block and not others, build a [`level_meter`].
-    ///
-    /// A block with no samples measures as [`SILENT`](Self::SILENT), and so does
-    /// one holding a sample that is not finite — a driver may hand back whatever
-    /// was in its buffer, and comparison ignores a NaN where addition carries it.
-    ///
-    /// ```
-    /// use motif::audio::Levels;
-    ///
-    /// let levels = Levels::of(&[0.2, -0.8, 0.4, 0.0]);
-    ///
-    /// assert_eq!(levels.peak, 0.8);
-    /// assert!(levels.rms < levels.peak);
-    /// ```
-    pub fn of(samples: &[f32]) -> Self {
-        let mut measured = Measured::default();
-        measured.take(samples);
-        measured.levels()
-    }
 
     fn measure(samples: &[f32], channels: usize, selected: Range<usize>) -> Self {
         let mut measured = Measured::default();

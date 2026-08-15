@@ -77,6 +77,14 @@ fn whole_block() -> (motif::audio::LevelWriter, motif::audio::LevelReader) {
     level_meter(1, ChannelSelection::all(1))
 }
 
+/// Measure a block whose every sample is selected, through the meter a stream
+/// publishes with.
+fn measured(samples: &[f32]) -> Levels {
+    let (mut writer, _reader) = whole_block();
+
+    writer.publish(samples)
+}
+
 fn interleaved(left: &[f32], right: &[f32]) -> Vec<f32> {
     left.iter()
         .zip(right)
@@ -95,21 +103,21 @@ fn the_allocation_counter_counts_an_allocation() {
 
 #[test]
 fn peak_is_the_largest_absolute_sample_in_the_block() {
-    let levels = Levels::of(&[0.2, -0.8, 0.5]);
+    let levels = measured(&[0.2, -0.8, 0.5]);
 
     assert_eq!(levels.peak, 0.8);
 }
 
 #[test]
 fn rms_is_the_root_mean_square_of_the_block() {
-    let levels = Levels::of(&[1.0, 0.0, -1.0, 0.0]);
+    let levels = measured(&[1.0, 0.0, -1.0, 0.0]);
 
     assert_near(levels.rms, 0.5f32.sqrt());
 }
 
 #[test]
 fn a_constant_block_reads_the_same_on_both() {
-    let levels = Levels::of(&[-0.5; 8]);
+    let levels = measured(&[-0.5; 8]);
 
     assert_eq!(levels.peak, 0.5);
     assert_near(levels.rms, 0.5);
@@ -117,7 +125,7 @@ fn a_constant_block_reads_the_same_on_both() {
 
 #[test]
 fn a_sine_reads_an_rms_below_its_peak() {
-    let levels = Levels::of(&sine(4, 1024));
+    let levels = measured(&sine(4, 1024));
 
     assert_near(levels.peak, 1.0);
     assert_near(levels.rms, 0.5f32.sqrt());
@@ -128,7 +136,7 @@ fn one_loud_sample_shows_in_the_peak_and_barely_in_the_rms() {
     let mut block = [0.0; 100];
     block[7] = 1.0;
 
-    let levels = Levels::of(&block);
+    let levels = measured(&block);
 
     assert_eq!(levels.peak, 1.0);
     assert_near(levels.rms, 0.1);
@@ -136,7 +144,7 @@ fn one_loud_sample_shows_in_the_peak_and_barely_in_the_rms() {
 
 #[test]
 fn a_sample_that_is_not_finite_is_measured_as_silence() {
-    let levels = Levels::of(&[f32::NAN, 1.0, f32::INFINITY, 1.0]);
+    let levels = measured(&[f32::NAN, 1.0, f32::INFINITY, 1.0]);
 
     assert_eq!(levels.peak, 1.0);
     assert_near(levels.rms, 0.5f32.sqrt());
@@ -144,12 +152,12 @@ fn a_sample_that_is_not_finite_is_measured_as_silence() {
 
 #[test]
 fn silence_reads_zero_on_both() {
-    assert_eq!(Levels::of(&[0.0; 16]), Levels::SILENT);
+    assert_eq!(measured(&[0.0; 16]), Levels::SILENT);
 }
 
 #[test]
 fn a_block_with_no_samples_reads_as_silence() {
-    assert_eq!(Levels::of(&[]), Levels::SILENT);
+    assert_eq!(measured(&[]), Levels::SILENT);
 }
 
 #[test]
@@ -163,9 +171,9 @@ fn a_meter_reads_silent_until_a_block_is_published() {
 fn a_published_block_is_readable_from_the_other_end() {
     let (mut writer, reader) = whole_block();
 
-    writer.publish(&[0.25, -0.25]);
+    let published = writer.publish(&[0.25, -0.25]);
 
-    assert_eq!(reader.read(), Levels::of(&[0.25, -0.25]));
+    assert_eq!(reader.read(), published);
 }
 
 #[test]
@@ -272,7 +280,7 @@ fn selecting_every_channel_meters_the_whole_block() {
     let (mut writer, _reader) = level_meter(2, ChannelSelection::all(2));
     let block = interleaved(&[0.2, -0.8, 0.4], &[0.9, 0.1, -0.3]);
 
-    assert_eq!(writer.publish(&block), Levels::of(&block));
+    assert_eq!(writer.publish(&block), measured(&block));
 }
 
 #[test]
