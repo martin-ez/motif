@@ -662,7 +662,11 @@ fn struck_over(beats: &[Beat], density: usize, dropout: f64, syncopation: f64) -
             continue;
         }
 
-        let step = spans[index].as_secs_f64() / density as f64;
+        let Some(span) = spans.get(index) else {
+            continue;
+        };
+
+        let step = span.as_secs_f64() / density as f64;
         let shift = if late[struck] { step / 2.0 } else { 0.0 };
         struck += 1;
         for subdivision in 0..density {
