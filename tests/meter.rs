@@ -12,7 +12,7 @@ use motif::ui::{LevelMeter, columns_of};
 const COLUMNS: usize = 12;
 const SCALE: usize = COLUMNS - 2;
 
-/// The amplitude [`LevelMeter::FLOOR_DBFS`] names, as a sample would carry it.
+/// The amplitude [`motif::ui::FLOOR_DBFS`] names, as a sample would carry it.
 const AT_THE_FLOOR: f32 = 0.001;
 
 /// A second of frames, which is how long the meter holds a peak for.

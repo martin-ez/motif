@@ -15,7 +15,7 @@ use motif::looper::{
     marks_handoff, position_meter, waveform_meter,
 };
 use motif::seq::TapTempo;
-use motif::ui::{ControlEvent, Frame, Page, Turn};
+use motif::ui::{ControlEvent, FLOOR_DBFS, Frame, Page, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
 const TOLERANCE: f32 = 1e-4;
@@ -761,6 +761,13 @@ fn the_gain_stops_at_the_bottom_of_its_range() {
 
     assert_eq!(page.decibels(), floor);
     assert!(page.gain() < 0.01);
+}
+
+#[test]
+fn the_bottom_of_the_range_is_the_floor_of_the_scale() {
+    let page = turned_repeatedly(200, Turn::Anticlockwise);
+
+    assert_eq!(page.decibels(), FLOOR_DBFS);
 }
 
 #[test]
