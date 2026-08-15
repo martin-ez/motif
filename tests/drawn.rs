@@ -119,6 +119,59 @@ fn a_rubato_recipe_both_pushes_and_pulls() {
 }
 
 #[test]
+fn a_ramped_recipe_of_a_single_beat_lays_out_that_beat() {
+    let recipe = Recipe {
+        meter: 1,
+        bars: 1,
+        drift: Drift::Ramp { to: 160.0 },
+        ..plain()
+    };
+    let fixture = synth::rendered("lone", recipe);
+
+    assert_eq!(fixture.beats().len(), 1);
+}
+
+const EVERY_DRIFT: [Drift; 3] = [
+    Drift::Steady,
+    Drift::Ramp { to: 160.0 },
+    Drift::Rubato { pull: 0.13 },
+];
+
+fn of_no_bars(drift: Drift) -> Recipe {
+    Recipe {
+        bars: 0,
+        drift,
+        ..plain()
+    }
+}
+
+#[test]
+fn a_recipe_of_no_bars_lays_out_no_beats_under_every_drift() {
+    for drift in EVERY_DRIFT {
+        let fixture = synth::rendered("empty", of_no_bars(drift));
+
+        assert!(
+            fixture.beats().is_empty(),
+            "{drift:?} laid out {:?}",
+            fixture.beats()
+        );
+    }
+}
+
+#[test]
+fn a_recipe_of_no_bars_sounds_nothing_under_every_drift() {
+    for drift in EVERY_DRIFT {
+        let fixture = synth::rendered("silent", of_no_bars(drift));
+
+        assert!(
+            fixture.onsets().is_empty(),
+            "{drift:?} sounded {:?}",
+            fixture.onsets()
+        );
+    }
+}
+
+#[test]
 fn an_unsyncopated_recipe_sounds_every_onset_on_a_beat() {
     let fixture = synth::rendered("on-the-beat", plain());
     let beats: Vec<Duration> = fixture.beats().iter().map(|beat| beat.at).collect();
