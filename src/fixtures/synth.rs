@@ -602,16 +602,19 @@ fn steady(tempo: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
 
 fn ramp(from: f64, to: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
     let count = beats_per_bar * bars;
-    let intervals = count - 1;
-    let mut at = 0.0;
-    let mut times = vec![at];
-    for interval in 0..intervals {
+    let intervals = count.saturating_sub(1);
+    let spans = (0..intervals).map(|interval| {
         let tempo = from + (to - from) * interval as f64 / (intervals - 1) as f64;
-        at += 60.0 / tempo;
-        times.push(at);
-    }
+        60.0 / tempo
+    });
+    let times = std::iter::once(0.0)
+        .chain(spans.scan(0.0, |at, span| {
+            *at += span;
+            Some(*at)
+        }))
+        .take(count);
 
-    grid(times.into_iter(), beats_per_bar)
+    grid(times, beats_per_bar)
 }
 
 const RUBATO_PULL: f64 = 0.13;
