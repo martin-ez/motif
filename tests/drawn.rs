@@ -327,6 +327,35 @@ fn a_softer_attack_takes_longer_to_reach_its_level() {
     );
 }
 
+fn a_click_of(meter: usize, bars: usize, density: usize) -> Recipe {
+    Recipe {
+        meter,
+        bars,
+        ..clicks(density, 0.0, 0.0)
+    }
+}
+
+#[test]
+fn a_percussive_recipe_of_a_single_beat_accents_that_beat() {
+    let fixture = synth::rendered("lone", a_click_of(1, 1, 1));
+
+    assert_eq!(accents(&fixture), [Duration::ZERO]);
+}
+
+#[test]
+fn a_beat_with_no_span_after_it_is_not_subdivided() {
+    let fixture = synth::rendered("unsubdivided", a_click_of(1, 1, 4));
+
+    assert!(ticks(&fixture).is_empty(), "{:?}", ticks(&fixture));
+}
+
+#[test]
+fn a_beat_with_a_span_after_it_is_still_subdivided() {
+    let fixture = synth::rendered("subdivided", a_click_of(2, 1, 2));
+
+    assert_eq!(ticks(&fixture).len(), 3);
+}
+
 fn a_line(bars: usize) -> Recipe {
     Recipe {
         tempo: 120.0,
