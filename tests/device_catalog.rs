@@ -164,33 +164,6 @@ fn a_new_catalog_has_nothing_to_draw() {
 }
 
 #[test]
-fn a_new_catalog_has_listed_nothing() {
-    let catalog = DeviceCatalog::new(48_000);
-
-    assert!(!catalog.has_listed());
-}
-
-#[test]
-fn a_refreshed_catalog_has_listed() {
-    let backend = CountingBackend::new(one_host());
-    let mut catalog = DeviceCatalog::new(48_000);
-
-    catalog.refresh(&backend, None);
-
-    assert!(catalog.has_listed());
-}
-
-#[test]
-fn a_catalog_that_listed_nothing_has_still_listed() {
-    let backend = CountingBackend::new(Vec::new());
-    let mut catalog = DeviceCatalog::new(48_000);
-
-    catalog.refresh(&backend, None);
-
-    assert!(catalog.has_listed());
-}
-
-#[test]
 fn a_refreshed_catalog_lists_what_the_backend_gave() {
     let backend = CountingBackend::new(one_host());
     let mut catalog = DeviceCatalog::new(48_000);

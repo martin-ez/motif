@@ -462,13 +462,6 @@ fn a_command_sent_after_a_drain_is_waiting_for_the_next_one() {
 }
 
 #[test]
-fn a_queue_reports_the_capacity_it_was_built_with() {
-    let (sender, receiver) = command_channel(64);
-
-    assert_eq!((sender.capacity(), receiver.capacity()), (64, 64));
-}
-
-#[test]
 fn vacant_slots_fall_as_the_queue_fills() {
     let (mut sender, _receiver) = command_channel(8);
     sender

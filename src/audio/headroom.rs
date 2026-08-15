@@ -42,21 +42,6 @@ impl Headroom {
         peak: 0.0,
     };
 
-    /// The fraction of a block period the worst recent block left unused.
-    ///
-    /// Negative where that block overran rather than clamped at zero: how far
-    /// past the deadline it went is the difference between work that is slightly
-    /// too slow and work that is hopelessly too slow.
-    ///
-    /// ```
-    /// use motif::audio::Headroom;
-    ///
-    /// assert_eq!(Headroom::IDLE.spare(), 1.0);
-    /// ```
-    pub fn spare(self) -> f32 {
-        1.0 - self.peak
-    }
-
     /// The tighter of two callbacks' readings.
     ///
     /// A duplex stream misses its deadline when either direction does, so the

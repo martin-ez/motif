@@ -230,29 +230,6 @@ fn reading_does_not_reset_what_was_measured() {
 }
 
 #[test]
-fn spare_is_what_the_worst_recent_block_left_unused() {
-    let (mut writer, reader) = headroom_meter(SAMPLE_RATE);
-
-    writer.measured(PERIOD / 4, BLOCK);
-
-    assert_eq!(reader.read().spare(), 0.75);
-}
-
-#[test]
-fn spare_is_negative_where_a_block_overran() {
-    let (mut writer, reader) = headroom_meter(SAMPLE_RATE);
-
-    writer.measured(PERIOD * 2, BLOCK);
-
-    assert_eq!(reader.read().spare(), -1.0);
-}
-
-#[test]
-fn an_idle_callback_has_all_of_its_period_spare() {
-    assert_eq!(Headroom::IDLE.spare(), 1.0);
-}
-
-#[test]
 fn the_worse_of_two_callbacks_takes_each_number_from_the_larger() {
     let busy_now = Headroom {
         load: 0.6,

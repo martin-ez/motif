@@ -22,7 +22,6 @@ use super::{AudioBackend, AudioDevice, AudioHost, DeviceId, DeviceSelection};
 pub struct DeviceCatalog {
     sample_rate: u32,
     hosts: Vec<AudioHost>,
-    listed: bool,
 }
 
 impl DeviceCatalog {
@@ -35,27 +34,15 @@ impl DeviceCatalog {
         Self {
             sample_rate,
             hosts: Vec::new(),
-            listed: false,
         }
     }
 
     /// The listing as of the last [`refresh`](Self::refresh), which nothing
     /// promises is still true.
     ///
-    /// Empty before the first refresh, and [`has_listed`](Self::has_listed) is
-    /// what tells that apart from a machine with nothing on it.
+    /// Empty before the first refresh.
     pub fn hosts(&self) -> &[AudioHost] {
         &self.hosts
-    }
-
-    /// Whether any refresh has finished, so an empty listing can be drawn as
-    /// not yet asked rather than as a machine with nothing on it.
-    ///
-    /// Never goes back to false. A listing that has aged is still a listing,
-    /// and when to pay for another is the caller's decision rather than a
-    /// flag's.
-    pub fn has_listed(&self) -> bool {
-        self.listed
     }
 
     /// Enumerate again, keeping whatever `held` identifies that the new listing
@@ -71,7 +58,6 @@ impl DeviceCatalog {
     pub fn refresh(&mut self, backend: &impl AudioBackend, held: Option<&DeviceSelection>) {
         let listed = backend.hosts(self.sample_rate);
         let previous = std::mem::replace(&mut self.hosts, listed);
-        self.listed = true;
 
         if let Some(held) = held {
             self.carry(&previous, held);

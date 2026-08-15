@@ -287,11 +287,6 @@ impl BlockCapture {
         captured
     }
 
-    /// The most frames the boundary can hold between its two ends.
-    pub fn capacity(&self) -> usize {
-        self.producer.capacity()
-    }
-
     /// A handle on whether both ends have run, for whatever starts the streams.
     ///
     /// Taken from this end because a callback owns it once the stream is

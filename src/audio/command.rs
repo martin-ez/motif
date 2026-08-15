@@ -220,11 +220,6 @@ impl CommandSender {
     pub fn vacant(&self) -> usize {
         self.queue.capacity() - self.queue.pending()
     }
-
-    /// The most commands the queue can hold at once.
-    pub fn capacity(&self) -> usize {
-        self.queue.capacity()
-    }
 }
 
 /// The receiving end of a command queue, held by the audio callback.
@@ -269,11 +264,6 @@ impl CommandReceiver {
     /// receives from this thread always succeed.
     pub fn pending(&self) -> usize {
         self.queue.pending()
-    }
-
-    /// The most commands the queue can hold at once.
-    pub fn capacity(&self) -> usize {
-        self.queue.capacity()
     }
 }
 

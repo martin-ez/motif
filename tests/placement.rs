@@ -208,22 +208,18 @@ fn a_loaded_host_leaves_the_callback_its_headroom() {
     }
 
     let headroom = stream.headroom();
+    let spare = 1.0 - headroom.peak;
     let xruns = stream.xruns();
     let placed = stream.placement();
     stream.stop().expect("a default device stops");
 
     println!("placement {placed:?}");
-    println!(
-        "peak load {:.3}, spare {:.3}",
-        headroom.peak,
-        headroom.spare()
-    );
+    println!("peak load {:.3}, spare {spare:.3}", headroom.peak);
     println!("overruns {}, underruns {}", xruns.overruns, xruns.underruns);
 
     assert!(
-        headroom.spare() > SPARE_UNDER_LOAD,
-        "the callback kept {:.3} of its deadline spare under load",
-        headroom.spare()
+        spare > SPARE_UNDER_LOAD,
+        "the callback kept {spare:.3} of its deadline spare under load"
     );
     assert_eq!(xruns.underruns, 0);
 }

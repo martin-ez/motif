@@ -137,6 +137,10 @@ fn config(input_channels: u16, output_channels: u16) -> StreamConfig {
     }
 }
 
+/// The frames a boundary on [`config`] with no slack carries between its ends,
+/// which is two of its four-frame blocks.
+const CARRIED: usize = 8;
+
 fn running<P: AudioPath>(
     ends: (BlockCapture, BlockPlayback<P>),
 ) -> (BlockCapture, BlockPlayback<P>) {
@@ -494,15 +498,14 @@ fn a_block_larger_than_the_configured_one_is_carried_whole() {
 #[test]
 fn a_full_ring_drops_the_frames_it_cannot_hold() {
     let (mut input, _output) = whole(config(1, 1), 0);
-    let capacity = input.capacity();
 
-    assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity);
+    assert_eq!(input.capture(&[1.0; CARRIED + 1]), CARRIED);
 }
 
 #[test]
 fn a_capture_before_the_playback_end_has_run_is_not_a_dropout() {
     let (mut input, _output) = unstarted(config(2, 1), 0);
-    let frames = input.capacity() + 1;
+    let frames = CARRIED + 1;
 
     assert_eq!(input.capture(&vec![1.0; frames * 2]), frames);
 }
@@ -572,12 +575,11 @@ fn a_dry_ring_is_reported_short_once_the_boundary_is_carrying() {
 #[test]
 fn a_restarted_boundary_does_not_count_its_start_as_a_dropout() {
     let (mut input, _output) = whole(config(1, 1), 0);
-    let capacity = input.capacity();
     let priming = input.priming();
 
     priming.restart();
 
-    assert_eq!(input.capture(&vec![1.0; capacity + 1]), capacity + 1);
+    assert_eq!(input.capture(&[1.0; CARRIED + 1]), CARRIED + 1);
 }
 
 #[test]
