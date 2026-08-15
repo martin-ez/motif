@@ -603,8 +603,9 @@ fn steady(tempo: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
 fn ramp(from: f64, to: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat> {
     let count = beats_per_bar * bars;
     let intervals = count.saturating_sub(1);
+    let spread = intervals.saturating_sub(1).max(1);
     let spans = (0..intervals).map(|interval| {
-        let tempo = from + (to - from) * interval as f64 / (intervals - 1) as f64;
+        let tempo = from + (to - from) * interval as f64 / spread as f64;
         60.0 / tempo
     });
     let times = std::iter::once(0.0)
