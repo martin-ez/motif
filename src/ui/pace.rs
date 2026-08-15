@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use crate::device::DeviceProfile;
-use crate::ui::hold::{Window, frames_in};
+use crate::ui::hold::{FRAMES_IN_A_SECOND, Window};
 
 /// How much of the time a frame was allowed to take the loop used.
 ///
@@ -49,7 +49,7 @@ impl Pace {
     /// A second's worth. The reader is a person looking at a page rather than
     /// another loop, so the window is what a spike has to survive to be seen at
     /// all: a maximum decaying over two frames is gone in 66 ms.
-    pub const RECENT_FRAMES: usize = frames_in(RECENT);
+    pub const RECENT_FRAMES: usize = FRAMES_IN_A_SECOND;
 
     /// The fraction of the budget the worst recent frame left unused.
     ///
@@ -145,5 +145,3 @@ impl PaceReader {
 }
 
 const BUDGET: Duration = DeviceProfile::TARGET.screen.frame_budget();
-
-const RECENT: Duration = Duration::from_secs(1);

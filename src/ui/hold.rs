@@ -10,7 +10,9 @@ use std::time::Duration;
 
 use crate::device::DeviceProfile;
 
-pub(crate) const fn frames_in(span: Duration) -> usize {
+pub(crate) const FRAMES_IN_A_SECOND: usize = frames_in(Duration::from_secs(1));
+
+const fn frames_in(span: Duration) -> usize {
     let budget = DeviceProfile::TARGET.screen.frame_budget();
     if budget.is_zero() {
         return 0;

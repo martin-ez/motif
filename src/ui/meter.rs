@@ -8,19 +8,12 @@
 //! things: a take that clipped and one that did not are the same loudness, and
 //! a meter showing only the peak is a meter that never settles.
 
-use std::time::Duration;
-
 use crate::audio::Levels;
-use crate::ui::hold::{Window, frames_in};
+use crate::ui::bar::{BRACKETS, FILLED, UNFILLED, bracketed};
+use crate::ui::hold::{FRAMES_IN_A_SECOND, Window};
+use crate::ui::scale::{FLOOR_DBFS, decibels};
 
-const OPEN: char = '[';
-const CLOSE: char = ']';
-const BRACKETS: usize = 2;
-const FILLED: char = '#';
-const UNFILLED: char = '-';
 const MARKER: char = '|';
-const HOLD: Duration = Duration::from_secs(1);
-const DECIBELS_PER_DECADE: f32 = 20.0;
 
 /// A bar showing how loud the input is, with the recent peak marked on it.
 ///
@@ -42,21 +35,13 @@ pub struct LevelMeter {
 }
 
 impl LevelMeter {
-    /// The quietest level the bar shows, in decibels below full scale.
-    ///
-    /// Anything under it draws as nothing. Sixty decibels is the range a
-    /// hardware meter of this size is conventionally given: it reaches the
-    /// noise floor of a line input without spending cells no signal will
-    /// reach.
-    pub const FLOOR_DBFS: f32 = -60.0;
-
     /// How many frames a peak stays up for.
     ///
     /// A second's worth. What the hold is for is a person catching a spike, so
     /// the window is what one has to survive to be seen at all: a marker
     /// decaying over two frames is gone in 66 ms. A peak outlives this by up to
     /// one more window, the window it is still filling when it arrives.
-    pub const PEAK_HOLD_FRAMES: usize = frames_in(HOLD);
+    pub const PEAK_HOLD_FRAMES: usize = FRAMES_IN_A_SECOND;
 
     /// A meter showing nothing.
     pub fn new() -> Self {
@@ -80,20 +65,15 @@ impl LevelMeter {
         let filled = lit(levels.rms, scale);
         let marked = lit(self.peaks.holding(levels.peak), scale).checked_sub(1);
 
-        let mut drawn = String::with_capacity(columns);
-        drawn.push(OPEN);
-        for cell in 0..scale {
-            drawn.push(if Some(cell) == marked {
+        bracketed(scale, |cell| {
+            if Some(cell) == marked {
                 MARKER
             } else if cell < filled {
                 FILLED
             } else {
                 UNFILLED
-            });
-        }
-        drawn.push(CLOSE);
-
-        drawn
+            }
+        })
     }
 }
 
@@ -104,8 +84,7 @@ impl Default for LevelMeter {
 }
 
 fn lit(amplitude: f32, scale: usize) -> usize {
-    let decibels = DECIBELS_PER_DECADE * amplitude.log10();
-    let above = (decibels - LevelMeter::FLOOR_DBFS) / -LevelMeter::FLOOR_DBFS;
+    let above = (decibels(amplitude) - FLOOR_DBFS) / -FLOOR_DBFS;
 
     (above * scale as f32).round().clamp(0.0, scale as f32) as usize
 }

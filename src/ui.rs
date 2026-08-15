@@ -33,6 +33,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::device::DeviceProfile;
 
+pub(crate) mod bar;
 mod chrome;
 mod clock;
 mod events;
@@ -47,6 +48,7 @@ mod pace;
 mod page;
 mod panel;
 mod region;
+mod scale;
 mod shell;
 mod terminal;
 
@@ -63,6 +65,7 @@ pub use pace::{Pace, PaceReader, PaceWriter, pace_meter};
 pub use page::Page;
 pub use panel::Panel;
 pub use region::Region;
+pub use scale::{FLOOR_DBFS, amplitude, decibels};
 pub use shell::Shell;
 pub use terminal::{CentredScreen, FrameWriter, KeyReader, TerminalScreen, Viewport};
 

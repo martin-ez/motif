@@ -21,7 +21,8 @@ use crate::looper::{
     WaveformReader, position_meter, take_handoff, waveform_meter,
 };
 use crate::seq::{BeatGrid, TapTempo};
-use crate::ui::{ControlEvent, Page, Region, Turn};
+use crate::ui::bar::{BRACKETS, FILLED, UNFILLED, bracketed};
+use crate::ui::{ControlEvent, FLOOR_DBFS, Page, Region, Turn, amplitude, decibels};
 
 const QUEUED_COMMANDS: usize = 8;
 const STATE_ROW: usize = 0;
@@ -39,10 +40,6 @@ const ARMED: &str = "ARMED";
 const MUTED: &str = "MUTE";
 const DECIBELS_PER_DETENT: f32 = 1.0;
 const UNITY_DECIBELS: f32 = 0.0;
-const DECIBELS_PER_DECADE: f32 = 20.0;
-const FLOOR_DECIBELS: f32 = -60.0;
-const FILLED: char = '#';
-const UNFILLED: char = '-';
 const TENTHS_PER_SECOND: u64 = 10;
 const SECONDS_PER_MINUTE: u64 = 60;
 
@@ -69,28 +66,18 @@ fn clock(frames: u32) -> String {
     )
 }
 
-fn amplitude(decibels: f32) -> f32 {
-    10.0_f32.powf(decibels / DECIBELS_PER_DECADE)
-}
-
 fn ceiling_decibels() -> f32 {
-    DECIBELS_PER_DECADE * Gain::CEILING.log10()
+    decibels(Gain::CEILING)
 }
 
 fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
-    let width = columns.saturating_sub(2);
+    let width = columns.saturating_sub(BRACKETS);
     let filled = match recorded {
         0 => 0,
         recorded => width * playhead as usize / recorded as usize,
     };
 
-    let mut drawn = String::with_capacity(width + 2);
-    drawn.push('[');
-    drawn.extend(std::iter::repeat_n(FILLED, filled));
-    drawn.extend(std::iter::repeat_n(UNFILLED, width - filled));
-    drawn.push(']');
-
-    drawn
+    bracketed(width, |cell| if cell < filled { FILLED } else { UNFILLED })
 }
 
 /// The screen a player operates the looper from.
@@ -333,7 +320,7 @@ impl LooperPage {
     }
 
     fn nudge_the_gain(&mut self, decibels: f32) {
-        self.decibels = (self.decibels + decibels).clamp(FLOOR_DECIBELS, ceiling_decibels());
+        self.decibels = (self.decibels + decibels).clamp(FLOOR_DBFS, ceiling_decibels());
     }
 }
 
