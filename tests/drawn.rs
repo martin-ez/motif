@@ -131,6 +131,21 @@ fn a_ramped_recipe_of_a_single_beat_lays_out_that_beat() {
     assert_eq!(fixture.beats().len(), 1);
 }
 
+#[test]
+fn a_two_beat_ramp_lays_its_second_beat_a_beat_later() {
+    let recipe = Recipe {
+        meter: 2,
+        bars: 1,
+        drift: Drift::Ramp { to: 160.0 },
+        ..plain()
+    };
+    let fixture = synth::rendered("pair", recipe);
+    let beats = fixture.beats();
+
+    assert_eq!(beats[0].at, Duration::ZERO);
+    assert_eq!(beats[1].at, Duration::from_millis(500));
+}
+
 const EVERY_DRIFT: [Drift; 3] = [
     Drift::Steady,
     Drift::Ramp { to: 160.0 },
