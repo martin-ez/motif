@@ -282,6 +282,58 @@ pub fn measure_rendered(
     Report { rows }
 }
 
+/// Score `candidate`'s chords against every fixture in `set` that voices any,
+/// agreeing at `comparison`.
+///
+/// [`measure_rendered`] for harmony: the candidate hears the audio, each row
+/// records the [`Recipe`] behind it, and a fixture voicing nothing is left out
+/// of the run on the grounds [`measure_chords`] gives. A set voicing nothing at
+/// all reports a mean of zero over no rows.
+///
+/// ```
+/// use motif::fixtures::harness;
+/// use motif::fixtures::synth;
+/// use motif::fixtures::{Comparison, Drift, Recipe, Texture};
+///
+/// let recipe = Recipe {
+///     tempo: 120.0,
+///     meter: 4,
+///     bars: 4,
+///     drift: Drift::Steady,
+///     texture: Texture::Chords,
+/// };
+/// let set = [synth::rendered("voiced", recipe)];
+///
+/// let report = harness::measure_rendered_chords(&set, Comparison::Sevenths, |fixture| {
+///     fixture.chords().to_vec()
+/// });
+///
+/// assert_eq!(report.mean(), 1.0);
+/// ```
+pub fn measure_rendered_chords(
+    set: &[Fixture],
+    comparison: Comparison,
+    mut candidate: impl FnMut(&Fixture) -> Vec<Chord>,
+) -> Report<Agreement> {
+    let rows = set
+        .iter()
+        .filter(|fixture| !fixture.chords().is_empty())
+        .map(|fixture| {
+            let (detected, elapsed) = timed(|| candidate(fixture));
+
+            Row {
+                name: fixture.name().to_owned(),
+                score: Agreement::of(fixture.chords(), &detected, comparison),
+                elapsed,
+                deadline: deadline(last_beat(fixture)),
+                recipe: Some(*fixture.recipe()),
+            }
+        })
+        .collect();
+
+    Report { rows }
+}
+
 fn last_beat(fixture: &Fixture) -> Duration {
     fixture
         .beats()

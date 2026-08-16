@@ -14,6 +14,8 @@
 use std::time::Duration;
 
 use motif::device::AudioProfile;
+use motif::fixtures::synth;
+use motif::fixtures::{Drift, Recipe, Texture};
 use motif::looper::{
     FinishedTake, LoopBuffer, LoopMarks, LoopWaveform, MarksReader, TakeWriter, analyse, analysing,
     marks_handoff, take_handoff,
@@ -22,6 +24,7 @@ use motif::seq::Bars;
 
 const DOWNBEAT: char = '┃';
 const BEAT: char = '│';
+const CHORD_CHANGE: char = '◆';
 
 /// A rate coarse enough to keep a fixture small, and a whole number of frames
 /// to the envelope's hop.
@@ -83,6 +86,27 @@ fn struck() -> Vec<f32> {
             (0..STRIKE_FRAMES, _) => STRUCK,
             _ => 0.0,
         })
+        .collect()
+}
+
+/// Bars of one chord each, struck on every beat, at the rate the analyst times
+/// against.
+///
+/// Rendered rather than written out here: a chord that a fold can hear is a
+/// voicing, and `synth` already places one and knows what it is called.
+fn voiced(bars: usize) -> Vec<f32> {
+    let recipe = Recipe {
+        tempo: 120.0,
+        meter: BAR_BEATS,
+        bars,
+        drift: Drift::Steady,
+        texture: Texture::Chords,
+    };
+
+    synth::rendered("harmony", recipe)
+        .samples()
+        .iter()
+        .map(|sample| f32::from(*sample) / f32::from(i8::MAX))
         .collect()
 }
 
@@ -264,5 +288,52 @@ fn a_take_published_behind_one_being_analysed_is_analysed_too() {
     assert_eq!(
         columns_holding(&published, buffer.waveform(), &[BEAT, DOWNBEAT]).len(),
         2 * BEATS
+    );
+}
+
+const VOICED_BARS: usize = 2;
+
+/// The fixture voices one chord to the bar, so what the harmony does is change
+/// on the downbeat — and the two are drawn on separate rows of one axis, which
+/// is what makes them comparable column by column.
+#[test]
+fn a_chord_change_is_marked_on_the_bar_the_harmony_changes_on() {
+    let played = voiced(VOICED_BARS);
+    let buffer = recorded(&played);
+    let counted = Bars::of(VOICED_BARS, BAR_BEATS).expect("two bars of four beats is a count");
+
+    let marks = analysed(&played, Some(counted));
+
+    assert_eq!(
+        columns_holding(&marks, buffer.waveform(), &[CHORD_CHANGE]),
+        columns_holding(&marks, buffer.waveform(), &[DOWNBEAT])
+    );
+}
+
+#[test]
+fn a_chord_change_is_marked_once_a_bar_over_a_chord_a_bar() {
+    let played = voiced(VOICED_BARS);
+    let buffer = recorded(&played);
+    let counted = Bars::of(VOICED_BARS, BAR_BEATS).expect("two bars of four beats is a count");
+
+    let marks = analysed(&played, Some(counted));
+
+    assert_eq!(
+        columns_holding(&marks, buffer.waveform(), &[CHORD_CHANGE]).len(),
+        VOICED_BARS
+    );
+}
+
+#[test]
+fn a_take_of_percussion_alone_marks_no_chord_change() {
+    let played = struck();
+    let buffer = recorded(&played);
+
+    let marks = analysed(&played, None);
+
+    assert!(
+        columns_holding(&marks, buffer.waveform(), &[CHORD_CHANGE]).is_empty(),
+        "{:?}",
+        marks.drawn(buffer.waveform(), COLUMNS)
     );
 }
