@@ -648,8 +648,7 @@ fn grid(times: impl Iterator<Item = f64>, beats_per_bar: usize) -> Vec<Beat> {
 }
 
 fn advances(times: &[f64]) -> bool {
-    times.iter().all(|at| at.is_finite() && *at >= 0.0)
-        && times.windows(2).all(|pair| pair[1] > pair[0])
+    times.iter().all(|at| at.is_finite()) && times.windows(2).all(|pair| pair[1] > pair[0])
 }
 
 const NANOS_PER_SECOND: u64 = 1_000_000_000;

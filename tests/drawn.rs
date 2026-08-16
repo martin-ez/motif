@@ -226,6 +226,20 @@ fn a_recipe_of_no_tempo_sounds_nothing_under_every_drift() {
     }
 }
 
+#[test]
+fn a_two_beat_ramp_from_no_tempo_lays_out_no_beats() {
+    let recipe = Recipe {
+        tempo: 0.0,
+        meter: 2,
+        bars: 1,
+        drift: Drift::Ramp { to: 160.0 },
+        ..plain()
+    };
+    let fixture = synth::rendered("unramped", recipe);
+
+    assert!(fixture.beats().is_empty(), "{:?}", fixture.beats());
+}
+
 const GLACIAL: f64 = 1e-6;
 
 #[test]
