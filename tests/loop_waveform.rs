@@ -342,3 +342,24 @@ fn a_frame_is_drawn_in_the_column_its_own_signal_reaches() {
             .expect("the frame is inside the loop")]
     );
 }
+
+/// Growth past a bucket boundary is the only place buckets are rewritten rather
+/// than filled, and the take that crosses one has to merge against the width it
+/// is leaving rather than the one it is arriving at. Blocks that cross two of
+/// those boundaries draw what the same loop taken whole draws.
+#[test]
+fn a_loop_grown_past_a_bucket_boundary_draws_as_if_taken_whole() {
+    let samples: Vec<f32> = (0..LONG)
+        .map(|frame| if frame.is_multiple_of(7) { 1.0 } else { 0.0 })
+        .collect();
+
+    let mut grown = LoopWaveform::EMPTY;
+    for (block, samples) in samples.chunks(BUCKETS / 2 + 1).enumerate() {
+        grown.take(block * (BUCKETS / 2 + 1), samples.iter().copied());
+    }
+
+    assert_eq!(
+        grown.drawn(COLUMNS, 2),
+        summarising(&samples).drawn(COLUMNS, 2)
+    );
+}

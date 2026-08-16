@@ -84,7 +84,6 @@ impl Extremes {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LoopWaveform {
     buckets: [Extremes; BUCKET_COUNT],
-    width: usize,
     length: usize,
 }
 
@@ -102,7 +101,6 @@ impl LoopWaveform {
     /// A summary of no loop at all.
     pub const EMPTY: Self = Self {
         buckets: [Extremes::SILENT; BUCKET_COUNT],
-        width: 1,
         length: 0,
     };
 
@@ -120,11 +118,13 @@ impl LoopWaveform {
         S::IntoIter: ExactSizeIterator,
     {
         let samples = samples.into_iter();
+        let previous_width = self.width();
         self.length = self.length.max(from + samples.len());
-        self.spread_over(self.length.div_ceil(BUCKET_COUNT).next_power_of_two());
+        self.spread_from(previous_width);
 
+        let width = self.width();
         for (offset, sample) in samples.enumerate() {
-            self.folding(from + offset, sample);
+            self.folding(width, from + offset, sample);
         }
     }
 
@@ -133,7 +133,7 @@ impl LoopWaveform {
     /// Only the ones a frame has reached: no loop has none, and a loop shorter
     /// than [`BUCKETS`](Self::BUCKETS) frames has one a frame.
     pub fn buckets(&self) -> &[Extremes] {
-        &self.buckets[..self.length.div_ceil(self.width)]
+        &self.buckets[..self.length.div_ceil(self.width())]
     }
 
     /// The loop drawn `rows` rows tall and `columns` columns wide, top row
@@ -163,7 +163,7 @@ impl LoopWaveform {
     /// earlier take ends up, and on a region with no columns to draw in.
     pub fn column_of(&self, frame: usize, columns: usize) -> Option<usize> {
         let buckets = self.buckets().len();
-        let bucket = frame / self.width;
+        let bucket = frame / self.width();
         if bucket >= buckets {
             return None;
         }
@@ -171,16 +171,20 @@ impl LoopWaveform {
         Some(((bucket + 1) * columns).checked_sub(1)? / buckets)
     }
 
-    fn folding(&mut self, frame: usize, sample: f32) {
-        let bucket = frame / self.width;
-        if frame.is_multiple_of(self.width) {
+    fn width(&self) -> usize {
+        self.length.div_ceil(BUCKET_COUNT).next_power_of_two()
+    }
+
+    fn folding(&mut self, width: usize, frame: usize, sample: f32) {
+        let bucket = frame / width;
+        if frame.is_multiple_of(width) {
             self.buckets[bucket] = Extremes::SILENT;
         }
         self.buckets[bucket] = self.buckets[bucket].including(sample);
     }
 
-    fn spread_over(&mut self, width: usize) {
-        let factor = width / self.width;
+    fn spread_from(&mut self, previous: usize) {
+        let factor = self.width() / previous;
         let kept = BUCKET_COUNT / factor;
 
         for bucket in 0..kept {
@@ -192,7 +196,6 @@ impl LoopWaveform {
                 });
         }
         self.buckets[kept..].fill(Extremes::SILENT);
-        self.width = width;
     }
 
     fn column(&self, at: usize, columns: usize) -> Extremes {
@@ -255,7 +258,6 @@ pub fn waveform_meter() -> (WaveformWriter, WaveformReader) {
         sequence: AtomicU32::new(0),
         peaks: [const { AtomicU32::new(0) }; BUCKET_COUNT],
         troughs: [const { AtomicU32::new(0) }; BUCKET_COUNT],
-        width: AtomicUsize::new(LoopWaveform::EMPTY.width),
         length: AtomicUsize::new(LoopWaveform::EMPTY.length),
     });
 
@@ -271,7 +273,6 @@ struct Published {
     sequence: AtomicU32,
     peaks: [AtomicU32; BUCKET_COUNT],
     troughs: [AtomicU32; BUCKET_COUNT],
-    width: AtomicUsize,
     length: AtomicUsize,
 }
 
@@ -306,9 +307,6 @@ impl WaveformWriter {
         for (cell, bucket) in self.published.troughs.iter().zip(waveform.buckets) {
             cell.store(bucket.trough.to_bits(), Ordering::Relaxed);
         }
-        self.published
-            .width
-            .store(waveform.width, Ordering::Relaxed);
         self.published
             .length
             .store(waveform.length, Ordering::Relaxed);
@@ -357,7 +355,6 @@ impl WaveformReader {
             for (bucket, cell) in waveform.buckets.iter_mut().zip(&self.published.troughs) {
                 bucket.trough = f32::from_bits(cell.load(Ordering::Relaxed));
             }
-            waveform.width = self.published.width.load(Ordering::Relaxed);
             waveform.length = self.published.length.load(Ordering::Relaxed);
             fence(Ordering::Acquire);
 
