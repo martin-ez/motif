@@ -186,6 +186,74 @@ fn a_recipe_of_no_bars_sounds_nothing_under_every_drift() {
     }
 }
 
+const NO_TEMPO: [f64; 4] = [0.0, -120.0, f64::NAN, f64::INFINITY];
+
+fn at_no_tempo(tempo: f64, drift: Drift) -> Recipe {
+    Recipe {
+        tempo,
+        drift,
+        ..plain()
+    }
+}
+
+#[test]
+fn a_recipe_of_no_tempo_lays_out_no_beats_under_every_drift() {
+    for drift in EVERY_DRIFT {
+        for tempo in NO_TEMPO {
+            let fixture = synth::rendered("tempoless", at_no_tempo(tempo, drift));
+
+            assert!(
+                fixture.beats().is_empty(),
+                "{drift:?} at {tempo} laid out {:?}",
+                fixture.beats()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_recipe_of_no_tempo_sounds_nothing_under_every_drift() {
+    for drift in EVERY_DRIFT {
+        for tempo in NO_TEMPO {
+            let fixture = synth::rendered("mute", at_no_tempo(tempo, drift));
+
+            assert!(
+                fixture.onsets().is_empty(),
+                "{drift:?} at {tempo} sounded {:?}",
+                fixture.onsets()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_two_beat_ramp_from_no_tempo_lays_out_no_beats() {
+    let recipe = Recipe {
+        tempo: 0.0,
+        meter: 2,
+        bars: 1,
+        drift: Drift::Ramp { to: 160.0 },
+        ..plain()
+    };
+    let fixture = synth::rendered("unramped", recipe);
+
+    assert!(fixture.beats().is_empty(), "{:?}", fixture.beats());
+}
+
+const GLACIAL: f64 = 1e-6;
+
+#[test]
+#[should_panic(expected = "longer than rendering will build")]
+fn a_recipe_too_slow_to_render_says_so_rather_than_overflowing() {
+    synth::rendered(
+        "glacial",
+        Recipe {
+            tempo: GLACIAL,
+            ..plain()
+        },
+    );
+}
+
 #[test]
 fn an_unsyncopated_recipe_sounds_every_onset_on_a_beat() {
     let fixture = synth::rendered("on-the-beat", plain());
