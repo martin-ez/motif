@@ -3,7 +3,7 @@
 
 use motif::fixtures::harness::{self, GroundTruth, Report, RunError, Target};
 use motif::fixtures::synth::{self, Fixture};
-use motif::fixtures::{AnnotationError, Axis, Chord, ChordLabel, Comparison, Drift, Note};
+use motif::fixtures::{AnnotationError, Axis, Chord, ChordLabel, Comparison, Drift, Note, Quality};
 use motif::fixtures::{Recipe, Texture};
 use std::error::Error;
 use std::fs;
@@ -699,4 +699,129 @@ fn a_target_picks_the_same_positions_from_beats_as_from_an_annotation() {
             target.positions(&annotation).collect::<Vec<_>>()
         );
     }
+}
+
+/// The same chord on the same root, stripped back to its triad, which agrees
+/// with the annotation on the root and not on the seventh.
+fn relabel(label: ChordLabel) -> ChordLabel {
+    match label {
+        ChordLabel::Sounding(root, _quality) => ChordLabel::Sounding(root, Quality::Maj),
+        ChordLabel::Silent => ChordLabel::Silent,
+    }
+}
+
+fn voicing(tempo: f64) -> Recipe {
+    Recipe {
+        texture: Texture::Chords,
+        ..at(tempo)
+    }
+}
+
+fn two_voiced_tempi() -> Vec<Fixture> {
+    vec![
+        synth::rendered("slow-harmony", voicing(90.0)),
+        synth::rendered("brisk-harmony", voicing(120.0)),
+    ]
+}
+
+#[test]
+fn an_exact_chord_candidate_over_a_rendered_set_scores_one() {
+    let report =
+        harness::measure_rendered_chords(&two_voiced_tempi(), Comparison::Sevenths, |fixture| {
+            fixture.chords().to_vec()
+        });
+
+    assert_eq!(report.rows().len(), 2);
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn a_rendered_chord_candidate_that_reports_nothing_scores_zero() {
+    let report =
+        harness::measure_rendered_chords(&two_voiced_tempi(), Comparison::Root, |_| Vec::new());
+
+    assert_eq!(report.mean(), 0.0);
+}
+
+#[test]
+fn a_rendered_chord_candidate_is_handed_the_audio_it_is_scored_on() {
+    let set = two_voiced_tempi();
+    let mut heard = Vec::new();
+
+    harness::measure_rendered_chords(&set, Comparison::Root, |fixture| {
+        heard.push(fixture.samples().len());
+        Vec::new()
+    });
+
+    assert_eq!(
+        heard,
+        set.iter()
+            .map(|fixture| fixture.samples().len())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_rendered_fixture_that_voices_no_harmony_is_not_in_a_chord_run() {
+    let mut set = two_voiced_tempi();
+    set.push(synth::rendered("clicks", at(120.0)));
+
+    let report = harness::measure_rendered_chords(&set, Comparison::Root, |fixture| {
+        fixture.chords().to_vec()
+    });
+
+    assert_eq!(report.rows().len(), 2);
+    assert_eq!(report.mean(), 1.0);
+}
+
+#[test]
+fn a_rendered_chord_row_carries_the_recipe_its_fixture_was_rendered_from() {
+    let set = two_voiced_tempi();
+
+    let report = harness::measure_rendered_chords(&set, Comparison::Root, |_| Vec::new());
+
+    for (row, fixture) in report.rows().iter().zip(&set) {
+        assert_eq!(row.recipe(), Some(fixture.recipe()), "{}", row.name());
+    }
+}
+
+#[test]
+fn a_rendered_chord_report_bands_its_aggregate_by_an_axis() {
+    let report =
+        harness::measure_rendered_chords(&two_voiced_tempi(), Comparison::Root, |fixture| {
+            if fixture.recipe().tempo > 90.0 {
+                fixture.chords().to_vec()
+            } else {
+                Vec::new()
+            }
+        });
+    let bands = report.by(Axis::Tempo);
+
+    assert_eq!(band_named(&bands, "120 BPM").mean(), 1.0);
+    assert_eq!(band_named(&bands, "90 BPM").mean(), 0.0);
+}
+
+#[test]
+fn a_rendered_chord_candidate_is_scored_at_the_level_it_is_given() {
+    let triads = |fixture: &Fixture| {
+        fixture
+            .chords()
+            .iter()
+            .map(|chord| Chord {
+                label: relabel(chord.label),
+                ..*chord
+            })
+            .collect()
+    };
+
+    let roots = harness::measure_rendered_chords(&two_voiced_tempi(), Comparison::Root, triads);
+    let sevenths =
+        harness::measure_rendered_chords(&two_voiced_tempi(), Comparison::Sevenths, triads);
+
+    assert!(
+        roots.mean() > sevenths.mean(),
+        "{} {}",
+        roots.mean(),
+        sevenths.mean()
+    );
 }

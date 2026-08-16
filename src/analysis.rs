@@ -8,12 +8,18 @@
 //! the beat tracker over it, and [`Priors`] is what a manual looper knows that
 //! a general beat tracker does not — the length the player chose, and how many
 //! beats go to a bar. [`Transform`] is the spectral one: a window of samples as
-//! the magnitude of each frequency in it.
+//! the magnitude of each frequency in it, which [`Chroma`] folds into twelve
+//! pitch classes and [`chords`] reads a take's harmony off, on the grid the
+//! tracker placed.
 
+mod chroma;
 mod envelope;
+mod harmony;
 mod spectrum;
 mod tracker;
 
+pub use chroma::Chroma;
 pub use envelope::Envelope;
+pub use harmony::chords;
 pub use spectrum::Transform;
 pub use tracker::{FASTEST, Priors, SLOWEST, Tracked, track};

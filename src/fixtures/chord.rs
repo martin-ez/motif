@@ -18,16 +18,6 @@ const NAMES: [&str; 12] = [
 
 const SILENT: &str = "N";
 
-const QUALITIES: [Quality; 7] = [
-    Quality::Maj,
-    Quality::Min,
-    Quality::Dim,
-    Quality::Aug,
-    Quality::Maj7,
-    Quality::Min7,
-    Quality::Dom7,
-];
-
 /// One of the twelve pitch classes, counted in semitones above C.
 ///
 /// A root rather than a pitch: `C` names every C, since the octave a chord is
@@ -75,6 +65,38 @@ pub enum Quality {
     Min7,
     /// A major triad under a minor seventh, written `7`.
     Dom7,
+}
+
+impl Quality {
+    /// Every quality this vocabulary spells, in the order they are listed.
+    pub const ALL: [Self; 7] = [
+        Self::Maj,
+        Self::Min,
+        Self::Dim,
+        Self::Aug,
+        Self::Maj7,
+        Self::Min7,
+        Self::Dom7,
+    ];
+
+    /// The semitones it stacks over its root, the root itself first.
+    ///
+    /// ```
+    /// use motif::fixtures::Quality;
+    ///
+    /// assert_eq!(Quality::Min7.intervals(), [0, 3, 7, 10]);
+    /// ```
+    pub const fn intervals(self) -> &'static [u8] {
+        match self {
+            Self::Maj => &[0, 4, 7],
+            Self::Min => &[0, 3, 7],
+            Self::Dim => &[0, 3, 6],
+            Self::Aug => &[0, 4, 8],
+            Self::Maj7 => &[0, 4, 7, 11],
+            Self::Min7 => &[0, 3, 7, 10],
+            Self::Dom7 => &[0, 4, 7, 10],
+        }
+    }
 }
 
 /// What sounds over a span: a chord, or nothing.
@@ -131,7 +153,7 @@ fn named_root(text: &str) -> Option<PitchClass> {
 }
 
 fn named_quality(text: &str) -> Option<Quality> {
-    QUALITIES
+    Quality::ALL
         .into_iter()
         .find(|quality| spelling(*quality) == text)
 }

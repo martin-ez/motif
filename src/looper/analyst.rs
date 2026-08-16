@@ -12,7 +12,8 @@
 use std::thread;
 use std::time::Duration;
 
-use crate::analysis::{Priors, track};
+use crate::analysis::{Priors, chords, track};
+use crate::fixtures::ChordLabel;
 
 use super::{FinishedTake, LoopMarks, Mark, MarksWriter, TakeReader};
 
@@ -47,8 +48,10 @@ pub fn analysing(takes: TakeReader, sample_rate: u32, found: MarksWriter) {
 ///
 /// The length the player closed the loop at and the count they stated are the
 /// [`Priors`] the grid is placed under; a take nobody counted is placed under
-/// its length alone. Beats are timestamps, so they come back as the frames of
-/// the take they fall at, timed against `sample_rate`.
+/// its length alone. Harmony is read off that grid rather than found again, so
+/// a chord change lands on a beat by construction. Beats are timestamps, so
+/// they come back as the frames of the take they fall at, timed against
+/// `sample_rate`.
 ///
 /// ```
 /// use motif::device::DeviceProfile;
@@ -68,7 +71,12 @@ pub fn analysing(takes: TakeReader, sample_rate: u32, found: MarksWriter) {
 /// assert_eq!(analyse(&take, profile.sample_rate), LoopMarks::none());
 /// ```
 pub fn analyse(take: &FinishedTake<'_>, sample_rate: u32) -> LoopMarks {
-    let tracked = track(take.samples(), sample_rate, priors_of(take, sample_rate));
+    let played: Vec<f32> = take.samples().collect();
+    let tracked = track(
+        played.iter().copied(),
+        sample_rate,
+        priors_of(take, sample_rate),
+    );
     let mut marks = LoopMarks::none();
 
     for beat in tracked.beats() {
@@ -76,6 +84,12 @@ pub fn analyse(take: &FinishedTake<'_>, sample_rate: u32) -> LoopMarks {
     }
     for downbeat in tracked.downbeats() {
         marks.add(frame_of(downbeat, sample_rate), Mark::Downbeat);
+    }
+    for chord in chords(&played, sample_rate, tracked.beats())
+        .iter()
+        .filter(|chord| chord.label != ChordLabel::Silent)
+    {
+        marks.add(frame_of(chord.from, sample_rate), Mark::ChordChange);
     }
 
     marks

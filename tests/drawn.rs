@@ -707,3 +707,120 @@ fn a_large_draw_reaches_every_level_of_every_axis() {
         assert_eq!(levels.len(), expected, "{}: {levels:?}", axis.named());
     }
 }
+
+fn a_chord_recipe(bars: usize) -> Recipe {
+    Recipe {
+        tempo: 120.0,
+        meter: 4,
+        bars,
+        drift: Drift::Steady,
+        texture: Texture::Chords,
+    }
+}
+
+#[test]
+fn a_chord_recipe_voices_one_chord_to_each_of_its_bars() {
+    let fixture = synth::rendered("voiced", a_chord_recipe(4));
+
+    assert_eq!(fixture.chords().len(), 4);
+}
+
+#[test]
+fn a_chord_recipe_longer_than_the_progression_voices_every_bar_of_it() {
+    let fixture = synth::rendered("wrapped", a_chord_recipe(6));
+
+    assert_eq!(fixture.chords().len(), 6);
+}
+
+#[test]
+fn a_progression_that_wraps_returns_to_the_chord_it_opened_on() {
+    let fixture = synth::rendered("wrapped", a_chord_recipe(5));
+    let voiced: Vec<_> = fixture.chords().iter().map(|chord| chord.label).collect();
+
+    assert_eq!(voiced[4], voiced[0]);
+}
+
+#[test]
+fn a_drawn_harmonic_fixture_voices_a_chord_to_every_bar_it_runs() {
+    for fixture in synth::drawn_chords(A_SEED, 4) {
+        assert_eq!(
+            fixture.chords().len(),
+            fixture.recipe().bars,
+            "{}",
+            fixture.name()
+        );
+    }
+}
+
+#[test]
+fn a_drawn_harmonic_fixture_sounds_over_the_whole_of_its_grid() {
+    for fixture in synth::drawn_chords(A_SEED, 4) {
+        let last = fixture.beats().last().expect("a drawn fixture has beats");
+
+        assert!(
+            fixture
+                .chords()
+                .last()
+                .is_some_and(|chord| chord.to > last.at),
+            "{} stops voicing at {:?}",
+            fixture.name(),
+            fixture.chords().last().map(|chord| chord.to)
+        );
+    }
+}
+
+#[test]
+fn the_same_seed_draws_the_same_harmonic_fixtures() {
+    assert_eq!(
+        synth::drawn_chords(A_SEED, 4),
+        synth::drawn_chords(A_SEED, 4)
+    );
+}
+
+#[test]
+fn two_seeds_draw_different_harmonic_fixtures() {
+    assert_ne!(
+        synth::drawn_chords(synth::DEVELOPMENT[0], 8),
+        synth::drawn_chords(synth::EVALUATION, 8)
+    );
+}
+
+#[test]
+fn a_harmonic_draw_is_not_the_percussive_draw_of_the_same_seed() {
+    assert_ne!(synth::drawn_chords(A_SEED, 4), synth::drawn(A_SEED, 4));
+}
+
+#[test]
+fn a_drawn_harmonic_fixture_is_named_for_the_seed_and_its_place_in_the_set() {
+    let names: Vec<_> = synth::drawn_chords(A_SEED, 2)
+        .iter()
+        .map(|fixture| fixture.name().to_owned())
+        .collect();
+
+    assert_eq!(names, ["voiced-2f7a1c05-000", "voiced-2f7a1c05-001"]);
+}
+
+#[test]
+fn every_drawn_harmonic_annotation_round_trips_through_the_parser() {
+    for fixture in synth::drawn_chords(A_SEED, 4) {
+        let annotation: Annotation = fixture
+            .annotation_text()
+            .parse()
+            .unwrap_or_else(|error| panic!("{} annotates cleanly: {error}", fixture.name()));
+
+        assert_eq!(annotation.chords(), fixture.chords(), "{}", fixture.name());
+    }
+}
+
+#[test]
+fn a_harmonic_draw_varies_the_grid_its_chords_sit_on() {
+    let grids: Vec<_> = synth::drawn_chords(A_SEED, 12)
+        .iter()
+        .map(|fixture| (fixture.recipe().tempo.to_bits(), fixture.recipe().meter))
+        .collect();
+    let mut distinct = grids.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+
+    assert!(distinct.len() > 1, "{grids:?}");
+}

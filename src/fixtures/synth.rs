@@ -11,6 +11,8 @@
 //! [`set`] is those committed files, which the repository's size bounds. [`drawn`]
 //! is a set rendered from a seed and never written down, which only patience
 //! bounds, and which carries the [`Recipe`] a report bands its aggregate by.
+//! [`drawn_chords`] draws the same grids and voices a chord to the bar over
+//! them, for a candidate that answers in harmony rather than in beats.
 
 use crate::fixtures::{
     Axis, Beat, Chord, ChordLabel, Drift, Note, PitchClass, Quality, Recipe, Texture,
@@ -392,6 +394,35 @@ pub fn drawn(seed: u32, count: usize) -> Vec<Fixture> {
         .collect()
 }
 
+/// Draw `count` harmonic fixtures from `seed` and render them.
+///
+/// [`drawn`] voices a chord to the bar rather than striking a click to the
+/// beat. The grid is drawn the same way, so what varies under the harmony is
+/// what a report bands a chord figure by: the tempo, the meter and the drift.
+///
+/// ```
+/// use motif::fixtures::synth;
+///
+/// let set = synth::drawn_chords(synth::DEVELOPMENT[0], 2);
+///
+/// assert!(set.iter().all(|fixture| !fixture.chords().is_empty()));
+/// ```
+pub fn drawn_chords(seed: u32, count: usize) -> Vec<Fixture> {
+    let set = format!("voiced-{seed:08x}");
+    let mut draw = Noise::from(seed_of(&set));
+
+    (0..count)
+        .map(|index| {
+            let recipe = Recipe {
+                texture: Texture::Chords,
+                ..drawn_from(&mut draw)
+            };
+
+            rendered(&format!("{set}-{index:03}"), recipe)
+        })
+        .collect()
+}
+
 const DRAWN_BARS: usize = 8;
 const TEMPI: [f64; 5] = [80.0, 100.0, 120.0, 140.0, 160.0];
 const METERS: [usize; 3] = [3, 4, 5];
@@ -455,7 +486,7 @@ const LOWEST_ROOT: u8 = 60;
 fn one_chord_per_bar(beats: &[Beat]) -> Content {
     let chords: Vec<Chord> = bars(beats)
         .into_iter()
-        .zip(PROGRESSION)
+        .zip(PROGRESSION.into_iter().cycle())
         .map(|((from, to), (semitone, quality))| Chord {
             label: ChordLabel::Sounding(PitchClass::from_semitone(semitone), quality),
             from,
@@ -531,17 +562,9 @@ fn voicing(chord: &Chord) -> Vec<u8> {
     let ChordLabel::Sounding(root, quality) = chord.label else {
         return Vec::new();
     };
-    let intervals: &[u8] = match quality {
-        Quality::Maj => &[0, 4, 7],
-        Quality::Min => &[0, 3, 7],
-        Quality::Dim => &[0, 3, 6],
-        Quality::Aug => &[0, 4, 8],
-        Quality::Maj7 => &[0, 4, 7, 11],
-        Quality::Min7 => &[0, 3, 7, 10],
-        Quality::Dom7 => &[0, 4, 7, 10],
-    };
 
-    intervals
+    quality
+        .intervals()
         .iter()
         .map(|interval| LOWEST_ROOT + root.semitone() + interval)
         .collect()
