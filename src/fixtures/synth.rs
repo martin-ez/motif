@@ -632,7 +632,13 @@ fn rubato(tempo: f64, pull: f64, beats_per_bar: usize, bars: usize) -> Vec<Beat>
 }
 
 fn grid(times: impl Iterator<Item = f64>, beats_per_bar: usize) -> Vec<Beat> {
+    let times: Vec<f64> = times.collect();
+    if !advances(&times) {
+        return Vec::new();
+    }
+
     times
+        .into_iter()
         .enumerate()
         .map(|(index, seconds)| Beat {
             at: on_the_sample_grid(seconds),
@@ -641,10 +647,19 @@ fn grid(times: impl Iterator<Item = f64>, beats_per_bar: usize) -> Vec<Beat> {
         .collect()
 }
 
-fn on_the_sample_grid(seconds: f64) -> Duration {
-    let frame = (seconds * f64::from(SAMPLE_RATE)).round() as u64;
+fn advances(times: &[f64]) -> bool {
+    times.iter().all(|at| at.is_finite() && *at >= 0.0)
+        && times.windows(2).all(|pair| pair[1] > pair[0])
+}
 
-    Duration::from_nanos(frame * 1_000_000_000 / u64::from(SAMPLE_RATE))
+const NANOS_PER_SECOND: u64 = 1_000_000_000;
+
+fn on_the_sample_grid(seconds: f64) -> Duration {
+    let rate = u64::from(SAMPLE_RATE);
+    let frame = (seconds * f64::from(SAMPLE_RATE)).round() as u64;
+    let over = ((frame % rate) * NANOS_PER_SECOND / rate) as u32;
+
+    Duration::new(frame / rate, over)
 }
 
 fn struck_over(beats: &[Beat], density: usize, dropout: f64, syncopation: f64) -> Vec<Onset> {
