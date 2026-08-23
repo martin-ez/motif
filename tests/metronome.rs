@@ -86,13 +86,24 @@ const BLOCKS_PAST_A_CLICK: usize = (FIRST_BEAT + CLICK_FRAMES) / BLOCK + 2;
 /// A level to play under a click, low enough to leave the sum inside scale.
 const UNDER: f32 = 0.25;
 
-fn config() -> StreamConfig {
+/// Eight milliseconds at 192 kHz, which is as long as a click ever gets.
+const LONGEST_CLICK_FRAMES: usize = 1_536;
+
+/// A rate no device runs at, whose eight milliseconds would be five times the
+/// longest click there is.
+const IMPLAUSIBLE_RATE: u32 = 1_000_000;
+
+fn config_at(sample_rate: u32) -> StreamConfig {
     StreamConfig {
-        sample_rate: SAMPLE_RATE,
+        sample_rate,
         block_size: BLOCK as u32,
         input_channels: 1,
         output_channels: 1,
     }
+}
+
+fn config() -> StreamConfig {
+    config_at(SAMPLE_RATE)
 }
 
 /// A schedule holding `beat` and `next`, and no other beat inside a block.
@@ -111,15 +122,15 @@ fn scheduled(beat: u64) -> ScheduleReader {
     scheduled_pair(beat, beat + A_LONG_WAY)
 }
 
-/// Every frame a metronome plays over [`BLOCKS_PAST_A_CLICK`] blocks, with one
-/// beat at `beat` and `under` playing beneath it.
-fn sounded_from(beat: u64, under: f32) -> Vec<f32> {
-    let (mut frames, elapsed) = sample_clock(SAMPLE_RATE);
-    let mut metronome = Metronome::over(scheduled(beat), elapsed, Passthrough::new());
-    metronome.prepare(config());
+/// Every frame a metronome running at `rate` plays over `blocks` blocks, with
+/// the beats `schedule` holds and `under` playing beneath them.
+fn sounded_over(rate: u32, schedule: ScheduleReader, blocks: usize, under: f32) -> Vec<f32> {
+    let (mut frames, elapsed) = sample_clock(rate);
+    let mut metronome = Metronome::over(schedule, elapsed, Passthrough::new());
+    metronome.prepare(config_at(rate));
 
     let mut sounded = Vec::new();
-    for _ in 0..BLOCKS_PAST_A_CLICK {
+    for _ in 0..blocks {
         let mut playing = [0.0; BLOCK];
         metronome.render(&[under; BLOCK], &mut playing);
         frames.advance(BLOCK);
@@ -127,6 +138,10 @@ fn sounded_from(beat: u64, under: f32) -> Vec<f32> {
     }
 
     sounded
+}
+
+fn sounded_from(beat: u64, under: f32) -> Vec<f32> {
+    sounded_over(SAMPLE_RATE, scheduled(beat), BLOCKS_PAST_A_CLICK, under)
 }
 
 fn sounded_past_a_click(under: f32) -> Vec<f32> {
@@ -371,5 +386,17 @@ fn a_beat_on_the_edge_of_a_block_sounds_once() {
     assert_eq!(
         on_the_edge[BLOCK], inside[FIRST_BEAT],
         "a beat on the edge sounded in the block either side of it"
+    );
+}
+
+#[test]
+fn a_click_is_no_longer_than_its_ceiling_whatever_rate_a_device_claims() {
+    let apart = scheduled_pair(FIRST_BEAT as u64, 10 * LONGEST_CLICK_FRAMES as u64);
+    let blocks = (FIRST_BEAT + LONGEST_CLICK_FRAMES) / BLOCK + 2;
+    let sounded = sounded_over(IMPLAUSIBLE_RATE, apart, blocks, 0.0);
+
+    assert_eq!(
+        sounded.iter().rposition(|played| *played != 0.0),
+        Some(FIRST_BEAT + LONGEST_CLICK_FRAMES - 1)
     );
 }

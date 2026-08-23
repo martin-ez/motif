@@ -19,8 +19,9 @@ use crate::seq::ScheduleReader;
 use super::{AudioPath, Command, SampleClockReader, StreamConfig, held};
 
 const CLICK_HERTZ: f32 = 1_000.0;
-const CLICK_MILLISECONDS: u32 = 8;
-const MILLISECONDS_IN_A_SECOND: u32 = 1_000;
+const CLICK_MILLISECONDS: usize = 8;
+const MILLISECONDS_IN_A_SECOND: usize = 1_000;
+const LONGEST_CLICK_FRAMES: usize = 1_536;
 const CLICK_LEVEL: f32 = 0.5;
 const DECAY_PER_SECOND: f32 = 400.0;
 
@@ -100,7 +101,8 @@ impl<P: AudioPath> Metronome<P> {
 }
 
 fn click_of(sample_rate: u32) -> Vec<f32> {
-    let frames = sample_rate * CLICK_MILLISECONDS / MILLISECONDS_IN_A_SECOND;
+    let frames = (sample_rate as usize * CLICK_MILLISECONDS / MILLISECONDS_IN_A_SECOND)
+        .min(LONGEST_CLICK_FRAMES);
     (0..frames)
         .map(|frame| {
             let seconds = frame as f32 / sample_rate as f32;
@@ -113,6 +115,11 @@ impl<P: AudioPath> AudioPath for Metronome<P> {
     /// Renders the click at the rate the device granted, which is the one place
     /// a path may allocate, and leaves no click part-played across a stream
     /// that was reopened under it.
+    ///
+    /// The click is eight milliseconds, held to what that is at 192 kHz — the
+    /// top of what audio hardware runs at. A rate arrives from the device, and
+    /// sizing an allocation from one nothing bounds is how an implausible
+    /// answer becomes a gigabyte.
     fn prepare(&mut self, config: StreamConfig) {
         self.path.prepare(config);
         self.click = click_of(config.sample_rate);
