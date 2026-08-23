@@ -279,7 +279,10 @@ fn a_frame_on_a_beat_gets_the_beat_after_it() {
 fn the_beat_after_the_last_is_projected_from_the_grid() {
     let grid = grid_of(&[10_000, 10_000 + HALF_SECOND, 10_000 + 2 * HALF_SECOND]);
 
-    assert_eq!(grid.next_beat(10_000 + 2 * HALF_SECOND), Some(10_000 + 3 * HALF_SECOND));
+    assert_eq!(
+        grid.next_beat(10_000 + 2 * HALF_SECOND),
+        Some(10_000 + 3 * HALF_SECOND)
+    );
 }
 
 #[test]

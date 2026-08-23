@@ -46,13 +46,6 @@ impl BeatsAhead {
     /// busy to run costs no click, and short enough to read inside a block.
     pub const BEATS: usize = 8;
 
-    /// No beats at all, which is what a schedule holds until one is published
-    /// and what it holds again after [`ScheduleWriter::silence`].
-    pub const NONE: Self = Self {
-        beats: [0; Self::BEATS],
-        count: 0,
-    };
-
     /// The beats, in the order they fall.
     pub fn beats(&self) -> &[u64] {
         &self.beats[..self.count]
@@ -156,7 +149,9 @@ impl ScheduleReader {
         let count = self.shared.counts[published].load(Ordering::Relaxed);
 
         BeatsAhead {
-            beats: array::from_fn(|beat| self.shared.slots[published][beat].load(Ordering::Relaxed)),
+            beats: array::from_fn(|beat| {
+                self.shared.slots[published][beat].load(Ordering::Relaxed)
+            }),
             count: count.min(BeatsAhead::BEATS),
         }
     }

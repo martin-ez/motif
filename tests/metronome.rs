@@ -5,6 +5,10 @@
 //! one block carries into the next, that a beat outside the block sounds
 //! nothing, that the click is summed over what is already playing and held
 //! inside full scale, and that a block allocates nothing.
+//!
+//! What the click sounds like is stated here too — how long it lasts, that it
+//! decays, what it swings at and that it leaves room above itself — because
+//! none of that is visible in an assertion that a sample is merely not silent.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -12,7 +16,9 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use motif::audio::{AudioPath, Command, Metronome, Passthrough, StreamConfig, sample_clock};
+use motif::audio::{
+    AudioPath, Command, HELD_ABOVE, Metronome, Passthrough, StreamConfig, sample_clock,
+};
 use motif::seq::{BeatGrid, ScheduleReader, beat_schedule};
 
 thread_local! {
@@ -64,6 +70,22 @@ const BLOCK: usize = 16;
 /// Far enough past a beat that no test's block reaches the one after it.
 const A_LONG_WAY: u64 = 1_000;
 
+/// Eight milliseconds at [`SAMPLE_RATE`], which is how long a click sounds for.
+const CLICK_FRAMES: usize = SAMPLE_RATE as usize * 8 / 1_000;
+
+/// Half a cycle of the kilohertz a click swings at, where a cosine is at its
+/// most negative.
+const HALF_A_CYCLE: usize = SAMPLE_RATE as usize / 1_000 / 2;
+
+/// The frame the one beat of a sounded run falls on.
+const FIRST_BEAT: usize = 1;
+
+/// Enough blocks to carry a whole click and leave silence after it.
+const BLOCKS_PAST_A_CLICK: usize = (FIRST_BEAT + CLICK_FRAMES) / BLOCK + 2;
+
+/// A level to play under a click, low enough to leave the sum inside scale.
+const UNDER: f32 = 0.25;
+
 fn config() -> StreamConfig {
     StreamConfig {
         sample_rate: SAMPLE_RATE,
@@ -87,6 +109,38 @@ fn scheduled_pair(beat: u64, next: u64) -> ScheduleReader {
 /// A schedule whose first beat is `beat`, and whose next is a long way after.
 fn scheduled(beat: u64) -> ScheduleReader {
     scheduled_pair(beat, beat + A_LONG_WAY)
+}
+
+/// Every frame a metronome plays over [`BLOCKS_PAST_A_CLICK`] blocks, with one
+/// beat at `beat` and `under` playing beneath it.
+fn sounded_from(beat: u64, under: f32) -> Vec<f32> {
+    let (mut frames, elapsed) = sample_clock(SAMPLE_RATE);
+    let mut metronome = Metronome::over(scheduled(beat), elapsed, Passthrough::new());
+    metronome.prepare(config());
+
+    let mut sounded = Vec::new();
+    for _ in 0..BLOCKS_PAST_A_CLICK {
+        let mut playing = [0.0; BLOCK];
+        metronome.render(&[under; BLOCK], &mut playing);
+        frames.advance(BLOCK);
+        sounded.extend_from_slice(&playing);
+    }
+
+    sounded
+}
+
+fn sounded_past_a_click(under: f32) -> Vec<f32> {
+    sounded_from(FIRST_BEAT as u64, under)
+}
+
+fn just_the_click(sounded: &[f32]) -> &[f32] {
+    &sounded[FIRST_BEAT..FIRST_BEAT + CLICK_FRAMES]
+}
+
+fn peak(samples: &[f32]) -> f32 {
+    samples
+        .iter()
+        .fold(0.0, |top: f32, played| top.max(played.abs()))
 }
 
 /// A path that answers every command and records having been prepared.
@@ -184,7 +238,11 @@ fn two_beats_in_one_block_each_sound() {
     once.render(&[0.0; BLOCK], &mut one);
     twice.render(&[0.0; BLOCK], &mut two);
 
-    assert_eq!(one[..9], two[..9], "the second beat changed the first click");
+    assert_eq!(
+        one[..9],
+        two[..9],
+        "the second beat changed the first click"
+    );
     assert_ne!(one[9..], two[9..], "the second beat sounded nothing");
 }
 
@@ -256,4 +314,62 @@ fn a_block_does_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "a block allocated");
+}
+
+#[test]
+fn a_click_sounds_for_eight_milliseconds_and_then_stops() {
+    let sounded = sounded_past_a_click(0.0);
+
+    assert_eq!(
+        sounded.iter().rposition(|played| *played != 0.0),
+        Some(FIRST_BEAT + CLICK_FRAMES - 1)
+    );
+}
+
+#[test]
+fn a_click_is_loudest_where_it_starts() {
+    let sounded = sounded_past_a_click(0.0);
+    let (opening, closing) = just_the_click(&sounded).split_at(CLICK_FRAMES / 2);
+
+    assert!(peak(opening) > peak(closing), "the click did not decay");
+}
+
+#[test]
+fn a_click_leaves_room_above_it_for_what_it_is_played_over() {
+    let sounded = sounded_past_a_click(0.0);
+
+    assert!(peak(just_the_click(&sounded)) < HELD_ABOVE);
+}
+
+#[test]
+fn a_click_swings_at_a_kilohertz() {
+    let sounded = sounded_past_a_click(0.0);
+    let trough = just_the_click(&sounded)
+        .iter()
+        .enumerate()
+        .min_by(|one, two| one.1.total_cmp(two.1))
+        .map(|(at, _)| at);
+
+    assert_eq!(trough, Some(HALF_A_CYCLE));
+}
+
+#[test]
+fn a_click_adds_to_what_is_already_playing() {
+    let sounded = sounded_past_a_click(UNDER);
+
+    assert!(
+        sounded[FIRST_BEAT] > UNDER,
+        "the click was taken off what was playing"
+    );
+}
+
+#[test]
+fn a_beat_on_the_edge_of_a_block_sounds_once() {
+    let inside = sounded_past_a_click(0.0);
+    let on_the_edge = sounded_from(BLOCK as u64, 0.0);
+
+    assert_eq!(
+        on_the_edge[BLOCK], inside[FIRST_BEAT],
+        "a beat on the edge sounded in the block either side of it"
+    );
 }
