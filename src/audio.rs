@@ -28,6 +28,7 @@ mod gain;
 mod headroom;
 mod level;
 mod link;
+mod metronome;
 mod path;
 mod placement;
 mod probe;
@@ -48,6 +49,7 @@ pub use gain::Gain;
 pub use headroom::{Headroom, HeadroomReader, HeadroomWriter, headroom_meter};
 pub use level::{LevelReader, LevelWriter, Levels, level_meter};
 pub use link::{AudioState, DeviceLink, SharedLink};
+pub use metronome::Metronome;
 pub use path::{AudioPath, Commanded, GUARDED_LEVEL, Opening, Passthrough};
 pub use placement::{
     Grant, HOSTED_PRIORITY, Placed, Placement, PriorityReader, PriorityReporter, pinning,

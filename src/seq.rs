@@ -15,8 +15,10 @@
 
 mod bars;
 mod grid;
+mod schedule;
 mod tap;
 
 pub use bars::Bars;
 pub use grid::{BeatGrid, Position};
+pub use schedule::{BeatsAhead, ScheduleReader, ScheduleWriter, beat_schedule};
 pub use tap::TapTempo;

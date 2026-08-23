@@ -121,6 +121,46 @@ impl BeatGrid {
         Some(SECONDS_PER_MINUTE * f64::from(self.sample_rate) * intervals as f64 / span as f64)
     }
 
+    /// The first beat after frame `after`, whether the grid holds it or not.
+    ///
+    /// The forward view a metronome needs. Past the last beat it is projected
+    /// from the average interval, which is steadier under a beat that landed
+    /// early than the last pair would be, and is arithmetic over the
+    /// timestamps rather than a number kept beside them.
+    ///
+    /// `None` below two beats, and where the projection would outrun the clock.
+    ///
+    /// ```
+    /// use motif::seq::BeatGrid;
+    ///
+    /// let mut grid = BeatGrid::new(48_000);
+    /// for beat in [0, 24_000, 48_000] {
+    ///     assert!(grid.push(beat));
+    /// }
+    ///
+    /// assert_eq!(grid.next_beat(1_000), Some(24_000));
+    /// assert_eq!(grid.next_beat(48_000), Some(72_000));
+    /// ```
+    pub fn next_beat(&self, after: u64) -> Option<u64> {
+        let following = self.beats.partition_point(|&beat| beat <= after);
+        if let Some(&beat) = self.beats.get(following) {
+            return Some(beat);
+        }
+
+        let interval = self.average_interval()?;
+        let last = *self.beats.last()?;
+        let beats_past = (after - last) / interval + 1;
+
+        beats_past.checked_mul(interval)?.checked_add(last)
+    }
+
+    pub(crate) fn average_interval(&self) -> Option<u64> {
+        let intervals = self.beats.len().checked_sub(1).filter(|&count| count > 0)?;
+        let span = self.beats.last()? - self.beats.first()?;
+
+        Some(span / intervals as u64)
+    }
+
     /// Where frame `frame` falls against the beats.
     ///
     /// Reads a slice and halves its search, so this allocates nothing, blocks

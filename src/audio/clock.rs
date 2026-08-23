@@ -148,6 +148,10 @@ impl<P: AudioPath> AudioPath for Counting<P> {
 
 /// The reading end of a sample clock, held by whichever thread timestamps
 /// against it.
+///
+/// Cloneable because a run has one clock and more than one thing timed by it:
+/// the page stamps a tap with it and the metronome places a beat against it.
+#[derive(Clone)]
 pub struct SampleClockReader {
     counted: Arc<AtomicU64>,
     counting_at: Arc<AtomicU32>,

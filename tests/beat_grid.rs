@@ -2,8 +2,9 @@
 //!
 //! The facts worth stating are that the beats come back as they went in, that
 //! a timestamp out of order is refused, that a frame is placed against the
-//! beats around it, that the tempo follows the beats rather than being kept
-//! beside them, and that reading a grid allocates nothing.
+//! beats around it, that the beat after a frame is projected where the grid
+//! has not reached it yet, that the tempo follows the beats rather than being
+//! kept beside them, and that reading a grid allocates nothing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -257,4 +258,80 @@ fn reading_a_grid_does_not_allocate() {
     let after = allocations();
 
     assert_eq!(after, before, "reading a grid allocated");
+}
+
+#[test]
+fn the_next_beat_is_the_one_that_follows_the_frame() {
+    let grid = four_beats_at_120();
+
+    assert_eq!(grid.next_beat(1), Some(HALF_SECOND));
+    assert_eq!(grid.next_beat(HALF_SECOND - 1), Some(HALF_SECOND));
+}
+
+#[test]
+fn a_frame_on_a_beat_gets_the_beat_after_it() {
+    let grid = four_beats_at_120();
+
+    assert_eq!(grid.next_beat(HALF_SECOND), Some(2 * HALF_SECOND));
+}
+
+#[test]
+fn the_beat_after_the_last_is_projected_from_the_grid() {
+    let grid = grid_of(&[10_000, 10_000 + HALF_SECOND, 10_000 + 2 * HALF_SECOND]);
+
+    assert_eq!(
+        grid.next_beat(10_000 + 2 * HALF_SECOND),
+        Some(10_000 + 3 * HALF_SECOND)
+    );
+}
+
+#[test]
+fn a_projection_reaches_as_far_past_the_grid_as_it_is_asked() {
+    let grid = four_beats_at_120();
+
+    assert_eq!(grid.next_beat(3 * HALF_SECOND), Some(4 * HALF_SECOND));
+    assert_eq!(grid.next_beat(4 * HALF_SECOND - 1), Some(4 * HALF_SECOND));
+    assert_eq!(grid.next_beat(4 * HALF_SECOND), Some(5 * HALF_SECOND));
+    assert_eq!(grid.next_beat(9 * HALF_SECOND + 1), Some(10 * HALF_SECOND));
+}
+
+#[test]
+fn a_projection_averages_the_whole_grid_rather_than_its_last_interval() {
+    let early = grid_of(&[0, HALF_SECOND, 2 * HALF_SECOND - 1_000]);
+
+    assert_eq!(early.next_beat(2 * HALF_SECOND - 1_000), Some(70_500));
+}
+
+#[test]
+fn a_grid_without_two_beats_projects_nothing() {
+    assert_eq!(BeatGrid::new(SAMPLE_RATE).next_beat(0), None);
+    assert_eq!(grid_of(&[HALF_SECOND]).next_beat(HALF_SECOND), None);
+}
+
+#[test]
+fn a_projection_that_would_outrun_the_clock_is_refused() {
+    let grid = four_beats_at_120();
+
+    assert_eq!(grid.next_beat(u64::MAX), None);
+}
+
+#[test]
+fn a_projection_comes_after_the_frame_it_was_asked_about() {
+    let grid = four_beats_at_120();
+    let late = u64::MAX - HALF_SECOND;
+
+    assert!(grid.next_beat(late).is_some_and(|beat| beat > late));
+}
+
+#[test]
+fn projecting_a_beat_does_not_allocate() {
+    let grid = four_beats_at_120();
+
+    let before = allocations();
+    for frame in 0..8 * HALF_SECOND {
+        black_box(grid.next_beat(black_box(frame)));
+    }
+    let after = allocations();
+
+    assert_eq!(after, before, "projecting a beat allocated");
 }

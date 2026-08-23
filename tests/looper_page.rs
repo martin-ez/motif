@@ -14,7 +14,7 @@ use motif::looper::{
     LoopBuffer, LoopMarks, LoopPosition, LoopWaveform, LooperPage, Mark, MarksWriter, Transport,
     marks_handoff, position_meter, waveform_meter,
 };
-use motif::seq::TapTempo;
+use motif::seq::{BeatsAhead, ScheduleReader, TapTempo, beat_schedule};
 use motif::ui::{ControlEvent, FLOOR_DBFS, Frame, Page, Turn};
 
 const SCREEN: ScreenProfile = DeviceProfile::TARGET.screen;
@@ -77,6 +77,7 @@ fn page() -> LooperPage {
         marks_handoff().1,
         sample_clock(SECOND).1,
         sending(),
+        beat_schedule().0,
     )
 }
 
@@ -90,6 +91,7 @@ fn page_ordering_with_room_for(commands: usize) -> (LooperPage, CommandReceiver)
             marks_handoff().1,
             sample_clock(SECOND).1,
             sending,
+            beat_schedule().0,
         ),
         orders,
     )
@@ -109,6 +111,7 @@ fn page_showing(position: LoopPosition) -> LooperPage {
         marks_handoff().1,
         sample_clock(SECOND).1,
         sending(),
+        beat_schedule().0,
     )
 }
 
@@ -126,6 +129,7 @@ fn page_on_a_clock_at(sample_rate: u32) -> (LooperPage, SampleClockWriter) {
             marks_handoff().1,
             elapsed,
             sending(),
+            beat_schedule().0,
         ),
         frames,
     )
@@ -147,8 +151,34 @@ fn tapped(apart: &[usize]) -> LooperPage {
     page
 }
 
+/// A page tapped `apart`, and the schedule the beats it states are put on.
+fn tapped_on_a_schedule(apart: &[usize]) -> (LooperPage, ScheduleReader, SampleClockWriter) {
+    let (writing, beats) = beat_schedule();
+    let (mut frames, elapsed) = sample_clock(SECOND);
+    let mut page = LooperPage::new(
+        position_meter().1,
+        waveform_meter().1,
+        marks_handoff().1,
+        elapsed,
+        sending(),
+        writing,
+    );
+
+    page.control(shifted(Button::Play));
+    for interval in apart {
+        frames.advance(*interval);
+        page.control(shifted(Button::Play));
+    }
+
+    (page, beats, frames)
+}
+
+fn steady_taps() -> [usize; TapTempo::TAPS_TO_A_TEMPO - 1] {
+    [HALF_SECOND; TapTempo::TAPS_TO_A_TEMPO - 1]
+}
+
 fn tapped_steadily() -> LooperPage {
-    tapped(&[HALF_SECOND; TapTempo::TAPS_TO_A_TEMPO - 1])
+    tapped(&steady_taps())
 }
 
 fn turned(turn: Turn) -> ControlEvent {
@@ -227,6 +257,7 @@ fn page_drawing(waveform: &LoopWaveform) -> LooperPage {
         marks_handoff().1,
         sample_clock(SECOND).1,
         sending(),
+        beat_schedule().0,
     )
 }
 
@@ -243,6 +274,7 @@ fn page_awaiting_analysis(waveform: &LoopWaveform) -> (LooperPage, MarksWriter) 
             marks,
             sample_clock(SECOND).1,
             sending(),
+            beat_schedule().0,
         ),
         analyst,
     )
@@ -1230,4 +1262,46 @@ fn a_loop_that_was_emptied_is_not_emptied_again_every_frame() {
     drawn(&mut page);
 
     assert_eq!(ordered(&mut orders), []);
+}
+
+#[test]
+fn a_tapped_pulse_schedules_the_beats_that_follow_it() {
+    let (mut page, beats, _frames) = tapped_on_a_schedule(&steady_taps());
+
+    let _drawn = drawn(&mut page);
+
+    assert_eq!(beats.read().beats().len(), BeatsAhead::BEATS);
+}
+
+#[test]
+fn the_beats_scheduled_carry_on_the_pulse_that_was_tapped() {
+    let (mut page, beats, _frames) = tapped_on_a_schedule(&steady_taps());
+
+    let _drawn = drawn(&mut page);
+
+    assert_eq!(
+        beats.read().beats()[0],
+        TapTempo::TAPS_TO_A_TEMPO as u64 * HALF_SECOND as u64
+    );
+}
+
+#[test]
+fn a_pulse_nobody_has_stated_yet_schedules_nothing() {
+    let (mut page, beats, _frames) = tapped_on_a_schedule(&[HALF_SECOND]);
+
+    let _drawn = drawn(&mut page);
+
+    assert_eq!(beats.read().beats(), &[]);
+}
+
+#[test]
+fn a_tempo_the_player_has_left_behind_takes_the_beats_off_the_schedule() {
+    let (mut page, beats, mut frames) = tapped_on_a_schedule(&steady_taps());
+    let _stated = drawn(&mut page);
+
+    frames.advance(SECOND as usize * TapTempo::STALE_AFTER_SECONDS as usize + 1);
+    page.control(shifted(Button::Play));
+    let _withdrawn = drawn(&mut page);
+
+    assert_eq!(beats.read().beats(), &[]);
 }
