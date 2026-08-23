@@ -108,18 +108,11 @@ impl TapTempo {
     }
 
     fn resembles_the_sequence(&self, interval: u64) -> bool {
-        let Some(average) = self.average_interval() else {
+        let Some(average) = self.grid.average_interval() else {
             return true;
         };
 
         interval <= average * OUTLYING_RATIO && interval * OUTLYING_RATIO >= average
-    }
-
-    fn average_interval(&self) -> Option<u64> {
-        let intervals = self.grid.len().checked_sub(1).filter(|&count| count > 0)?;
-        let span = self.grid.beats().last()? - self.grid.beats().first()?;
-
-        Some(span / intervals as u64)
     }
 
     fn restart(&mut self, at: u64) -> bool {

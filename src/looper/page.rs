@@ -14,13 +14,15 @@
 //! handed [`ControlEvent`]s and fills a [`Region`], so the same page draws on a
 //! hardware panel once there is one.
 
-use crate::audio::{Command, CommandSender, Commanded, Gain, SampleClockReader, command_channel};
+use crate::audio::{
+    Command, CommandSender, Commanded, Gain, Metronome, SampleClockReader, command_channel,
+};
 use crate::device::{AudioProfile, Button, DeviceProfile, Encoder};
 use crate::looper::{
     LoopBuffer, LoopEngine, LoopMarks, MarksReader, PositionReader, TakeReader, Transport,
     WaveformReader, position_meter, take_handoff, waveform_meter,
 };
-use crate::seq::{BeatGrid, TapTempo};
+use crate::seq::{BeatGrid, ScheduleWriter, TapTempo, beat_schedule};
 use crate::ui::bar::{BRACKETS, FILLED, UNFILLED, bracketed};
 use crate::ui::{ControlEvent, FLOOR_DBFS, Page, Region, Turn, amplitude, decibels};
 
@@ -94,13 +96,21 @@ fn bar(playhead: u32, recorded: u32, columns: usize) -> String {
 /// use motif::audio::{command_channel, sample_clock};
 /// use motif::device::Button;
 /// use motif::looper::{LooperPage, Transport, marks_handoff, position_meter, waveform_meter};
+/// use motif::seq::beat_schedule;
 /// use motif::ui::{ControlEvent, Page};
 ///
 /// let (_writer, reader) = position_meter();
 /// let shape = waveform_meter().1;
 /// let marks = marks_handoff().1;
 /// let clock = sample_clock(48_000).1;
-/// let mut page = LooperPage::new(reader, shape, marks, clock, command_channel(8).0);
+/// let mut page = LooperPage::new(
+///     reader,
+///     shape,
+///     marks,
+///     clock,
+///     command_channel(8).0,
+///     beat_schedule().0,
+/// );
 ///
 /// page.control(ControlEvent::Pressed { button: Button::Record, shifted: false });
 ///
@@ -118,6 +128,7 @@ pub struct LooperPage {
     marks: LoopMarks,
     elapsed: SampleClockReader,
     taps: TapTempo,
+    schedule: ScheduleWriter,
     decibels: f32,
     muted: bool,
     undos: usize,
@@ -127,16 +138,19 @@ pub struct LooperPage {
 impl LooperPage {
     /// A page over an idle transport, reading its playhead from `position`, the
     /// shape of the loop from `waveform` and what analysis found from `marks`,
-    /// timing its taps by `elapsed`, and ordering the engine over `commands`.
+    /// timing its taps by `elapsed`, ordering the engine over `commands`, and
+    /// putting the beats it is told about on `schedule`.
     ///
     /// A tap is stamped with the frame the device had reached, so the grid it
-    /// makes lines up with the audio captured around it.
+    /// makes lines up with the audio captured around it, and so the beats the
+    /// schedule carries fall where a callback can place them.
     pub fn new(
         position: PositionReader,
         waveform: WaveformReader,
         marks: MarksReader,
         elapsed: SampleClockReader,
         commands: CommandSender,
+        schedule: ScheduleWriter,
     ) -> Self {
         Self {
             transport: Transport::default(),
@@ -144,6 +158,7 @@ impl LooperPage {
             ordered_decibels: UNITY_DECIBELS,
             ordered_muted: false,
             taps: TapTempo::new(elapsed.sample_rate()),
+            schedule,
             commands,
             position,
             waveform,
@@ -157,31 +172,36 @@ impl LooperPage {
         }
     }
 
-    /// A page, the engine it drives, and the finished takes it hands over.
+    /// A page, the path it drives, and the finished takes it hands over.
     ///
     /// The page holds the reading end of the playhead and of the loop's shape,
-    /// the end of `marks` an analyst publishes to, and the sending end of the
-    /// command queue; the engine holds the other end of each and the loop
-    /// itself, sized from `profile`. Taps are timed by `elapsed`, and the third
-    /// end returned is where a finished take crosses to whatever analyses it.
+    /// the end of `marks` an analyst publishes to, the sending end of the
+    /// command queue and the end of the beat schedule; the path holds the other
+    /// end of each and the loop itself, sized from `profile`, with a metronome
+    /// around it so the click is heard over a muted take.
     ///
-    /// All of it is allocated here and never again, so this belongs in setup.
-    /// The engine is what a stream plays, so it goes to whatever opens one.
+    /// All of it is allocated here and never again, so this belongs in setup,
+    /// and the clock the metronome reads has to be counted around the path.
     pub fn driving(
         profile: AudioProfile,
         marks: MarksReader,
         elapsed: SampleClockReader,
-    ) -> (Self, Commanded<LoopEngine>, TakeReader) {
+    ) -> (Self, Metronome<Commanded<LoopEngine>>, TakeReader) {
         let (commands, orders) = command_channel(QUEUED_COMMANDS);
         let (publishing, playhead) = position_meter();
         let (drawing, shape) = waveform_meter();
         let (crossing, takes) = take_handoff(profile);
+        let (stating, beats) = beat_schedule();
 
         (
-            Self::new(playhead, shape, marks, elapsed, commands),
-            Commanded::new(
-                orders,
-                LoopEngine::new(profile, publishing, drawing, crossing),
+            Self::new(playhead, shape, marks, elapsed.clone(), commands, stating),
+            Metronome::over(
+                beats,
+                elapsed,
+                Commanded::new(
+                    orders,
+                    LoopEngine::new(profile, publishing, drawing, crossing),
+                ),
             ),
             takes,
         )
@@ -236,6 +256,14 @@ impl LooperPage {
     fn order_emptying(&mut self) {
         if self.emptying && self.commands.send(Command::Clear).is_ok() {
             self.emptying = false;
+        }
+    }
+
+    fn order_the_click(&mut self) {
+        if self.taps.tempo().is_some() {
+            self.schedule.follow(self.taps.grid(), self.elapsed.read());
+        } else {
+            self.schedule.silence();
         }
     }
 
@@ -402,6 +430,7 @@ impl Page for LooperPage {
     /// long as the run lasts.
     fn draw(&mut self, mut region: Region<'_>) {
         self.order_the_engine();
+        self.order_the_click();
         if let Some(found) = self.analysis.read() {
             self.analysed(found);
         }

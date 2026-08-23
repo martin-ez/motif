@@ -11,7 +11,7 @@
 //! player has. A page reading a meter nobody publishes to draws the same screen
 //! as a loop that is empty, which is the whole of what this file is for.
 
-use motif::audio::{AudioPath, Commanded, sample_clock};
+use motif::audio::{AudioPath, Commanded, Metronome, sample_clock};
 use motif::device::{AudioProfile, Button, DeviceProfile, ScreenProfile};
 use motif::looper::{LoopEngine, LooperPage, marks_handoff};
 use motif::ui::{ControlEvent, Frame, Page};
@@ -28,14 +28,14 @@ fn pressed(button: Button) -> ControlEvent {
     }
 }
 
-fn looper() -> (LooperPage, Commanded<LoopEngine>) {
+fn looper() -> (LooperPage, Metronome<Commanded<LoopEngine>>) {
     let (page, engine, _takes) =
         LooperPage::driving(AUDIO, marks_handoff().1, sample_clock(AUDIO.sample_rate).1);
 
     (page, engine)
 }
 
-fn rendering(engine: &mut Commanded<LoopEngine>, frames: usize) {
+fn rendering(engine: &mut Metronome<Commanded<LoopEngine>>, frames: usize) {
     engine.render(&vec![INPUT; frames], &mut vec![0.0; frames]);
 }
 
@@ -69,7 +69,7 @@ fn filled(bar: &str) -> usize {
     bar.chars().filter(|glyph| *glyph == '#').count()
 }
 
-fn recorded(seconds: usize) -> (LooperPage, Commanded<LoopEngine>) {
+fn recorded(seconds: usize) -> (LooperPage, Metronome<Commanded<LoopEngine>>) {
     let (mut page, mut engine) = looper();
     page.control(pressed(Button::Record));
     rendering(&mut engine, seconds * SECOND);
