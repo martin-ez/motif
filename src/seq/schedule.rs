@@ -6,24 +6,20 @@
 //! crosses is timestamps and only timestamps — a tempo reconstructed on the far
 //! side would be invariant 3's failure with a thread boundary in front of it.
 //!
-//! A window rather than a queue. A queue would go on clicking a tempo the player
-//! had already abandoned, where a window is replaced whole by the next one
-//! published; and a window of several beats rather than one means a redraw that
-//! comes late costs no click. Reading one is a fixed number of relaxed loads
-//! against a slot nothing is writing, which is what the callback may spend.
+//! A window rather than a queue, so a player who restates a tempo replaces what
+//! was coming rather than clicking it out. The count is what publishes it, and a
+//! window read while one is being written can hold beats from both — every one
+//! of them is still a beat something projected, so the worst that costs is a
+//! click early or a click missed, once, where the tempo changed.
 
-use std::array;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use super::BeatGrid;
 
-const SLOT_COUNT: usize = 3;
-
 struct Shared {
-    slots: [[AtomicU64; BeatsAhead::BEATS]; SLOT_COUNT],
-    counts: [AtomicUsize; SLOT_COUNT],
-    published: AtomicUsize,
+    beats: [AtomicU64; BeatsAhead::BEATS],
+    count: AtomicUsize,
 }
 
 /// The beats a schedule is holding, as the frames they fall on.
@@ -73,15 +69,13 @@ impl BeatsAhead {
 /// ```
 pub fn beat_schedule() -> (ScheduleWriter, ScheduleReader) {
     let shared = Arc::new(Shared {
-        slots: array::from_fn(|_| array::from_fn(|_| AtomicU64::new(0))),
-        counts: [const { AtomicUsize::new(0) }; SLOT_COUNT],
-        published: AtomicUsize::new(0),
+        beats: [const { AtomicU64::new(0) }; BeatsAhead::BEATS],
+        count: AtomicUsize::new(0),
     });
 
     (
         ScheduleWriter {
             shared: Arc::clone(&shared),
-            filling: 0,
         },
         ScheduleReader { shared },
     )
@@ -90,7 +84,6 @@ pub fn beat_schedule() -> (ScheduleWriter, ScheduleReader) {
 /// The end of a schedule that follows a grid, held by the thread that grew it.
 pub struct ScheduleWriter {
     shared: Arc<Shared>,
-    filling: usize,
 }
 
 impl ScheduleWriter {
@@ -98,23 +91,24 @@ impl ScheduleWriter {
     /// was scheduled before.
     ///
     /// Projected by [`BeatGrid::next_beat`], so a grid that has not reached the
-    /// frame yet still schedules beats and one stating no tempo schedules none.
-    /// It fills a slot the reader is not reading and publishes it afterwards,
-    /// which is what keeps a window from being read half replaced.
+    /// frame yet still schedules beats and one with no interval to project by
+    /// schedules none. The beats are written before the count that publishes
+    /// them, which is what puts them in front of a reader that finds it.
     pub fn follow(&mut self, grid: &BeatGrid, after: u64) {
-        let mut count = 0;
         let mut beat = after;
-        while count < BeatsAhead::BEATS {
+        let mut count = 0;
+
+        for slot in &self.shared.beats {
             let Some(next) = grid.next_beat(beat) else {
                 break;
             };
 
-            self.shared.slots[self.filling][count].store(next, Ordering::Relaxed);
+            slot.store(next, Ordering::Relaxed);
             beat = next;
             count += 1;
         }
 
-        self.publish(count);
+        self.shared.count.store(count, Ordering::Release);
     }
 
     /// Take every beat off the schedule, so that nothing is left to sound.
@@ -123,13 +117,7 @@ impl ScheduleWriter {
     /// are not, and a window already published would otherwise go on being
     /// read.
     pub fn silence(&mut self) {
-        self.publish(0);
-    }
-
-    fn publish(&mut self, count: usize) {
-        self.shared.counts[self.filling].store(count, Ordering::Relaxed);
-        self.shared.published.store(self.filling, Ordering::Release);
-        self.filling = (self.filling + 1) % SLOT_COUNT;
+        self.shared.count.store(0, Ordering::Release);
     }
 }
 
@@ -143,16 +131,17 @@ impl ScheduleReader {
     ///
     /// One acquiring load and a bounded run of relaxed ones into a value that
     /// is already sized, so this allocates nothing, blocks on nothing and costs
-    /// the same on every block.
+    /// no more than a full window on any block.
     pub fn read(&self) -> BeatsAhead {
-        let published = self.shared.published.load(Ordering::Acquire);
-        let count = self.shared.counts[published].load(Ordering::Relaxed);
+        let published = self.shared.count.load(Ordering::Acquire);
+        let mut beats = [0; BeatsAhead::BEATS];
+        let mut count = 0;
 
-        BeatsAhead {
-            beats: array::from_fn(|beat| {
-                self.shared.slots[published][beat].load(Ordering::Relaxed)
-            }),
-            count: count.min(BeatsAhead::BEATS),
+        for (beat, slot) in beats.iter_mut().zip(&self.shared.beats).take(published) {
+            *beat = slot.load(Ordering::Relaxed);
+            count += 1;
         }
+
+        BeatsAhead { beats, count }
     }
 }
